@@ -10,4 +10,4 @@ requests==2.31.0
 openai==1.12.0
 httpx==0.27.0
 celery>=5.3,<6
-djangorestframework-simplejwt=
+djangorestframework-simplejwt==5.3.1
