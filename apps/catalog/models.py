@@ -35,7 +35,7 @@ class Supplier(models.Model):
     # None = global (admin), set = private supplier of a user
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="private_suppliers",
@@ -60,3 +60,18 @@ class SupplierProduct(models.Model):
 
     def __str__(self):
         return f"{self.supplier.name} - {self.product.name}: ₪{self.price_per_unit}"
+
+
+class MarketPrice(models.Model):
+    """מחיר עזר מרשות חקלאית — שורה אחת לכל מוצר."""
+    product = models.OneToOneField(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="market_price",
+    )
+    price_per_unit = models.DecimalField(max_digits=10, decimal_places=2)
+    source = models.CharField(max_length=255, default="רשות חקלאית")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.product.name}: ₪{self.price_per_unit} ({self.source})"

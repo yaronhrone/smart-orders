@@ -1,0 +1,70 @@
+from rest_framework import serializers
+from .models import Product, Supplier, SupplierProduct
+
+
+class ProductSerializer(serializers.ModelSerializer):
+    unit_display = serializers.CharField(source="get_unit_display", read_only=True)
+
+    class Meta:
+        model = Product
+        fields = ("id", "name", "unit", "unit_display")
+
+
+class SupplierProductSerializer(serializers.ModelSerializer):
+    product_id = serializers.IntegerField(source="product.id", read_only=True)
+    product_name = serializers.CharField(source="product.name", read_only=True)
+
+    class Meta:
+        model = SupplierProduct
+        fields = ("product_id", "product_name", "price_per_unit", "updated_at")
+
+
+class SupplierProductWriteSerializer(serializers.Serializer):
+    """Used when creating a supplier with initial prices."""
+    product_name = serializers.SlugRelatedField(
+        queryset=Product.objects.all(),
+        slug_field="name",
+        source="product",
+    )
+    price_per_unit = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class SupplierSerializer(serializers.ModelSerializer):
+    region_display = serializers.CharField(source="get_region_display", read_only=True)
+    is_global = serializers.BooleanField(read_only=True)
+    products = SupplierProductSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Supplier
+        fields = ("id", "name", "phone", "whatsapp_number", "region", "region_display",
+                  "minimum_order", "is_global", "products")
+
+
+class PriceMessageSerializer(serializers.Serializer):
+    """Input for updating supplier prices from a free-text message."""
+    message = serializers.CharField(
+        help_text='Example: "עגבנייה 3.50, מלפפון 2.00, גזר 1.80"'
+    )
+
+
+class PriceUpdateResultSerializer(serializers.Serializer):
+    updated = serializers.ListField(child=serializers.DictField())
+    skipped = serializers.ListField(child=serializers.DictField())
+
+
+class SupplierCreateSerializer(serializers.ModelSerializer):
+    """Write serializer — owner is set automatically from the request user."""
+    prices = SupplierProductWriteSerializer(many=True, required=False, write_only=True)
+
+    class Meta:
+        model = Supplier
+        fields = ("id", "name", "phone", "whatsapp_number", "region", "minimum_order", "prices")
+
+    def create(self, validated_data):
+        prices = validated_data.pop("prices", [])
+        supplier = Supplier.objects.create(**validated_data)
+        SupplierProduct.objects.bulk_create([
+            SupplierProduct(supplier=supplier, product=p["product"], price_per_unit=p["price_per_unit"])
+            for p in prices
+        ])
+        return supplier

@@ -154,7 +154,7 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     # "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    # "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     # "PAGE_SIZE": 10,
     # "EXCEPTION_HANDLER": "core.exceptions.custom_exception_handler",
     # "DEFAULT_THROTTLE_CLASSES": [
@@ -183,6 +183,10 @@ CELERY_BROKER_URL = "redis://redis:6379/0"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 
-CELERY_BEAT_SCHEDULE = {}
+CELERY_BEAT_SCHEDULE = {
+    # Placeholder: actual price updates are triggered via the API
+    # when suppliers send their daily WhatsApp messages.
+    # Add supplier-specific schedules here if needed.
+}
 
 AUTH_USER_MODEL = "users.User"

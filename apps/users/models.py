@@ -45,7 +45,7 @@ class Profile(models.Model):
     )
 
     # company info
-    company_name = models.CharField(max_length=255)
+    company_name = models.CharField(max_length=255 , default="Default Company")
     company_phone = models.CharField(max_length=20, blank=True)
     company_address = models.CharField(max_length=255, blank=True)
 
@@ -53,6 +53,8 @@ class Profile(models.Model):
     phone = models.CharField(max_length=20, blank=True)
     position = models.CharField(max_length=255, blank=True)
 
+    region = models.CharField(max_length=50, default="jerusalem")
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

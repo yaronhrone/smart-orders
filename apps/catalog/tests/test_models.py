@@ -71,18 +71,6 @@ class SupplierModelTests(TestCase):
         )
         self.assertEqual(str(supplier), "ירקות השוק")
 
-    def test_supplier_deleted_with_owner(self):
-        """Supplier is deleted when owner user is deleted"""
-        supplier = Supplier.objects.create(
-            name="ספק זמני",
-            phone="050000",
-            whatsapp_number="050000",
-            region=Region.CENTER,
-            owner=self.user,
-        )
-        self.user.delete()
-        self.assertFalse(Supplier.objects.filter(id=supplier.id).exists())
-
 
 class SupplierProductModelTests(TestCase):
 
