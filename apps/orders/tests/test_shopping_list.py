@@ -5,7 +5,7 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import ShoppingList, ShoppingListItem
+from apps.orders.models import ShoppingList, ShoppingListProduct
 
 User = get_user_model()
 
@@ -18,9 +18,15 @@ def make_product(name):
     return Product.objects.create(name=name, unit=Unit.KG)
 
 
+_supplier_counter = 0
+
+
 def make_supplier(name, region=Region.CENTER):
+    global _supplier_counter
+    _supplier_counter += 1
+    phone = f"05{_supplier_counter:08d}"
     return Supplier.objects.create(
-        name=name, phone="050000", whatsapp_number="050000",
+        name=name, phone=phone, whatsapp_number=phone,
         region=region, minimum_order=0,
     )
 
@@ -28,7 +34,7 @@ def make_supplier(name, region=Region.CENTER):
 def make_list(user, name="רשימה א", products=None):
     sl = ShoppingList.objects.create(user=user, name=name)
     for product, qty in (products or []):
-        ShoppingListItem.objects.create(shopping_list=sl, product=product, default_quantity=qty)
+        ShoppingListProduct.objects.create(shopping_list=sl, product=product, default_quantity=qty)
     return sl
 
 
@@ -44,7 +50,7 @@ class ShoppingListCRUDTests(APITestCase):
     def test_create_shopping_list_with_items(self):
         res = self.client.post(reverse("shopping-lists"), {
             "name": "הזמנה שבועית",
-            "items": [
+            "products": [
                 {"product_name": self.tomato.name, "default_quantity": "10.00"},
                 {"product_name": self.cucumber.name, "default_quantity": "5.00"},
             ],
@@ -52,7 +58,7 @@ class ShoppingListCRUDTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data["name"], "הזמנה שבועית")
-        self.assertEqual(len(res.data["items"]), 2)
+        self.assertEqual(len(res.data["products"]), 2)
 
     def test_list_returns_only_own_lists(self):
         make_list(self.user, "שלי")
@@ -71,21 +77,21 @@ class ShoppingListCRUDTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["id"], sl.id)
-        self.assertEqual(len(res.data["items"]), 1)
-        self.assertEqual(res.data["items"][0]["product_name"], "עגבנייה")
+        self.assertEqual(len(res.data["products"]), 1)
+        self.assertEqual(res.data["products"][0]["product_name"], "עגבנייה")
 
     def test_update_replaces_items(self):
         sl = make_list(self.user, "ישן", [(self.tomato, "5.00")])
 
         res = self.client.put(reverse("shopping-lists-detail", args=[sl.id]), {
             "name": "מעודכן",
-            "items": [{"product_name": self.cucumber.name, "default_quantity": "3.00"}],
+            "products": [{"product_name": self.cucumber.name, "default_quantity": "3.00"}],
         }, format="json")
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["name"], "מעודכן")
-        self.assertEqual(len(res.data["items"]), 1)
-        self.assertEqual(res.data["items"][0]["product_name"], "מלפפון")
+        self.assertEqual(len(res.data["products"]), 1)
+        self.assertEqual(res.data["products"][0]["product_name"], "מלפפון")
 
     def test_delete(self):
         sl = make_list(self.user)

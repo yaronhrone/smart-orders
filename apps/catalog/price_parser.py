@@ -87,10 +87,7 @@ def update_prices_from_message(supplier, message: str) -> dict:
         name = entry.get("product_name", "").strip()
         price_raw = str(entry.get("price", "")).strip()
 
-        if name not in products:
-            skipped.append({"product_name": name, "reason": "product not found in system"})
-            continue
-
+        products, _ = Product.objects.get_or_create(name=name.lower().strip())
         try:
             price = Decimal(price_raw)
         except InvalidOperation:

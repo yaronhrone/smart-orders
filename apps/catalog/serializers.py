@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import Product, Supplier, SupplierProduct
+from .models import Product, Supplier, SupplierProduct, MarketPrice, Unit
+
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -13,35 +14,37 @@ class ProductSerializer(serializers.ModelSerializer):
 class SupplierProductSerializer(serializers.ModelSerializer):
     product_id = serializers.IntegerField(source="product.id", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
+    unit = serializers.CharField(source="product.unit", read_only=True)
 
     class Meta:
         model = SupplierProduct
-        fields = ("product_id", "product_name", "price_per_unit", "updated_at")
+        fields = ("product_id", "product_name", "unit","price_per_unit", "updated_at")
 
 
 class SupplierProductWriteSerializer(serializers.Serializer):
     """Used when creating a supplier with initial prices."""
-    product_name = serializers.SlugRelatedField(
-        queryset=Product.objects.all(),
-        slug_field="name",
-        source="product",
-    )
+    product_name = serializers.CharField()
     price_per_unit = serializers.DecimalField(max_digits=10, decimal_places=2)
+    unit = serializers.ChoiceField(choices=Unit.choices, default=Unit.KG)
 
 
 class SupplierSerializer(serializers.ModelSerializer):
-    region_display = serializers.CharField(source="get_region_display", read_only=True)
-    is_global = serializers.BooleanField(read_only=True)
-    products = SupplierProductSerializer(many=True, read_only=True)
+    # region_display = serializers.CharField(source="get_region_display", read_only=True)
+    # is_global = serializers.BooleanField(read_only=True)
+    # products = SupplierProductSerializer(many=True, read_only=True)
 
     class Meta:
         model = Supplier
-        fields = ("id", "name", "phone", "whatsapp_number", "region", "region_display",
-                  "minimum_order", "is_global", "products")
+        fields = ("id", "name", "phone", "whatsapp_number", "region",
+                  "minimum_order")
+
+    def validate_phone(self, value):
+        return "".join(filter(str.isdigit, value))
 
 
 class PriceMessageSerializer(serializers.Serializer):
     """Input for updating supplier prices from a free-text message."""
+    phone = serializers.CharField()
     message = serializers.CharField(
         help_text='Example: "עגבנייה 3.50, מלפפון 2.00, גזר 1.80"'
     )
@@ -60,11 +63,70 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
         model = Supplier
         fields = ("id", "name", "phone", "whatsapp_number", "region", "minimum_order", "prices")
 
+    from .models import Product, SupplierProduct
+
+
     def create(self, validated_data):
         prices = validated_data.pop("prices", [])
         supplier = Supplier.objects.create(**validated_data)
-        SupplierProduct.objects.bulk_create([
-            SupplierProduct(supplier=supplier, product=p["product"], price_per_unit=p["price_per_unit"])
-            for p in prices
-        ])
+
+        for item in prices:
+            product_name = item["product_name"].lower().strip()
+
+            # 🔥 create product if not exists
+            unit = item["unit"]
+
+            product, created = Product.objects.get_or_create(
+                name=product_name,
+                defaults={"unit": unit}
+            )
+
+            # 🔥 אם כבר קיים → נעדכן unit (ל-POC זה בסדר)
+            if not created and product.unit != unit:
+                product.unit = unit
+                product.save()
+
+            # 🔥 avoid duplicates
+            SupplierProduct.objects.update_or_create(
+                supplier=supplier,
+                product=product,
+                defaults={
+                    "price_per_unit": item["price_per_unit"]
+                }
+            )
+
         return supplier
+
+class SupplierPriceUpdateSerializer(serializers.Serializer):
+    phone = serializers.CharField()
+    prices = SupplierProductWriteSerializer(many=True)
+
+
+
+
+    def validate_phone(self, value):
+        return "".join(filter(str.isdigit, value))
+
+class MarketPriceSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source="product.name", read_only=True)
+    unit = serializers.CharField(source="product.unit", read_only=True)
+    unit_display = serializers.CharField(source="product.get_unit_display", read_only=True)
+
+    class Meta:
+        model = MarketPrice
+        fields = ("name", "unit", "unit_display", "price_grade_a", "price_premium", "market_date", "updated_at")
+
+
+class SupplierWithProductsSerializer(serializers.ModelSerializer):
+    products = SupplierProductSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Supplier
+        fields = (
+            "id",
+            "name",
+            "phone",
+            "region",
+            "minimum_order",
+            "products",
+        )

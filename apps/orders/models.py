@@ -12,8 +12,8 @@ class ShoppingList(models.Model):
         return f"{self.user.email} - {self.name}"
 
 
-class ShoppingListItem(models.Model):
-    shopping_list = models.ForeignKey(ShoppingList, on_delete=models.CASCADE, related_name="items")
+class ShoppingListProduct(models.Model):
+    shopping_list = models.ForeignKey(ShoppingList, on_delete=models.CASCADE, related_name="products")
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     default_quantity = models.DecimalField(max_digits=10, decimal_places=2)
 
@@ -40,8 +40,8 @@ class OrderRequest(models.Model):
         return f"הזמנה #{self.id} - {self.user.email} ({self.get_status_display()})"
 
 
-class OrderRequestItem(models.Model):
-    order_request = models.ForeignKey(OrderRequest, on_delete=models.CASCADE, related_name="items")
+class OrderRequestProduct(models.Model):
+    order_request = models.ForeignKey(OrderRequest, on_delete=models.CASCADE, related_name="products")
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
     quantity = models.DecimalField(max_digits=10, decimal_places=2)

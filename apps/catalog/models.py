@@ -27,8 +27,8 @@ class Product(models.Model):
 
 class Supplier(models.Model):
     name = models.CharField(max_length=255)
-    phone = models.CharField(max_length=20)
-    whatsapp_number = models.CharField(max_length=20)
+    phone = models.CharField(max_length=20 ,  unique=True)
+    whatsapp_number = models.CharField(max_length=20 , unique=True)
     region = models.CharField(max_length=50, choices=Region.choices)
     minimum_order = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
@@ -63,14 +63,18 @@ class SupplierProduct(models.Model):
 
 
 class MarketPrice(models.Model):
-    """מחיר עזר מרשות חקלאית — שורה אחת לכל מוצר."""
+    """מחיר שוק מועצת הצמחים — שורה אחת לכל מוצר, מתעדכן יומית."""
     product = models.OneToOneField(
         Product,
         on_delete=models.CASCADE,
         related_name="market_price",
     )
-    price_per_unit = models.DecimalField(max_digits=10, decimal_places=2)
-    source = models.CharField(max_length=255, default="רשות חקלאית")
+    # המחיר הראשי — סוג א' אם קיים, אחרת מובחר
+    price_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    price_grade_a = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    price_premium = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    market_date = models.DateField(null=True, blank=True)
+    source = models.CharField(max_length=255, default="מועצת הצמחים")
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

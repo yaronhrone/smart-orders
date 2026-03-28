@@ -1,7 +1,7 @@
 from decimal import Decimal
 from rest_framework import serializers
 from apps.catalog.models import Product, Region
-from apps.orders.models import OrderRequest, ShoppingList, ShoppingListItem
+from apps.orders.models import OrderRequest, ShoppingList, ShoppingListProduct
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ class OrderItemInputSerializer(serializers.Serializer):
 
 class SuggestOrderInputSerializer(serializers.Serializer):
 
-    items = OrderItemInputSerializer(many=True, min_length=1)
+    products = OrderItemInputSerializer(many=True, min_length=1)
 
 
 class PlaceOrderInputSerializer(serializers.Serializer):
@@ -28,7 +28,7 @@ class PlaceOrderInputSerializer(serializers.Serializer):
         choices=["cheapest", "fewest_suppliers"],
         default="cheapest",
     )
-    items = OrderItemInputSerializer(many=True, min_length=1)
+    products = OrderItemInputSerializer(many=True, min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ class ScenarioSerializer(serializers.Serializer):
     scenario = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     supplier_count = serializers.IntegerField()
-    items = ScenarioItemSerializer(many=True)
+    products = ScenarioItemSerializer(many=True)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ class MarketComparisonItemSerializer(serializers.Serializer):
 
 
 class MarketComparisonSerializer(serializers.Serializer):
-    items = MarketComparisonItemSerializer(many=True)
+    products = MarketComparisonItemSerializer(many=True)
     our_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     market_total = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
     total_savings = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
@@ -77,12 +77,17 @@ class MarketComparisonSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 # Output — suggest endpoint
 # ---------------------------------------------------------------------------
-
+class MinimumIssueSerializer(serializers.Serializer):
+    supplier_id = serializers.IntegerField()
+    supplier_name = serializers.CharField()
+    current_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    minimum_required = serializers.DecimalField(max_digits=10, decimal_places=2)
+    missing_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
 class SuggestOrderResponseSerializer(serializers.Serializer):
     cheapest = ScenarioSerializer()
     fewest_suppliers = ScenarioSerializer()
     market_comparison = MarketComparisonSerializer()
-
+    minimum_issues = MinimumIssueSerializer(many=True)
 
 # ---------------------------------------------------------------------------
 # Output — place endpoint
@@ -122,7 +127,7 @@ class OrderDetailSerializer(serializers.Serializer):
     status = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     created_at = serializers.DateTimeField()
-    items = OrderItemDetailSerializer(many=True)
+    products = OrderItemDetailSerializer(many=True)
 
 
 class OrderListSerializer(serializers.Serializer):
@@ -130,7 +135,7 @@ class OrderListSerializer(serializers.Serializer):
     status = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     created_at = serializers.DateTimeField()
-    item_count = serializers.IntegerField()
+    product_count = serializers.IntegerField()
 
 
 # ---------------------------------------------------------------------------
@@ -153,45 +158,45 @@ class ShoppingListItemSerializer(serializers.ModelSerializer):
     )
 
     class Meta:
-        model = ShoppingListItem
+        model = ShoppingListProduct
         fields = ("id", "product_name", "default_quantity")
 
 
 class ShoppingListSerializer(serializers.ModelSerializer):
-    items = ShoppingListItemSerializer(many=True)
+    products = ShoppingListItemSerializer(many=True)
 
     class Meta:
         model = ShoppingList
-        fields = ("id", "name", "created_at", "items")
+        fields = ("id", "name", "created_at", "products")
         read_only_fields = ("id", "created_at")
 
     def create(self, validated_data):
-        items_data = validated_data.pop("items")
+        products_data = validated_data.pop("products")
         shopping_list = ShoppingList.objects.create(**validated_data)
-        ShoppingListItem.objects.bulk_create([
-            ShoppingListItem(
+        ShoppingListProduct.objects.bulk_create([
+            ShoppingListProduct(
                 shopping_list=shopping_list,
-                product=item["product"],
-                default_quantity=item["default_quantity"],
+                product=product["product"],
+                default_quantity=product["default_quantity"],
             )
-            for item in items_data
+            for product in products_data
         ])
         return shopping_list
 
     def update(self, instance, validated_data):
-        items_data = validated_data.pop("items", None)
+        products_data = validated_data.pop("products", None)
         instance.name = validated_data.get("name", instance.name)
         instance.save()
 
-        if items_data is not None:
-            instance.items.all().delete()
-            ShoppingListItem.objects.bulk_create([
-                ShoppingListItem(
+        if products_data is not None:
+            instance.products.all().delete()
+            ShoppingListProduct.objects.bulk_create([
+                ShoppingListProduct(
                     shopping_list=instance,
-                    product=item["product"],
-                    default_quantity=item["default_quantity"],
+                    product=product["product"],
+                    default_quantity=product["default_quantity"],
                 )
-                for item in items_data
+                for product in products_data
             ])
         return instance
 

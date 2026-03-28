@@ -184,9 +184,17 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 
 CELERY_BEAT_SCHEDULE = {
-    # Placeholder: actual price updates are triggered via the API
-    # when suppliers send their daily WhatsApp messages.
-    # Add supplier-specific schedules here if needed.
+    "fetch-market-prices-daily": {
+        "task": "apps.catalog.tasks.fetch_market_prices_task",
+        "schedule": crontab(hour=10, minute=30),  # כל יום בשעה 06:00
+    },
 }
+
+# כתובת עמוד מחירון הירקות של מועצת הצמחים
+# יש לעדכן ל-URL המדויק של הטבלה באתר
+PLANT_COUNCIL_PRICES_URL = os.environ.get(
+    "PLANT_COUNCIL_PRICES_URL",
+    "https://plants.moonsite.co.il/",
+)
 
 AUTH_USER_MODEL = "users.User"

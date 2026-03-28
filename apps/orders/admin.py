@@ -1,9 +1,9 @@
 from django.contrib import admin
-from .models import ShoppingList, ShoppingListItem, OrderRequest, OrderRequestItem
+from .models import ShoppingList, ShoppingListProduct, OrderRequest, OrderRequestProduct
 
 
 class ShoppingListItemInline(admin.TabularInline):
-    model = ShoppingListItem
+    model = ShoppingListProduct
     extra = 1
 
 
@@ -15,7 +15,7 @@ class ShoppingListAdmin(admin.ModelAdmin):
 
 
 class OrderRequestItemInline(admin.TabularInline):
-    model = OrderRequestItem
+    model = OrderRequestProduct
     extra = 0
     readonly_fields = ("subtotal",)
 

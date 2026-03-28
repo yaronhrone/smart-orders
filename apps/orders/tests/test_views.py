@@ -4,8 +4,8 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 from django.contrib.auth import get_user_model
 
-from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import OrderRequest, OrderRequestItem
+from apps.catalog.models import Product, Supplier, Region, Unit
+from apps.orders.models import OrderRequest, OrderRequestProduct
 
 User = get_user_model()
 
@@ -18,9 +18,15 @@ def make_product(name):
     return Product.objects.create(name=name, unit=Unit.KG)
 
 
+_supplier_counter = 0
+
+
 def make_supplier(name, region=Region.CENTER, owner=None):
+    global _supplier_counter
+    _supplier_counter += 1
+    phone = f"05{_supplier_counter:08d}"
     return Supplier.objects.create(
-        name=name, phone="050000", whatsapp_number="050000",
+        name=name, phone=phone, whatsapp_number=phone,
         region=region, minimum_order=0, owner=owner,
     )
 
@@ -30,7 +36,7 @@ def make_order(user, total="100.00", status_val=OrderRequest.Status.PENDING):
 
 
 def make_order_item(order, product, supplier, quantity="10", price="5.00"):
-    return OrderRequestItem.objects.create(
+    return OrderRequestProduct.objects.create(
         order_request=order, product=product, supplier=supplier,
         quantity=quantity, unit_price=price,
     )
@@ -66,7 +72,7 @@ class OrderListViewTests(APITestCase):
         data = res.data[0]
         self.assertEqual(data["id"], order.id)
         self.assertEqual(float(data["total_price"]), 50.0)
-        self.assertEqual(data["item_count"], 1)
+        self.assertEqual(data["product_count"], 1)
 
     def test_unauthenticated_returns_401(self):
         self.client.force_authenticate(user=None)
@@ -107,8 +113,8 @@ class OrderDetailViewTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["id"], order.id)
-        self.assertEqual(len(res.data["items"]), 1)
-        item = res.data["items"][0]
+        self.assertEqual(len(res.data["products"]), 1)
+        item = res.data["products"][0]
         self.assertEqual(item["product_name"], "עגבנייה")
         self.assertEqual(item["supplier_name"], "ספק א")
         self.assertEqual(float(item["subtotal"]), 50.0)

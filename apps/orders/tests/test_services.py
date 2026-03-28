@@ -3,7 +3,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import OrderRequest, OrderRequestItem
+from apps.orders.models import OrderRequest
 from apps.orders.services import build_order
 
 User = get_user_model()
@@ -17,11 +17,17 @@ def make_product(name):
     return Product.objects.create(name=name, unit=Unit.KG)
 
 
+_supplier_counter = 0
+
+
 def make_supplier(name, minimum_order=0, region=Region.CENTER, owner=None):
+    global _supplier_counter
+    _supplier_counter += 1
+    phone = f"05{_supplier_counter:08d}"
     return Supplier.objects.create(
         name=name,
-        phone="050000",
-        whatsapp_number="050000",
+        phone=phone,
+        whatsapp_number=phone,
         region=region,
         minimum_order=minimum_order,
         owner=owner,
@@ -50,10 +56,10 @@ class BuildOrderServiceTests(TestCase):
         ])
 
         self.assertEqual(order.status, OrderRequest.Status.PENDING)
-        self.assertEqual(order.items.count(), 1)
-        item = order.items.first()
-        self.assertEqual(item.supplier, supplier)
-        self.assertEqual(float(item.unit_price), 5.00)
+        self.assertEqual(order.products.count(), 1)
+        product = order.products.first()
+        self.assertEqual(product.supplier, supplier)
+        self.assertEqual(float(product.unit_price), 5.00)
         self.assertEqual(float(order.total_price), 50.00)
 
     def test_picks_cheapest_supplier(self):
@@ -67,7 +73,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("10")},
         ])
 
-        self.assertEqual(order.items.first().supplier, cheap)
+        self.assertEqual(order.products.first().supplier, cheap)
 
     def test_no_split_when_difference_under_10_percent(self):
         """Stays with one supplier when price diff <= 10%"""
@@ -84,7 +90,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.cucumber, "quantity": Decimal("5")},
         ])
 
-        suppliers_used = {item.supplier for item in order.items.all()}
+        suppliers_used = {item.supplier for item in order.products.all()}
         self.assertEqual(len(suppliers_used), 1)
 
     def test_splits_when_difference_over_10_percent(self):
@@ -105,7 +111,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.cucumber, "quantity": Decimal("10")},
         ])
 
-        suppliers_used = {item.supplier for item in order.items.all()}
+        suppliers_used = {item.supplier for item in order.products.all()}
         self.assertEqual(len(suppliers_used), 2)
 
     def test_minimum_order_forces_switch_single_product(self):
@@ -120,7 +126,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("10")},
         ])
 
-        self.assertEqual(order.items.first().supplier, pricey)
+        self.assertEqual(order.products.first().supplier, pricey)
 
     def test_minimum_order_multiple_products_all_switch_together(self):
         """
@@ -145,7 +151,8 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.cucumber, "quantity": Decimal("10")},
         ])
 
-        suppliers_used = {item.supplier for item in order.items.all()}
+        suppliers_used = {item.supplier for item in order.products.all()}
+        print(suppliers_used)
         self.assertEqual(suppliers_used, {alt})
 
     def test_minimum_order_alt_also_below_minimum_stays_original(self):
@@ -161,7 +168,7 @@ class BuildOrderServiceTests(TestCase):
         ])
 
         # Neither meets minimum — stays with cheapest (best-effort)
-        self.assertEqual(order.items.first().supplier, cheap)
+        self.assertEqual(order.products.first().supplier, cheap)
 
     def test_minimum_order_picks_second_cheapest_when_cheapest_alt_fails(self):
         """
@@ -180,7 +187,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("10")},
         ])
 
-        self.assertEqual(order.items.first().supplier, alt_b)
+        self.assertEqual(order.products.first().supplier, alt_b)
 
     def test_minimum_order_not_triggered_when_met(self):
         """Supplier meets minimum → no switch."""
@@ -194,7 +201,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("10")},
         ])
 
-        self.assertEqual(order.items.first().supplier, supplier)
+        self.assertEqual(order.products.first().supplier, supplier)
 
     def test_raises_error_when_no_supplier_for_product(self):
         """Raises ValueError if no supplier carries the product"""
@@ -212,7 +219,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("5")},
         ])
 
-        self.assertEqual(order.items.first().supplier, private)
+        self.assertEqual(order.products.first().supplier, private)
 
     def test_private_supplier_not_visible_to_other_user(self):
         """Another user cannot see someone else's private supplier"""
@@ -226,7 +233,7 @@ class BuildOrderServiceTests(TestCase):
             ])
 
     def test_total_price_is_correct(self):
-        """total_price on order equals sum of all items"""
+        """total_price on order equals sum of all products"""
         supplier = make_supplier("ספק")
         set_price(supplier, self.tomato, "5.00")
         set_price(supplier, self.cucumber, "3.00")

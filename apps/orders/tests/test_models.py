@@ -1,7 +1,7 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from apps.catalog.models import Product, Supplier, Unit, Region
-from apps.orders.models import ShoppingList, ShoppingListItem, OrderRequest, OrderRequestItem
+from apps.orders.models import ShoppingList, ShoppingListProduct, OrderRequest, OrderRequestProduct
 
 User = get_user_model()
 
@@ -56,20 +56,20 @@ class ShoppingListItemModelTests(TestCase):
         self.sl = ShoppingList.objects.create(user=self.user, name="תבנית")
 
     def test_create_item(self):
-        """ShoppingListItem stores product and quantity"""
-        item = ShoppingListItem.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
+        """ShoppingListProduct stores product and quantity"""
+        item = ShoppingListProduct.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
         self.assertEqual(item.product, self.product)
         self.assertEqual(float(item.default_quantity), 5)
 
     def test_item_unique_per_list(self):
         """Cannot add same product twice to same list"""
-        ShoppingListItem.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
+        ShoppingListProduct.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
         with self.assertRaises(Exception):
-            ShoppingListItem.objects.create(shopping_list=self.sl, product=self.product, default_quantity=3)
+            ShoppingListProduct.objects.create(shopping_list=self.sl, product=self.product, default_quantity=3)
 
     def test_item_str(self):
         """__str__ includes product name and quantity"""
-        item = ShoppingListItem.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
+        item = ShoppingListProduct.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
         self.assertIn("עגבנייה", str(item))
 
 
@@ -117,38 +117,38 @@ class OrderRequestItemModelTests(TestCase):
         self.order = OrderRequest.objects.create(user=self.user)
 
     def test_create_order_item(self):
-        """OrderRequestItem stores product, supplier, quantity and price"""
-        item = OrderRequestItem.objects.create(
+        """OrderRequestProduct stores product, supplier, quantity and price"""
+        product = OrderRequestProduct.objects.create(
             order_request=self.order,
             product=self.product,
             supplier=self.supplier,
             quantity=10,
             unit_price=3.50,
         )
-        self.assertEqual(item.product, self.product)
-        self.assertEqual(item.supplier, self.supplier)
-        self.assertEqual(float(item.quantity), 10)
-        self.assertEqual(float(item.unit_price), 3.50)
+        self.assertEqual(product.product, self.product)
+        self.assertEqual(product.supplier, self.supplier)
+        self.assertEqual(float(product.quantity), 10)
+        self.assertEqual(float(product.unit_price), 3.50)
 
     def test_order_item_subtotal(self):
         """subtotal = quantity * unit_price"""
-        item = OrderRequestItem.objects.create(
+        product = OrderRequestProduct.objects.create(
             order_request=self.order,
             product=self.product,
             supplier=self.supplier,
             quantity=10,
             unit_price=3.50,
         )
-        self.assertEqual(float(item.subtotal), 35.0)
+        self.assertEqual(float(product.subtotal), 35.0)
 
     def test_order_item_str(self):
         """__str__ includes product name and supplier name"""
-        item = OrderRequestItem.objects.create(
+        product = OrderRequestProduct.objects.create(
             order_request=self.order,
             product=self.product,
             supplier=self.supplier,
             quantity=10,
             unit_price=3.50,
         )
-        self.assertIn("עגבנייה", str(item))
-        self.assertIn("ספק א", str(item))
+        self.assertIn("עגבנייה", str(product))
+        self.assertIn("ספק א", str(product))
