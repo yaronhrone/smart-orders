@@ -21,7 +21,6 @@ ROW_ID_PREFIX = "ctl02_RadGrid1_ctl00__"
 
 
 def _parse_price(value: str) -> Optional[Decimal]:
-    """ממיר מחרוזת מחיר (אפשרי ריק) ל-Decimal או None."""
     if not value:
         return None
     cleaned = value.strip().replace(",", "").replace("₪", "").replace("\xa0", "").replace(" ", "")
@@ -34,10 +33,7 @@ def _parse_price(value: str) -> Optional[Decimal]:
 
 
 def _parse_date(value: str) -> Optional[date]:
-    """
-    מנסה לפרסר תאריך.
-    האתר מחזיר פורמט dd/MM/yy (שנה קצרה), למשל: 24/03/26
-    """
+
     if not value:
         return None
     for fmt in ("%d/%m/%y", "%d/%m/%Y", "%d.%m.%Y", "%Y-%m-%d"):
@@ -50,15 +46,7 @@ def _parse_date(value: str) -> Optional[date]:
 
 
 def fetch_vegetable_prices(url: str = MOONSITE_URL) -> list[dict]:
-    """
-    מאחזר את טבלת מחירי הירקות ממועצת הצמחים ומחזיר רשימה של מילונים:
-      {
-        "name": str,
-        "market_date": date | None,
-        "price_grade_a": Decimal | None,   # סוג א'
-        "price_premium": Decimal | None,   # מובחר
-      }
-    """
+
     try:
         response = requests.get(
             url,
@@ -75,16 +63,13 @@ def fetch_vegetable_prices(url: str = MOONSITE_URL) -> list[dict]:
 
     soup = BeautifulSoup(response.content, "lxml")
 
-    # מצא את הטבלה לפי ID מדויק, fallback ל-class
     table = soup.find("table", id=TABLE_ID) or soup.find("table", class_="rgMasterTable")
     if table is None:
         logger.warning("לא נמצאה טבלת מחירים בעמוד: %s", url)
         return []
 
-    # חלץ שורות נתונים לפי ID prefix
     data_rows = table.find_all("tr", id=re.compile(r"^" + re.escape(ROW_ID_PREFIX)))
     if not data_rows:
-        # fallback: כל שורות tbody
         tbody = table.find("tbody")
         data_rows = tbody.find_all("tr") if tbody else []
 
@@ -95,8 +80,6 @@ def fetch_vegetable_prices(url: str = MOONSITE_URL) -> list[dict]:
         cells = row.find_all("td")
         if len(cells) < 2:
             continue
-
-        # שם המוצר — ה-td עם class="productName" (תמיד cells[1])
         name_cell = row.find("td", class_="productName") or cells[1]
         name = name_cell.get_text(strip=True)
         if not name:

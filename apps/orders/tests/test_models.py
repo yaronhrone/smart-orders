@@ -10,11 +10,11 @@ def make_user(email="user@test.com"):
     return User.objects.create_user(email=email, password="pass1234")
 
 
-def make_product(name="עגבנייה"):
+def make_product(name="tomato"):
     return Product.objects.create(name=name, unit=Unit.KG)
 
 
-def make_supplier(name="ספק א", minimum_order=100):
+def make_supplier(name="supplier A", minimum_order=100):
     return Supplier.objects.create(
         name=name,
         phone="0500000000",
@@ -31,19 +31,19 @@ class ShoppingListModelTests(TestCase):
 
     def test_create_shopping_list(self):
         """ShoppingList is created with correct user and name"""
-        sl = ShoppingList.objects.create(user=self.user, name="תבנית שבועית")
+        sl = ShoppingList.objects.create(user=self.user, name="pattren weekly")
         self.assertEqual(sl.user, self.user)
-        self.assertEqual(sl.name, "תבנית שבועית")
+        self.assertEqual(sl.name, "pattren weekly")
 
     def test_shopping_list_str(self):
         """__str__ contains user email and list name"""
-        sl = ShoppingList.objects.create(user=self.user, name="תבנית א")
+        sl = ShoppingList.objects.create(user=self.user, name="pattren weekly")
         self.assertIn(self.user.email, str(sl))
-        self.assertIn("תבנית א", str(sl))
+        self.assertIn("pattren weekly", str(sl))
 
     def test_shopping_list_deleted_with_user(self):
         """ShoppingList deleted when user is deleted"""
-        sl = ShoppingList.objects.create(user=self.user, name="תבנית")
+        sl = ShoppingList.objects.create(user=self.user, name="pattren weekly")
         self.user.delete()
         self.assertFalse(ShoppingList.objects.filter(id=sl.id).exists())
 
@@ -53,7 +53,7 @@ class ShoppingListItemModelTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.product = make_product()
-        self.sl = ShoppingList.objects.create(user=self.user, name="תבנית")
+        self.sl = ShoppingList.objects.create(user=self.user, name="pattren weekly")
 
     def test_create_item(self):
         """ShoppingListProduct stores product and quantity"""
@@ -70,7 +70,7 @@ class ShoppingListItemModelTests(TestCase):
     def test_item_str(self):
         """__str__ includes product name and quantity"""
         item = ShoppingListProduct.objects.create(shopping_list=self.sl, product=self.product, default_quantity=5)
-        self.assertIn("עגבנייה", str(item))
+        self.assertIn("tomato", str(item))
 
 
 class OrderRequestModelTests(TestCase):
@@ -150,5 +150,5 @@ class OrderRequestItemModelTests(TestCase):
             quantity=10,
             unit_price=3.50,
         )
-        self.assertIn("עגבנייה", str(product))
-        self.assertIn("ספק א", str(product))
+        self.assertIn("tomato", str(product))
+        self.assertIn("supplier A", str(product))

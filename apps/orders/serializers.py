@@ -15,13 +15,9 @@ class OrderItemInputSerializer(serializers.Serializer):
         source="product",
     )
     quantity = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal("0.01"))
-
-
 class SuggestOrderInputSerializer(serializers.Serializer):
 
     products = OrderItemInputSerializer(many=True, min_length=1)
-
-
 class PlaceOrderInputSerializer(serializers.Serializer):
     region = serializers.ChoiceField(choices=Region.choices)
     scenario = serializers.ChoiceField(
@@ -29,8 +25,6 @@ class PlaceOrderInputSerializer(serializers.Serializer):
         default="cheapest",
     )
     products = OrderItemInputSerializer(many=True, min_length=1)
-
-
 # ---------------------------------------------------------------------------
 # Output — scenario
 # ---------------------------------------------------------------------------
@@ -43,19 +37,14 @@ class ScenarioItemSerializer(serializers.Serializer):
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
     supplier_id = serializers.IntegerField()
     supplier_name = serializers.CharField()
-
-
 class ScenarioSerializer(serializers.Serializer):
     scenario = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     supplier_count = serializers.IntegerField()
     products = ScenarioItemSerializer(many=True)
-
-
 # ---------------------------------------------------------------------------
 # Output — market comparison
 # ---------------------------------------------------------------------------
-
 class MarketComparisonItemSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
     product_name = serializers.CharField()
@@ -65,15 +54,11 @@ class MarketComparisonItemSerializer(serializers.Serializer):
     our_subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
     market_subtotal = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
     savings = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-
-
 class MarketComparisonSerializer(serializers.Serializer):
     products = MarketComparisonItemSerializer(many=True)
     our_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     market_total = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
     total_savings = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-
-
 # ---------------------------------------------------------------------------
 # Output — suggest endpoint
 # ---------------------------------------------------------------------------
@@ -107,7 +92,6 @@ class PlaceOrderResponseSerializer(serializers.Serializer):
     scenario = serializers.CharField()
     whatsapp_links = WhatsAppLinkSerializer(many=True)
 
-
 # ---------------------------------------------------------------------------
 # Output — order list / detail
 # ---------------------------------------------------------------------------
@@ -137,7 +121,6 @@ class OrderListSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
     product_count = serializers.IntegerField()
 
-
 # ---------------------------------------------------------------------------
 # Input — status update
 # ---------------------------------------------------------------------------
@@ -160,8 +143,6 @@ class ShoppingListItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShoppingListProduct
         fields = ("id", "product_name", "default_quantity")
-
-
 class ShoppingListSerializer(serializers.ModelSerializer):
     products = ShoppingListItemSerializer(many=True)
 
@@ -199,8 +180,6 @@ class ShoppingListSerializer(serializers.ModelSerializer):
                 for product in products_data
             ])
         return instance
-
-
 class ShoppingListSuggestSerializer(serializers.Serializer):
     """Input for suggesting an order directly from a shopping list."""
     region = serializers.ChoiceField(choices=Region.choices)

@@ -23,9 +23,7 @@ def _get_client():
     global _client
     if _client is None:
         _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _client
-
-
+    return _clien
 def _parse_with_ai(message: str, product_names: list[str]) -> list[dict]:
     """
     Calls OpenAI to extract product names and prices from a free-text message.
@@ -53,7 +51,6 @@ def _parse_with_ai(message: str, product_names: list[str]) -> list[dict]:
     raw = response.choices[0].message.content
     data = json.loads(raw)
 
-    # The model may return {"items": [...]} or just [...]
     if isinstance(data, dict):
         data = next(iter(data.values()))
 

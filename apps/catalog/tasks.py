@@ -7,10 +7,7 @@ logger = logging.getLogger(__name__)
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=300)
 def fetch_market_prices_task(self):
-    """
-    מאחזר מחירי ירקות יומיים מאתר מועצת הצמחים ומעדכן את טבלת MarketPrice.
-    מתוזמן לרוץ כל יום בשעה 06:00.
-    """
+
     from django.conf import settings
     from apps.catalog.models import Product, MarketPrice
     from apps.catalog.market_scraper import fetch_vegetable_prices
@@ -37,7 +34,6 @@ def fetch_market_prices_task(self):
 
         price_grade_a = row["price_grade_a"]
         price_premium = row["price_premium"]
-        # מחיר ראשי: סוג א' אם קיים, אחרת מובחר
         primary_price = price_grade_a if price_grade_a is not None else price_premium
 
         if primary_price is None:

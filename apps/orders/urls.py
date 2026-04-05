@@ -9,7 +9,6 @@ from .views import (
     ShoppingListDetailView,
     ShoppingListSuggestView,
 )
-
 urlpatterns = [
     path("suggest/", SuggestOrderView.as_view(), name="orders-suggest"),
     path("place/", PlaceOrderView.as_view(), name="orders-place"),

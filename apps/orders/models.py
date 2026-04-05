@@ -22,8 +22,6 @@ class ShoppingListProduct(models.Model):
 
     def __str__(self):
         return f"{self.product.name} x{self.default_quantity}"
-
-
 class OrderRequest(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "ממתין לאישור"

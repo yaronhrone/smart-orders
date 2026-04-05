@@ -73,7 +73,6 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
         for item in prices:
             product_name = item["product_name"].lower().strip()
 
-            # 🔥 create product if not exists
             unit = item["unit"]
 
             product, created = Product.objects.get_or_create(
@@ -81,12 +80,10 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
                 defaults={"unit": unit}
             )
 
-            # 🔥 אם כבר קיים → נעדכן unit (ל-POC זה בסדר)
             if not created and product.unit != unit:
                 product.unit = unit
                 product.save()
 
-            # 🔥 avoid duplicates
             SupplierProduct.objects.update_or_create(
                 supplier=supplier,
                 product=product,

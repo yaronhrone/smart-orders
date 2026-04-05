@@ -17,18 +17,13 @@ from .serializers import (
     ShoppingListSuggestSerializer,
 )
 from .services import suggest_order, build_order
-
-
 class SuggestOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-
     @extend_schema(request=SuggestOrderInputSerializer, responses=SuggestOrderResponseSerializer)
     def post(self, request):
         serializer = SuggestOrderInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         user = request.user
-
         if not hasattr(user, "profile"):
             return Response({"detail": "User has no profile"}, status=status.HTTP_400_BAD_REQUEST)
         products = serializer.validated_data["products"]
@@ -39,16 +34,12 @@ class SuggestOrderView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(SuggestOrderResponseSerializer(result).data)
-
-
 class PlaceOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-
     @extend_schema(request=PlaceOrderInputSerializer, responses={201: PlaceOrderResponseSerializer})
     def post(self, request):
         serializer = PlaceOrderInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         user = request.user
 
         if not hasattr(user, "profile"):
@@ -80,11 +71,8 @@ class PlaceOrderView(APIView):
             PlaceOrderResponseSerializer(response_data).data,
             status=status.HTTP_201_CREATED,
         )
-
-
 class OrderListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-
     @extend_schema(responses=OrderListSerializer(many=True))
     def get(self, request):
         orders = (
@@ -104,8 +92,6 @@ class OrderListView(APIView):
             for o in orders
         ]
         return Response(OrderListSerializer(data, many=True).data)
-
-
 class OrderDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -124,8 +110,6 @@ class OrderDetailView(APIView):
             "products": list(order.products.all()),
         }
         return Response(OrderDetailSerializer(data).data)
-
-
 class OrderStatusUpdateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -143,8 +127,6 @@ class OrderStatusUpdateView(APIView):
         order.save(update_fields=["status"])
 
         return Response({"id": order.id, "status": order.status})
-
-
 class ShoppingListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
