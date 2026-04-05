@@ -2,6 +2,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 
+
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.orders.models import OrderRequest
 from apps.orders.services import build_order
@@ -109,8 +110,7 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("10")},
             {"product": self.cucumber, "quantity": Decimal("10")},
         ])
-
-        suppliers_used = {item.supplier for item in order.products.all()}
+        suppliers_used = {item.supplier  for item in order.products.all()}
         self.assertEqual(suppliers_used, {alt})
 
     def test_minimum_order_alt_also_below_minimum_stays_original(self):
@@ -125,7 +125,6 @@ class BuildOrderServiceTests(TestCase):
             {"product": self.tomato, "quantity": Decimal("10")},
         ])
 
-        # Neither meets minimum — stays with cheapest (best-effort)
         self.assertEqual(order.products.first().supplier, cheap)
 
     def test_minimum_order_picks_second_cheapest_when_cheapest_alt_fails(self):
@@ -134,8 +133,8 @@ class BuildOrderServiceTests(TestCase):
         Alt B (third cheapest) does → switch to B.
         """
         cheap = make_supplier("cheap", minimum_order=300)
-        alt_a = make_supplier("supplier A", minimum_order=200)   # 10*4=40 < 200 → skip
-        alt_b = make_supplier("alt B", minimum_order=0)     # no minimum → use
+        alt_a = make_supplier("supplier A", minimum_order=200)
+        alt_b = make_supplier("alt B", minimum_order=0)
 
         set_price(cheap, self.tomato, "3.00")
         set_price(alt_a, self.tomato, "4.00")

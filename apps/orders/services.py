@@ -1,5 +1,6 @@
 from decimal import Decimal
 from collections import defaultdict
+import sys
 from urllib.parse import quote
 from apps.catalog.models import SupplierProduct, Supplier, MarketPrice
 from apps.orders.models import OrderRequest, OrderRequestProduct
@@ -19,9 +20,9 @@ def suggest_order(user, region, products):
         "minimum_issues": problems or [],
     }
 def _assign_suppliers(products, user, region):
-    suppliers = _get_available_suppliers(user, region)
-    assignments = _build_initial_assignments(products, suppliers)
-    assignments = fill_until_stable(assignments)
+    suppliers = _get_available_suppliers(user, region) # c , a
+    assignments_list = _build_initial_assignments(products, suppliers)# [(c, 3.00), (a, 1.50)]
+    assignments = _force_minimum_switch(assignments_list)
     _validate_all_products_present(assignments, products)
     return assignments
 def build_order(user, region, products, scenario="cheapest"):
@@ -68,62 +69,7 @@ def _validate_all_products_present(assignments, products):
     requested_products = {i["product"].id for i in products}
     if assigned_products != requested_products:
         raise ValueError("Some products are missing in assignment")
-def _fill_supplier_minimum(assignments):
 
-    by_supplier = defaultdict(list)
-    for a in assignments:
-        by_supplier[a["supplier"].id].append(a)
-    for sid, products in by_supplier.items():
-        supplier = products[0]["supplier"]
-        total = sum(a["quantity"] * a["unit_price"] for a in products)
-        if total >= supplier.minimum_order:
-            continue
-        candidate_suppliers = None
-        for a in products:
-            suppliers_for_product = {s.id: s for s, _ in a["all_prices"]}
-
-            if candidate_suppliers is None:
-                candidate_suppliers = suppliers_for_product
-            else:
-                candidate_suppliers = {
-                    s_id: candidate_suppliers[s_id]
-                    for s_id in candidate_suppliers
-                    if s_id in suppliers_for_product
-                }
-        if not candidate_suppliers:
-            continue
-        candidate_suppliers.pop(sid, None)
-        best_supplier = None
-        best_total = None
-        for cand_id, cand_supplier in candidate_suppliers.items():
-            new_total = Decimal(0)
-            valid = True
-            for a in products:
-                found_price = False
-                for s, p in a["all_prices"]:
-                    if s.id == cand_id:
-                        new_total += a["quantity"] * p
-                        found_price = True
-                        break
-                if not found_price:
-                    valid = False
-                    break
-            if not valid:
-                continue
-            if new_total >= cand_supplier.minimum_order:
-                best_supplier = cand_supplier
-                break
-            if best_total is None or new_total < best_total:
-                best_total = new_total
-                best_supplier = cand_supplier
-        if best_supplier:
-            for a in products:
-                for s, p in a["all_prices"]:
-                    if s.id == best_supplier.id:
-                        a["supplier"] = best_supplier
-                        a["unit_price"] = p
-                        break
-    return assignments
 def _get_available_suppliers(user, region):
     return Supplier.objects.filter(
         region=region,
@@ -223,21 +169,77 @@ def _check_missing_minimum(assignments):
             })
 
     return problems
-def fill_until_stable(assignments, max_iterations=10):
-    """
-    Run _fill_supplier_minimum until no more changes happen
-    or until max_iterations is reached.
-    """
-    for _ in range(max_iterations):
-        before = [
-            (a["supplier"].id, a["unit_price"])
-            for a in assignments
-        ]
-        assignments = _fill_supplier_minimum(assignments)
-        after = [
-            (a["supplier"].id, a["unit_price"])
-            for a in assignments
-        ]
-        if before == after:
-            break
+def _force_minimum_switch(assignments):
+    totals, suppliers = _calculate_supplier_totals(assignments)
+    grouped = _group_by_supplier(assignments)
+
+    for sid, items in grouped.items():
+        supplier = suppliers[sid]
+        total = totals[sid]
+
+        if total >= supplier.minimum_order:
+            continue
+
+        best_supplier = _find_next_valid_supplier(assignments, sid)
+
+        if best_supplier:
+            _move_items_to_supplier(items, best_supplier)
+
     return assignments
+def _calculate_supplier_totals(assignments):
+
+    totals = defaultdict(Decimal)
+    suppliers = {}
+
+    for a in assignments:
+        sid = a["supplier"].id
+        totals[sid] += a["quantity"] * a["unit_price"]
+        suppliers[sid] = a["supplier"]
+
+    return totals, suppliers
+def _group_by_supplier(assignments):
+    grouped = defaultdict(list)
+
+    for a in assignments:
+        grouped[a["supplier"].id].append(a)
+
+    return grouped
+
+def _calculate_total_for_supplier(items, supplier_id):
+    total = Decimal(0)
+
+    for a in items:
+        price = next((p for s, p in a["all_prices"] if s.id == supplier_id), None)
+        if price is None:
+            return None
+
+        total += a["quantity"] * price
+
+    return total
+def _find_next_valid_supplier(items, current_supplier_id):
+    """
+    Go over suppliers by price and return the first one
+    that can satisfy minimum order for ALL items.
+    """
+    sorted_suppliers = [
+        s for s, _ in items[0]["all_prices"]
+        if s.id != current_supplier_id
+    ]
+
+    for supplier in sorted_suppliers:
+        total = _calculate_total_for_supplier(items, supplier.id)
+
+        if total is None:
+            continue
+
+        if total >= supplier.minimum_order:
+            return supplier
+
+    return None
+def _move_items_to_supplier(items, new_supplier):
+    for a in items:
+        for s, p in a["all_prices"]:
+            if s.id == new_supplier.id:
+                a["supplier"] = new_supplier
+                a["unit_price"] = p
+                break
