@@ -14,3 +14,4 @@ djangorestframework-simplejwt==5.3.1
 beautifulsoup4==4.12.3
 lxml==5.2.2
 django-cors-headers==4.3.1
+twilio>=9.0,<10

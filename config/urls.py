@@ -20,6 +20,7 @@ from django.urls import path
 from django.urls import include
 from core.views import health_check
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from apps.orders.whatsapp_webhook import whatsapp_webhook
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("health/", health_check, name="health_check"),
@@ -29,4 +30,5 @@ urlpatterns = [
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
     path("schema/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("schema/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    path("whatsapp/webhook/", whatsapp_webhook, name="whatsapp_webhook"),
 ]
