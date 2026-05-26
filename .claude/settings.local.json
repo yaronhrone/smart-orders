@@ -11,7 +11,10 @@
       "Bash(echo \"PID: $!\")",
       "Read(//c/Users/yaron/.cache/**)",
       "Read(//c/Users/yaron/AppData/Local/ms-playwright/**)",
-      "Bash(find /root -name \"chrome\" -type f)"
+      "Bash(find /root -name \"chrome\" -type f)",
+      "Bash(docker exec smart-orders-app-1 python manage.py shell -c ' *)",
+      "Bash(curl -s -X POST http://localhost:8000/api/users/login/ -H \"Content-Type: application/json\" -d \"{\\\\\"email\\\\\":\\\\\"user@example.com\\\\\",\\\\\"password\\\\\":\\\\\"testpass123\\\\\"}\")",
+      "Bash(python -m json.tool)"
     ]
   }
 }

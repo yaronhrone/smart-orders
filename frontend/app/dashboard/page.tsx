@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchOrders, fetchStats, OrderSummary, OrderStats } from "../lib/api";
+import { fetchOrders, fetchStats, fetchMe, OrderSummary, OrderStats, Me } from "../lib/api";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   PENDING: { label: "ממתין", color: "bg-yellow-100 text-yellow-800" },
@@ -36,6 +36,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [orders, setOrders] = useState<OrderSummary[] | null>(null);
   const [stats, setStats] = useState<OrderStats | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -44,10 +45,11 @@ export default function DashboardPage() {
       router.push("/login");
       return;
     }
-    Promise.all([fetchOrders(), fetchStats()])
-      .then(([o, s]) => {
+    Promise.all([fetchOrders(), fetchStats(), fetchMe()])
+      .then(([o, s, m]) => {
         setOrders(o);
         setStats(s);
+        setMe(m);
       })
       .catch(() => setError("שגיאה בטעינת הנתונים"));
   }, [router]);
@@ -80,13 +82,23 @@ export default function DashboardPage() {
       {/* Header */}
       <header className="bg-white shadow-sm sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex justify-between items-center">
-          <h1 className="text-lg font-bold text-gray-800">Smart Orders — דשבורד</h1>
-          <button
-            onClick={logout}
-            className="text-sm text-gray-500 hover:text-gray-800 transition"
-          >
-            יציאה
-          </button>
+          <h1 className="text-lg font-bold text-gray-800">Smart Orders — לוח בקרה</h1>
+          <div className="flex gap-3 items-center">
+            {me?.is_staff && (
+              <button
+                onClick={() => router.push("/admin")}
+                className="text-sm bg-gray-800 text-white px-3 py-1.5 rounded-lg hover:bg-gray-900 transition"
+              >
+                ניהול
+              </button>
+            )}
+            <button
+              onClick={logout}
+              className="text-sm text-gray-500 hover:text-gray-800 transition"
+            >
+              יציאה
+            </button>
+          </div>
         </div>
       </header>
 
@@ -151,7 +163,11 @@ export default function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {orders.map((o) => (
-                    <tr key={o.id} className="hover:bg-gray-50 transition">
+                    <tr
+                      key={o.id}
+                      onClick={() => router.push(`/dashboard/orders/${o.id}`)}
+                      className="hover:bg-blue-50 cursor-pointer transition"
+                    >
                       <td className="px-4 py-3 text-gray-500">{o.id}</td>
                       <td className="px-4 py-3 text-gray-700">{formatDate(o.created_at)}</td>
                       <td className="px-4 py-3 text-gray-700">{o.product_count}</td>

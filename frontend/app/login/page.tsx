@@ -19,8 +19,15 @@ export default function LoginPage() {
       const { access } = await login(email, password);
       localStorage.setItem("token", access);
       router.push("/dashboard");
-    } catch {
-      setError("אימייל או סיסמה שגויים");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      try {
+        const parsed = JSON.parse(msg);
+        const detail = parsed.detail ?? parsed.non_field_errors?.[0] ?? msg;
+        setError(String(detail));
+      } catch {
+        setError(msg || "שגיאת התחברות");
+      }
     } finally {
       setLoading(false);
     }
