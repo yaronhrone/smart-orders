@@ -28,6 +28,12 @@ class MeView(generics.RetrieveAPIView):
 
 
 class AdminUserListView(generics.ListAPIView):
-    queryset = User.objects.all().order_by("-date_joined")
-    serializer_class = AdminUserSerializer
+    queryset = User.objects.select_related("profile").all().order_by("-date_joined")
+    serializer_class = UserWithProfileSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+
+class AdminUserDetailView(generics.RetrieveDestroyAPIView):
+    queryset = User.objects.select_related("profile").all()
+    serializer_class = UserWithProfileSerializer
     permission_classes = [permissions.IsAdminUser]

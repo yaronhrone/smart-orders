@@ -1,11 +1,12 @@
 from decimal import Decimal
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import OrderRequest
-from apps.orders.services import build_order
+from apps.orders.models import OrderRequest, OrderRequestProduct
+from apps.orders.services import build_order, suggest_order
 
 User = get_user_model()
 
@@ -200,3 +201,209 @@ class BuildOrderServiceTests(TestCase):
         ])
 
         self.assertEqual(float(order.total_price), 110.0)
+
+    def test_force_switch_picks_cheapest_alternative_by_total_cost(self):
+        """
+        When the under-minimum supplier has multiple valid alternatives, pick
+        the one with the LOWEST total cost on the group — not the one cheapest
+        on items[0]. Earlier `_find_next_valid_supplier` sorted by items[0]
+        price only, which could return a suboptimal alternative.
+        """
+        cheap = make_supplier("cheap", minimum_order=500)
+        alt_a = make_supplier("alt_a", minimum_order=0)
+        alt_b = make_supplier("alt_b", minimum_order=0)
+
+        set_price(cheap, self.tomato, "1.00")
+        set_price(cheap, self.cucumber, "1.00")
+
+        # alt_a cheaper on tomato (items[0]) but very expensive on cucumber → total 120
+        set_price(alt_a, self.tomato, "2.00")
+        set_price(alt_a, self.cucumber, "10.00")
+
+        # alt_b more expensive on tomato but cheaper overall → total 80
+        set_price(alt_b, self.tomato, "3.00")
+        set_price(alt_b, self.cucumber, "5.00")
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("10")},
+            {"product": self.cucumber, "quantity": Decimal("10")},
+        ])
+        suppliers_used = {item.supplier for item in order.products.all()}
+        self.assertEqual(suppliers_used, {alt_b})
+
+
+class FewestSuppliersTests(TestCase):
+    """Tests for the `fewest_suppliers` set-cover scenario."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.tomato = make_product("tomato")
+        self.cucumber = make_product("cucumber")
+        self.carrot = make_product("carrot")
+
+    def test_picks_minimum_supplier_count(self):
+        """One supplier carrying all 3 beats 3 separate cheap suppliers."""
+        one_stop = make_supplier("one_stop", minimum_order=0)
+        cheap_t = make_supplier("cheap_t", minimum_order=0)
+        cheap_c = make_supplier("cheap_c", minimum_order=0)
+        cheap_cr = make_supplier("cheap_cr", minimum_order=0)
+
+        # one_stop is more expensive on each product but covers all
+        set_price(one_stop, self.tomato, "10.00")
+        set_price(one_stop, self.cucumber, "10.00")
+        set_price(one_stop, self.carrot, "10.00")
+
+        set_price(cheap_t, self.tomato, "1.00")
+        set_price(cheap_c, self.cucumber, "1.00")
+        set_price(cheap_cr, self.carrot, "1.00")
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+            {"product": self.cucumber, "quantity": Decimal("5")},
+            {"product": self.carrot, "quantity": Decimal("5")},
+        ], scenario="fewest_suppliers")
+
+        suppliers_used = {item.supplier for item in order.products.all()}
+        self.assertEqual(suppliers_used, {one_stop})
+
+    def test_breaks_tie_by_cost(self):
+        """
+        When two set-cover solutions need the same number of suppliers,
+        prefer the one with lower total cost.
+        """
+        # Two ways to cover {tomato, cucumber} with 1 supplier:
+        # supplier_expensive covers both at 10 each — total 100
+        # supplier_cheap covers both at 3 each — total 30
+        supplier_expensive = make_supplier("expensive", minimum_order=0)
+        supplier_cheap = make_supplier("cheap", minimum_order=0)
+
+        set_price(supplier_expensive, self.tomato, "10.00")
+        set_price(supplier_expensive, self.cucumber, "10.00")
+        set_price(supplier_cheap, self.tomato, "3.00")
+        set_price(supplier_cheap, self.cucumber, "3.00")
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+            {"product": self.cucumber, "quantity": Decimal("5")},
+        ], scenario="fewest_suppliers")
+
+        suppliers_used = {item.supplier for item in order.products.all()}
+        self.assertEqual(suppliers_used, {supplier_cheap})
+
+    def test_respects_minimum_order(self):
+        """
+        Greedy set-cover picks one_stop (covers everything, cheapest). Its
+        minimum is violated, so _force_minimum_switch hands the whole group
+        off to one_stop_alt — another all-covering supplier that meets
+        minimum.
+
+        Note: the algorithm doesn't split a group across multiple suppliers;
+        it only swaps the whole group to a single alternative. If no single
+        alternative can absorb the group, the violation is left in place and
+        surfaced via minimum_issues.
+        """
+        one_stop = make_supplier("one_stop", minimum_order=1000)
+        one_stop_alt = make_supplier("one_stop_alt", minimum_order=0)
+
+        set_price(one_stop, self.tomato, "1.00")
+        set_price(one_stop, self.cucumber, "1.00")
+        set_price(one_stop_alt, self.tomato, "3.00")
+        set_price(one_stop_alt, self.cucumber, "3.00")
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+            {"product": self.cucumber, "quantity": Decimal("5")},
+        ], scenario="fewest_suppliers")
+
+        suppliers_used = {item.supplier for item in order.products.all()}
+        self.assertEqual(suppliers_used, {one_stop_alt})
+
+    def test_raises_when_no_supplier_for_product(self):
+        """fewest_suppliers must also raise when a product has no supplier."""
+        # tomato has a supplier, cucumber has none
+        s = make_supplier("s", minimum_order=0)
+        set_price(s, self.tomato, "1.00")
+
+        with self.assertRaises(ValueError):
+            build_order(self.user, Region.CENTER, [
+                {"product": self.tomato, "quantity": Decimal("5")},
+                {"product": self.cucumber, "quantity": Decimal("5")},
+            ], scenario="fewest_suppliers")
+
+
+class SuggestOrderShapeTests(TestCase):
+    """Tests for the suggest_order response structure."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.tomato = make_product("tomato")
+
+    def test_minimum_issues_returned_for_both_scenarios(self):
+        """`minimum_issues` is a dict keyed by scenario name."""
+        s = make_supplier("s", minimum_order=0)
+        set_price(s, self.tomato, "1.00")
+
+        result = suggest_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+        ])
+
+        self.assertIn("minimum_issues", result)
+        self.assertIsInstance(result["minimum_issues"], dict)
+        self.assertIn("cheapest", result["minimum_issues"])
+        self.assertIn("fewest_suppliers", result["minimum_issues"])
+        # No minimum violations with this setup
+        self.assertEqual(result["minimum_issues"]["cheapest"], [])
+        self.assertEqual(result["minimum_issues"]["fewest_suppliers"], [])
+
+    def test_minimum_issues_reports_violations_per_scenario(self):
+        """When a scenario can't reach a supplier's minimum, it's reported."""
+        # Single supplier with high minimum — switch impossible (no alternatives)
+        only = make_supplier("only", minimum_order=1000)
+        set_price(only, self.tomato, "1.00")
+
+        result = suggest_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+        ])
+        self.assertEqual(len(result["minimum_issues"]["cheapest"]), 1)
+        self.assertEqual(
+            result["minimum_issues"]["cheapest"][0]["supplier_id"], only.id
+        )
+        self.assertEqual(len(result["minimum_issues"]["fewest_suppliers"]), 1)
+
+
+class ModelValidatorTests(TestCase):
+    """Tests for model-level MinValueValidator constraints."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.tomato = make_product("tomato")
+        self.supplier = make_supplier("s", minimum_order=0)
+
+    def test_supplier_product_rejects_negative_price(self):
+        sp = SupplierProduct(
+            supplier=self.supplier,
+            product=self.tomato,
+            price_per_unit=Decimal("-1.00"),
+        )
+        with self.assertRaises(ValidationError):
+            sp.full_clean()
+
+    def test_supplier_product_rejects_zero_price(self):
+        sp = SupplierProduct(
+            supplier=self.supplier,
+            product=self.tomato,
+            price_per_unit=Decimal("0"),
+        )
+        with self.assertRaises(ValidationError):
+            sp.full_clean()
+
+    def test_supplier_minimum_order_rejects_negative(self):
+        s = Supplier(
+            name="bad",
+            phone="0511111111",
+            whatsapp_number="0511111111",
+            region=Region.CENTER,
+            minimum_order=Decimal("-1"),
+        )
+        with self.assertRaises(ValidationError):
+            s.full_clean()

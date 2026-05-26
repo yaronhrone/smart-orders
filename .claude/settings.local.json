@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python *)",
+      "Bash(python -c \"import django; print\\(django.__version__\\)\")",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(docker info *)",
+      "Bash(npm run *)",
+      "Bash(npx next *)",
+      "Bash(echo \"PID: $!\")",
+      "Read(//c/Users/yaron/.cache/**)",
+      "Read(//c/Users/yaron/AppData/Local/ms-playwright/**)",
+      "Bash(find /root -name \"chrome\" -type f)"
+    ]
+  }
+}

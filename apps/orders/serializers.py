@@ -68,11 +68,18 @@ class MinimumIssueSerializer(serializers.Serializer):
     current_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     minimum_required = serializers.DecimalField(max_digits=10, decimal_places=2)
     missing_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class MinimumIssuesByScenarioSerializer(serializers.Serializer):
+    cheapest = MinimumIssueSerializer(many=True)
+    fewest_suppliers = MinimumIssueSerializer(many=True)
+
+
 class SuggestOrderResponseSerializer(serializers.Serializer):
     cheapest = ScenarioSerializer()
     fewest_suppliers = ScenarioSerializer()
     market_comparison = MarketComparisonSerializer()
-    minimum_issues = MinimumIssueSerializer(many=True)
+    minimum_issues = MinimumIssuesByScenarioSerializer()
 
 # ---------------------------------------------------------------------------
 # Output — place endpoint
@@ -183,3 +190,20 @@ class ShoppingListSerializer(serializers.ModelSerializer):
 class ShoppingListSuggestSerializer(serializers.Serializer):
     """Input for suggesting an order directly from a shopping list."""
     region = serializers.ChoiceField(choices=Region.choices)
+
+
+# ---------------------------------------------------------------------------
+# Output — stats endpoint
+# ---------------------------------------------------------------------------
+
+class SupplierSpendingSerializer(serializers.Serializer):
+    supplier_id = serializers.IntegerField()
+    supplier_name = serializers.CharField()
+    total_spent = serializers.DecimalField(max_digits=12, decimal_places=2)
+    order_count = serializers.IntegerField()
+
+
+class OrderStatsSerializer(serializers.Serializer):
+    total_spent = serializers.DecimalField(max_digits=12, decimal_places=2)
+    order_count = serializers.IntegerField()
+    by_supplier = SupplierSpendingSerializer(many=True)

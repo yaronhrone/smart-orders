@@ -15,7 +15,10 @@ from .serializers import (
     OrderStatusUpdateSerializer,
     ShoppingListSerializer,
     ShoppingListSuggestSerializer,
+    OrderStatsSerializer,
 )
+from decimal import Decimal
+from collections import defaultdict
 from .services import suggest_order, build_order
 class SuggestOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -172,6 +175,53 @@ class ShoppingListDetailView(APIView):
         """DELETE /api/orders/shopping-lists/{id}/"""
         self.get_object(pk, request.user).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class OrderStatsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(responses=OrderStatsSerializer)
+    def get(self, request):
+        """GET /api/orders/stats/ — spending totals per supplier for the current user."""
+        orders = (
+            OrderRequest.objects
+            .filter(user=request.user)
+            .prefetch_related("products__supplier")
+        )
+
+        total_spent = Decimal("0")
+        order_count = orders.count()
+        supplier_totals = defaultdict(lambda: {"total": Decimal("0"), "count": 0, "name": ""})
+
+        for order in orders:
+            for item in order.products.all():
+                line = item.quantity * item.unit_price
+                total_spent += line
+                sid = item.supplier.id
+                supplier_totals[sid]["total"] += line
+                supplier_totals[sid]["count"] += 1
+                supplier_totals[sid]["name"] = item.supplier.name
+
+        by_supplier = sorted(
+            [
+                {
+                    "supplier_id": sid,
+                    "supplier_name": v["name"],
+                    "total_spent": v["total"],
+                    "order_count": v["count"],
+                }
+                for sid, v in supplier_totals.items()
+            ],
+            key=lambda x: x["total_spent"],
+            reverse=True,
+        )
+
+        result = {
+            "total_spent": total_spent,
+            "order_count": order_count,
+            "by_supplier": by_supplier,
+        }
+        return Response(OrderStatsSerializer(result).data)
 
 
 class ShoppingListSuggestView(APIView):

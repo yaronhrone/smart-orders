@@ -1,5 +1,8 @@
-from django.db import models
+from decimal import Decimal
+
 from django.conf import settings
+from django.core.validators import MinValueValidator
+from django.db import models
 
 
 class Region(models.TextChoices):
@@ -30,7 +33,12 @@ class Supplier(models.Model):
     phone = models.CharField(max_length=20 ,  unique=True)
     whatsapp_number = models.CharField(max_length=20 , unique=True)
     region = models.CharField(max_length=50, choices=Region.choices)
-    minimum_order = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    minimum_order = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
 
     # None = global (admin), set = private supplier of a user
     owner = models.ForeignKey(
@@ -52,7 +60,11 @@ class Supplier(models.Model):
 class SupplierProduct(models.Model):
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name="products")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="supplier_prices")
-    price_per_unit = models.DecimalField(max_digits=10, decimal_places=2)
+    price_per_unit = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
