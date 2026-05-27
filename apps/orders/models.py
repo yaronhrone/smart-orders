@@ -10,6 +10,7 @@ from apps.catalog.models import Product, Supplier
 class ShoppingList(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="shopping_lists")
     name = models.CharField(max_length=255)
+    is_primary = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -63,3 +64,15 @@ class OrderRequestProduct(models.Model):
 
     def __str__(self):
         return f"{self.product.name} x{self.quantity} מ-{self.supplier.name}"
+
+
+class SupplierConfirmation(models.Model):
+    order_request_product = models.ForeignKey(
+        OrderRequestProduct, on_delete=models.CASCADE, related_name="confirmations"
+    )
+    confirmed_quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    confirmed_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"אישור ספק: {self.order_request_product} x{self.confirmed_quantity}"

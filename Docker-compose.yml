@@ -17,6 +17,10 @@ services:
              python manage.py runserver 0.0.0.0:8000"
     env_file:
       - .env
+    environment:
+      - TWILIO_ACCOUNT_SID=AC80a1c5c49e83352af2a5865729a479bd
+      - TWILIO_AUTH_TOKEN=83569eeeb70fe07dd8bf088dc9950fd5
+      - TWILIO_WHATSAPP_NUMBER=+14155238886
 
     depends_on:
       - db
@@ -34,6 +38,19 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - NEXT_PUBLIC_API_URL=http://app:8000
+    depends_on:
+      - app
 
   celery:
     build: .
@@ -57,3 +74,4 @@ services:
 volumes:
   dev-db-data:
   dev-static-data:
+  frontend_node_modules:

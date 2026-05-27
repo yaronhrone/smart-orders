@@ -14,7 +14,9 @@
       "Bash(find /root -name \"chrome\" -type f)",
       "Bash(docker exec smart-orders-app-1 python manage.py shell -c ' *)",
       "Bash(curl -s -X POST http://localhost:8000/api/users/login/ -H \"Content-Type: application/json\" -d \"{\\\\\"email\\\\\":\\\\\"user@example.com\\\\\",\\\\\"password\\\\\":\\\\\"testpass123\\\\\"}\")",
-      "Bash(python -m json.tool)"
+      "Bash(python -m json.tool)",
+      "PowerShell(Stop-Process -Id 2528 -Force)",
+      "PowerShell($env:NEXT_PUBLIC_API_URL = \"http://localhost:8000\"; Start-Process -FilePath \"node\" -ArgumentList \"node_modules/.bin/next\",\"start\",\"--port\",\"3000\" -WorkingDirectory \"c:\\\\Users\\\\yaron\\\\OneDrive\\\\Desktop\\\\ירון\\\\לימודים\\\\Tspace\\\\מיזם אישי\\\\smart-orders\\\\frontend\" -WindowStyle Hidden; Start-Sleep -Seconds 4; Write-Host \"Started\")"
     ]
   }
 }

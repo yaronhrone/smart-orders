@@ -2,7 +2,7 @@
 Parses a free-text price message from a supplier using OpenAI,
 then updates SupplierProduct prices in the DB.
 
-Expected message example:
+Example message:
     "עגבנייה 3.50, מלפפון 2.00, גזר 1.80 לקילו"
 """
 import json
@@ -23,21 +23,39 @@ def _get_client():
     global _client
     if _client is None:
         _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _clien
+    return _client
+
+
+_UNIT_MAP = {
+    "קג": "kg", "קילו": "kg", 'ק"ג': "kg", "kg": "kg",
+    "גרם": "gram", "gram": "gram",
+    "יחידה": "unit", 'יח\'': "unit", "unit": "unit",
+    "ארגז": "box", "box": "box",
+    "ליטר": "liter", "liter": "liter",
+    "מטר": "meter", "meter": "meter",
+}
+
+
+def _normalize_unit(raw: str) -> str:
+    return _UNIT_MAP.get(raw.strip().lower(), "kg")
+
+
 def _parse_with_ai(message: str, product_names: list[str]) -> list[dict]:
     """
-    Calls OpenAI to extract product names and prices from a free-text message.
-
-    Returns a list of {"product_name": str, "price": str} dicts.
-    Only returns entries whose product_name matches one of the known products.
+    Calls OpenAI to extract product names, prices, and units from a free-text message.
+    Returns a list of {"product_name", "price", "unit", "is_new"} dicts.
     """
-    known = ", ".join(product_names)
+    known = ", ".join(product_names) if product_names else "—"
     prompt = (
-        f"You are a price-list parser. Extract product names and prices from the message below.\n"
+        "You are a price-list parser for a vegetable/fruit supplier system in Israel.\n"
+        "Extract ALL products with prices from the message below.\n"
         f"Known products in the system: {known}\n"
-        f"Match each extracted product to the closest known product name.\n"
-        f"Return ONLY a JSON array. Each element: {{\"product_name\": \"...\", \"price\": \"...\"}}\n"
-        f"Use the exact known product name as product_name. Price must be a decimal number.\n"
+        "Rules:\n"
+        "1. If the product matches a known product (fuzzy/phonetic Hebrew matching) — use the exact known name and set is_new=false.\n"
+        "2. If the product is NEW (not in the known list) — use the name as written in Hebrew and set is_new=true.\n"
+        "3. For unit, pick ONE of: קג, גרם, יחידה, ארגז, ליטר, מטר. Default to קג if not specified.\n"
+        "Return ONLY a JSON object with key 'items' containing an array.\n"
+        'Each element: {"product_name": "...", "price": "3.50", "unit": "קג", "is_new": false}\n'
         f"Message: {message}"
     )
 
@@ -52,15 +70,13 @@ def _parse_with_ai(message: str, product_names: list[str]) -> list[dict]:
     data = json.loads(raw)
 
     if isinstance(data, dict):
-        data = next(iter(data.values()))
+        data = data.get("items", next(iter(data.values()), []))
 
     return data if isinstance(data, list) else []
 
 
 def update_prices_from_message(supplier, message: str) -> dict:
     """
-    Main entry point.
-
     Parses `message`, matches products, updates SupplierProduct rows.
 
     Returns:
@@ -69,10 +85,13 @@ def update_prices_from_message(supplier, message: str) -> dict:
         "skipped": [{"product_name": str, "reason": str}],
     }
     """
-    products = {p.name: p for p in Product.objects.all()}
+    all_products = {p.name: p for p in Product.objects.all()}
+
+    if not all_products:
+        return {"updated": [], "skipped": [{"product_name": "*", "reason": "אין מוצרים בקטלוג"}]}
 
     try:
-        parsed = _parse_with_ai(message, list(products.keys()))
+        parsed = _parse_with_ai(message, list(all_products.keys()))
     except Exception as exc:
         logger.error("OpenAI price parsing failed: %s", exc)
         raise ValueError(f"AI parsing failed: {exc}")
@@ -83,19 +102,40 @@ def update_prices_from_message(supplier, message: str) -> dict:
     for entry in parsed:
         name = entry.get("product_name", "").strip()
         price_raw = str(entry.get("price", "")).strip()
+        unit_raw = str(entry.get("unit", "קג")).strip()
+        is_new = entry.get("is_new", False)
 
-        products, _ = Product.objects.get_or_create(name=name.lower().strip())
+        if not name:
+            continue
+
         try:
             price = Decimal(price_raw)
-        except InvalidOperation:
-            skipped.append({"product_name": name, "reason": f"invalid price: {price_raw}"})
+            if price <= 0:
+                raise InvalidOperation
+        except (InvalidOperation, ValueError):
+            skipped.append({"product_name": name, "reason": f"מחיר לא תקין: {price_raw}"})
             continue
+
+        # Get existing or create new product
+        product = all_products.get(name)
+        created_product = False
+        if not product:
+            unit_code = _normalize_unit(unit_raw)
+            product, created_product = Product.objects.get_or_create(
+                name=name,
+                defaults={"unit": unit_code},
+            )
+            all_products[name] = product
 
         SupplierProduct.objects.update_or_create(
             supplier=supplier,
-            product=products[name],
+            product=product,
             defaults={"price_per_unit": price},
         )
-        updated.append({"product_name": name, "price": str(price)})
+        updated.append({
+            "product_name": name,
+            "price": str(price),
+            "is_new": created_product,
+        })
 
     return {"updated": updated, "skipped": skipped}

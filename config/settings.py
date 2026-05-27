@@ -29,7 +29,7 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", ".ngrok-free.app", ".ngrok-free.dev"]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", ".ngrok-free.app", ".ngrok-free.dev"]
 
 
 # Application definition
@@ -188,7 +188,11 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_BEAT_SCHEDULE = {
     "fetch-market-prices-daily": {
         "task": "apps.catalog.tasks.fetch_market_prices_task",
-        "schedule": crontab(hour=10, minute=30),  # כל יום בשעה 06:00
+        "schedule": crontab(hour=10, minute=30),
+    },
+    "send-daily-supplier-orders": {
+        "task": "apps.orders.tasks.send_daily_supplier_orders_task",
+        "schedule": crontab(hour=11, minute=0),  # אחרי עדכון מחירי שוק
     },
 }
 
@@ -204,6 +208,10 @@ AUTH_USER_MODEL = "users.User"
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+
+# Shared secret for the local Market Agent → server push.
+# Set MARKET_AGENT_SECRET in .env.  If empty, the push endpoint is disabled.
+MARKET_AGENT_SECRET = os.environ.get("MARKET_AGENT_SECRET", "")
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",

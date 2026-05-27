@@ -207,6 +207,7 @@ def _assignments_to_scenario(assignments, scenario_name):
             {
                 "product_id": a["product"].id,
                 "product_name": a["product"].name,
+                "unit": a["product"].get_unit_display(),
                 "quantity": a["quantity"],
                 "unit_price": a["unit_price"],
                 "subtotal": a["quantity"] * a["unit_price"],

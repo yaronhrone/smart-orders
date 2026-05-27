@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ShoppingList, ShoppingListProduct, OrderRequest, OrderRequestProduct
+from .models import ShoppingList, ShoppingListProduct, OrderRequest, OrderRequestProduct, SupplierConfirmation
 
 
 class ShoppingListItemInline(admin.TabularInline):
@@ -9,9 +9,16 @@ class ShoppingListItemInline(admin.TabularInline):
 
 @admin.register(ShoppingList)
 class ShoppingListAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "name", "created_at")
+    list_display = ("id", "user", "name", "is_primary", "created_at")
+    list_filter = ("is_primary",)
     search_fields = ("name", "user__email")
     inlines = [ShoppingListItemInline]
+
+
+@admin.register(SupplierConfirmation)
+class SupplierConfirmationAdmin(admin.ModelAdmin):
+    list_display = ("id", "order_request_product", "confirmed_quantity", "confirmed_at")
+    readonly_fields = ("confirmed_at",)
 
 
 class OrderRequestItemInline(admin.TabularInline):

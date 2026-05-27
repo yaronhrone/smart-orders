@@ -32,6 +32,7 @@ class PlaceOrderInputSerializer(serializers.Serializer):
 class ScenarioItemSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
     product_name = serializers.CharField()
+    unit = serializers.CharField()
     quantity = serializers.DecimalField(max_digits=10, decimal_places=2)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
@@ -155,7 +156,7 @@ class ShoppingListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ShoppingList
-        fields = ("id", "name", "created_at", "products")
+        fields = ("id", "name", "is_primary", "created_at", "products")
         read_only_fields = ("id", "created_at")
 
     def create(self, validated_data):

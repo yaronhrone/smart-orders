@@ -238,7 +238,7 @@ class ShoppingListSuggestView(APIView):
         serializer.is_valid(raise_exception=True)
 
         products = [
-            {"product": product.product, "quantity": product.default_quantity}
+            {"product": product.product, "quantity": product.default_quantity * 2}
             for product in shopping_list.products.all()
         ]
 

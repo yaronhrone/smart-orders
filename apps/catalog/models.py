@@ -16,8 +16,11 @@ class Region(models.TextChoices):
 
 class Unit(models.TextChoices):
     KG = "kg", "ק\"ג"
+    GRAM = "gram", "גרם"
     UNIT = "unit", "יחידה"
     BOX = "box", "ארגז"
+    LITER = "liter", "ליטר"
+    METER = "meter", "מטר"
 
 
 class Product(models.Model):

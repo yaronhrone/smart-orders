@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchOrders, fetchStats, fetchMe, OrderSummary, OrderStats, Me } from "../lib/api";
+import { fetchOrders, fetchStats, OrderSummary, OrderStats } from "../lib/api";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  PENDING: { label: "ממתין", color: "bg-yellow-100 text-yellow-800" },
-  CONFIRMED: { label: "אושר", color: "bg-blue-100 text-blue-800" },
-  DELIVERED: { label: "נמסר", color: "bg-green-100 text-green-800" },
-  CANCELLED: { label: "בוטל", color: "bg-red-100 text-red-800" },
+  pending:   { label: "ממתין",  color: "bg-yellow-100 text-yellow-800" },
+  approved:  { label: "אושר",   color: "bg-blue-100 text-blue-800" },
+  sent:      { label: "נשלח",   color: "bg-purple-100 text-purple-800" },
+  cancelled: { label: "בוטל",   color: "bg-red-100 text-red-800" },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -29,160 +29,134 @@ function formatDate(iso: string) {
 }
 
 function formatCurrency(n: string | number) {
-  return `₪${Number(n).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `₪${Number(n).toLocaleString("he-IL", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const [orders, setOrders] = useState<OrderSummary[] | null>(null);
   const [stats, setStats] = useState<OrderStats | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-    Promise.all([fetchOrders(), fetchStats(), fetchMe()])
-      .then(([o, s, m]) => {
+    Promise.all([fetchOrders(), fetchStats()])
+      .then(([o, s]) => {
         setOrders(o);
         setStats(s);
-        setMe(m);
       })
       .catch(() => setError("שגיאה בטעינת הנתונים"));
-  }, [router]);
-
-  function logout() {
-    localStorage.removeItem("token");
-    router.push("/login");
-  }
+  }, []);
 
   if (error) {
     return (
-      <main className="min-h-screen flex items-center justify-center" dir="rtl">
+      <div className="flex items-center justify-center h-64">
         <p className="text-red-600">{error}</p>
-      </main>
+      </div>
     );
   }
 
   if (!orders || !stats) {
     return (
-      <main className="min-h-screen flex items-center justify-center" dir="rtl">
+      <div className="flex items-center justify-center h-64">
         <p className="text-gray-500">טוען...</p>
-      </main>
+      </div>
     );
   }
 
-  const maxSpend = stats.by_supplier.length > 0 ? Number(stats.by_supplier[0].total_spent) : 1;
+  const maxSpend =
+    stats.by_supplier.length > 0 ? Number(stats.by_supplier[0].total_spent) : 1;
 
   return (
-    <main className="min-h-screen bg-gray-50" dir="rtl">
-      {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex justify-between items-center">
-          <h1 className="text-lg font-bold text-gray-800">Smart Orders — לוח בקרה</h1>
-          <div className="flex gap-3 items-center">
-            {me?.is_staff && (
-              <button
-                onClick={() => router.push("/admin")}
-                className="text-sm bg-gray-800 text-white px-3 py-1.5 rounded-lg hover:bg-gray-900 transition"
-              >
-                ניהול
-              </button>
-            )}
-            <button
-              onClick={logout}
-              className="text-sm text-gray-500 hover:text-gray-800 transition"
-            >
-              יציאה
-            </button>
-          </div>
+    <div className="px-6 py-6 space-y-8">
+      <h1 className="text-xl font-bold text-gray-800">לוח בקרה</h1>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <div className="bg-white rounded-xl shadow-sm p-4">
+          <p className="text-xs text-gray-500 mb-1">סה&quot;כ הוצאות</p>
+          <p className="text-2xl font-bold text-gray-800">
+            {formatCurrency(stats.total_spent)}
+          </p>
         </div>
-      </header>
-
-      <div className="max-w-5xl mx-auto px-4 py-6 space-y-8">
-
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <div className="bg-white rounded-xl shadow-sm p-4">
-            <p className="text-xs text-gray-500 mb-1">סה"כ הוצאות</p>
-            <p className="text-2xl font-bold text-gray-800">{formatCurrency(stats.total_spent)}</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm p-4">
-            <p className="text-xs text-gray-500 mb-1">מספר הזמנות</p>
-            <p className="text-2xl font-bold text-gray-800">{stats.order_count}</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm p-4">
-            <p className="text-xs text-gray-500 mb-1">מספר ספקים</p>
-            <p className="text-2xl font-bold text-gray-800">{stats.by_supplier.length}</p>
-          </div>
+        <div className="bg-white rounded-xl shadow-sm p-4">
+          <p className="text-xs text-gray-500 mb-1">מספר הזמנות</p>
+          <p className="text-2xl font-bold text-gray-800">{stats.order_count}</p>
         </div>
-
-        {/* Spending by supplier */}
-        {stats.by_supplier.length > 0 && (
-          <section>
-            <h2 className="text-base font-semibold text-gray-700 mb-3">הוצאות לפי ספק</h2>
-            <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
-              {stats.by_supplier.map((s) => (
-                <div key={s.supplier_id} className="px-4 py-3">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-sm font-medium text-gray-800">{s.supplier_name}</span>
-                    <span className="text-sm font-semibold text-gray-900">{formatCurrency(s.total_spent)}</span>
-                  </div>
-                  <div className="w-full bg-gray-100 rounded-full h-1.5">
-                    <div
-                      className="bg-blue-500 h-1.5 rounded-full"
-                      style={{ width: `${(Number(s.total_spent) / maxSpend) * 100}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1">{s.order_count} פריטים</p>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Recent orders */}
-        <section>
-          <h2 className="text-base font-semibold text-gray-700 mb-3">הזמנות אחרונות</h2>
-          {orders.length === 0 ? (
-            <p className="text-sm text-gray-500">אין הזמנות עדיין.</p>
-          ) : (
-            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-gray-500 text-xs">
-                    <th className="text-right px-4 py-2 font-medium">#</th>
-                    <th className="text-right px-4 py-2 font-medium">תאריך</th>
-                    <th className="text-right px-4 py-2 font-medium">פריטים</th>
-                    <th className="text-right px-4 py-2 font-medium">סה"כ</th>
-                    <th className="text-right px-4 py-2 font-medium">סטטוס</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {orders.map((o) => (
-                    <tr
-                      key={o.id}
-                      onClick={() => router.push(`/dashboard/orders/${o.id}`)}
-                      className="hover:bg-blue-50 cursor-pointer transition"
-                    >
-                      <td className="px-4 py-3 text-gray-500">{o.id}</td>
-                      <td className="px-4 py-3 text-gray-700">{formatDate(o.created_at)}</td>
-                      <td className="px-4 py-3 text-gray-700">{o.product_count}</td>
-                      <td className="px-4 py-3 font-medium text-gray-800">{formatCurrency(o.total_price)}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={o.status} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+        <div className="bg-white rounded-xl shadow-sm p-4">
+          <p className="text-xs text-gray-500 mb-1">מספר ספקים</p>
+          <p className="text-2xl font-bold text-gray-800">{stats.by_supplier.length}</p>
+        </div>
       </div>
-    </main>
+
+      {/* Spending by supplier */}
+      {stats.by_supplier.length > 0 && (
+        <section>
+          <h2 className="text-base font-semibold text-gray-700 mb-3">הוצאות לפי ספק</h2>
+          <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
+            {stats.by_supplier.map((s) => (
+              <div key={s.supplier_id} className="px-4 py-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-sm font-medium text-gray-800">{s.supplier_name}</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {formatCurrency(s.total_spent)}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                  <div
+                    className="bg-blue-500 h-1.5 rounded-full"
+                    style={{ width: `${(Number(s.total_spent) / maxSpend) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">{s.order_count} פריטים</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Recent orders */}
+      <section>
+        <h2 className="text-base font-semibold text-gray-700 mb-3">הזמנות אחרונות</h2>
+        {orders.length === 0 ? (
+          <p className="text-sm text-gray-500">אין הזמנות עדיין.</p>
+        ) : (
+          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 text-gray-500 text-xs">
+                  <th className="text-right px-4 py-2 font-medium">#</th>
+                  <th className="text-right px-4 py-2 font-medium">תאריך</th>
+                  <th className="text-right px-4 py-2 font-medium">פריטים</th>
+                  <th className="text-right px-4 py-2 font-medium">סה&quot;כ</th>
+                  <th className="text-right px-4 py-2 font-medium">סטטוס</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {orders.map((o) => (
+                  <tr
+                    key={o.id}
+                    onClick={() => router.push(`/dashboard/orders/${o.id}`)}
+                    className="hover:bg-blue-50 cursor-pointer transition"
+                  >
+                    <td className="px-4 py-3 text-gray-500">{o.id}</td>
+                    <td className="px-4 py-3 text-gray-700">{formatDate(o.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-700">{o.product_count}</td>
+                    <td className="px-4 py-3 font-medium text-gray-800">
+                      {formatCurrency(o.total_price)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={o.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }

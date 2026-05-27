@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   fetchAdminUsers,
   createUser,
@@ -38,7 +37,6 @@ const EMPTY_FORM: CreateUserPayload = {
 };
 
 export default function AdminPage() {
-  const router = useRouter();
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [error, setError] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -48,13 +46,8 @@ export default function AdminPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.push("/login");
-      return;
-    }
     load();
-  }, [router]);
+  }, []);
 
   async function load() {
     try {
@@ -63,11 +56,6 @@ export default function AdminPage() {
     } catch {
       setError("שגיאה בטעינת הלקוחות. ודא שהמשתמש שלך הוא admin.");
     }
-  }
-
-  function logout() {
-    localStorage.removeItem("token");
-    router.push("/login");
   }
 
   function openModal() {
@@ -93,8 +81,7 @@ export default function AdminPage() {
       setShowModal(false);
       await load();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "שגיאה ביצירת הלקוח";
-      setFormError(msg);
+      setFormError(err instanceof Error ? err.message : "שגיאה ביצירת הלקוח");
     } finally {
       setSaving(false);
     }
@@ -115,88 +102,77 @@ export default function AdminPage() {
 
   if (error) {
     return (
-      <main className="min-h-screen flex items-center justify-center" dir="rtl">
+      <div className="flex items-center justify-center h-64">
         <p className="text-red-600">{error}</p>
-      </main>
+      </div>
     );
   }
 
   if (!users) {
     return (
-      <main className="min-h-screen flex items-center justify-center" dir="rtl">
+      <div className="flex items-center justify-center h-64">
         <p className="text-gray-500">טוען...</p>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gray-50" dir="rtl">
-      {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
-          <h1 className="text-lg font-bold text-gray-800">Smart Orders — ניהול לקוחות</h1>
-          <div className="flex gap-4 items-center">
-            <button
-              onClick={openModal}
-              className="bg-blue-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg hover:bg-blue-700 transition"
-            >
-              + הוסף לקוח
-            </button>
-            <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-800 transition">
-              יציאה
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        <p className="text-sm text-gray-500 mb-4">{users.length} לקוחות רשומים</p>
-
-        {users.length === 0 ? (
-          <p className="text-gray-500 text-sm">אין לקוחות עדיין. לחץ על &quot;הוסף לקוח&quot;.</p>
-        ) : (
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-500 text-xs">
-                  <th className="text-right px-4 py-2 font-medium">שם</th>
-                  <th className="text-right px-4 py-2 font-medium">אימייל</th>
-                  <th className="text-right px-4 py-2 font-medium">חברה</th>
-                  <th className="text-right px-4 py-2 font-medium">אזור</th>
-                  <th className="text-right px-4 py-2 font-medium">טלפון</th>
-                  <th className="px-4 py-2 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-gray-50 transition">
-                    <td className="px-4 py-3 font-medium text-gray-800">
-                      {u.first_name} {u.last_name}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{u.email}</td>
-                    <td className="px-4 py-3 text-gray-600">{u.profile?.company_name ?? "—"}</td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {u.profile?.region ? (REGION_LABEL[u.profile.region] ?? u.profile.region) : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{u.profile?.phone ?? "—"}</td>
-                    <td className="px-4 py-3 text-left">
-                      <button
-                        onClick={() => handleDelete(u.id, `${u.first_name} ${u.last_name}`)}
-                        disabled={deletingId === u.id}
-                        className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40 transition"
-                      >
-                        מחק
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+    <div className="px-6 py-6">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-bold text-gray-800">ניהול לקוחות</h1>
+        <button
+          onClick={openModal}
+          className="bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+        >
+          + הוסף לקוח
+        </button>
       </div>
 
-      {/* Create modal */}
+      <p className="text-sm text-gray-500 mb-4">{users.length} לקוחות רשומים</p>
+
+      {users.length === 0 ? (
+        <p className="text-gray-500 text-sm">אין לקוחות עדיין. לחץ על &quot;הוסף לקוח&quot;.</p>
+      ) : (
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-gray-500 text-xs">
+                <th className="text-right px-4 py-2 font-medium">שם</th>
+                <th className="text-right px-4 py-2 font-medium">אימייל</th>
+                <th className="text-right px-4 py-2 font-medium">חברה</th>
+                <th className="text-right px-4 py-2 font-medium">אזור</th>
+                <th className="text-right px-4 py-2 font-medium">טלפון</th>
+                <th className="px-4 py-2 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {users.map((u) => (
+                <tr key={u.id} className="hover:bg-gray-50 transition">
+                  <td className="px-4 py-3 font-medium text-gray-800">
+                    {u.first_name} {u.last_name}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{u.email}</td>
+                  <td className="px-4 py-3 text-gray-600">{u.profile?.company_name ?? "—"}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {u.profile?.region ? (REGION_LABEL[u.profile.region] ?? u.profile.region) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{u.profile?.phone ?? "—"}</td>
+                  <td className="px-4 py-3 text-left">
+                    <button
+                      onClick={() => handleDelete(u.id, `${u.first_name} ${u.last_name}`)}
+                      disabled={deletingId === u.id}
+                      className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40 transition"
+                    >
+                      מחק
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" dir="rtl">
@@ -262,7 +238,7 @@ export default function AdminPage() {
           </div>
         </div>
       )}
-    </main>
+    </div>
   );
 }
 
