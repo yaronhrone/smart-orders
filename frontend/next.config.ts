@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true,
+  output: "standalone",
   async rewrites() {
     return [
       {

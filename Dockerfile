@@ -20,8 +20,14 @@ RUN python -m venv /py && \
 
 COPY . .
 
+RUN mkdir -p /app/staticfiles && \
+    chown django-user:django-user /app/staticfiles && \
+    chmod +x /app/entrypoint.sh
+
 ENV PATH="/py/bin:$PATH"
 
 EXPOSE 8000
 
 USER django-user
+
+CMD ["/app/entrypoint.sh"]

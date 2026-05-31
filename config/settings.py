@@ -26,10 +26,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = bool(int(os.environ.get("DEBUG", 1)))
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", ".ngrok-free.app", ".ngrok-free.dev"]
+_extra_hosts = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", ".ngrok-free.app", ".ngrok-free.dev"] + _extra_hosts
 
 
 # Application definition
@@ -53,6 +53,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -139,6 +140,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -213,6 +218,5 @@ TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
 # Set MARKET_AGENT_SECRET in .env.  If empty, the push endpoint is disabled.
 MARKET_AGENT_SECRET = os.environ.get("MARKET_AGENT_SECRET", "")
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-]
+_extra_cors = [o for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o]
+CORS_ALLOWED_ORIGINS = ["http://localhost:3000"] + _extra_cors
