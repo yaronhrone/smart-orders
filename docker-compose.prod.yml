@@ -46,7 +46,7 @@ services:
   celery-beat:
     build:
       context: .
-    command: celery -A config beat -l info
+    command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
     env_file: .env.prod
     depends_on:
       db:
