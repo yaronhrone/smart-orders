@@ -22,7 +22,7 @@ from core.views import health_check
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from apps.orders.whatsapp_webhook import whatsapp_webhook
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path("django-admin/", admin.site.urls),
     path("health/", health_check, name="health_check"),
     path("api/users/", include("apps.users.urls")),
     path("api/catalog/", include("apps.catalog.urls")),
