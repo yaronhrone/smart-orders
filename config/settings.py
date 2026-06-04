@@ -31,6 +31,9 @@ DEBUG = bool(int(os.environ.get("DEBUG", 1)))
 _extra_hosts = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", ".ngrok-free.app", ".ngrok-free.dev"] + _extra_hosts
 
+_extra_csrf = [o for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
+CSRF_TRUSTED_ORIGINS = ["http://localhost:3000", "https://*.duckdns.org"] + _extra_csrf
+
 
 # Application definition
 
