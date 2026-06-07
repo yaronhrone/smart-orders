@@ -7,3 +7,5 @@ frontend/.next
 certbot
 nginx
 *.md
+seed_supplier.py
+seed_suppliers_extra.py

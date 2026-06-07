@@ -9,6 +9,7 @@ const NAV = [
   { href: "/dashboard/new-order", label: "הזמנה חדשה" },
   { href: "/dashboard/shopping-lists", label: "רשימות קניות" },
   { href: "/dashboard/catalog", label: "קטלוג מחירים" },
+  { href: "/dashboard/profile", label: "פרופיל חברה" },
 ];
 
 const ADMIN_NAV = [

@@ -41,7 +41,15 @@ export default function NewOrderPage() {
   const [catalog, setCatalog] = useState<Product[]>([]);
 
   // Step 1
-  const [items, setItems] = useState<OrderItem[]>([]);
+  const [items, setItems] = useState<OrderItem[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const saved = localStorage.getItem("new-order-items");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [search, setSearch] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -62,6 +70,10 @@ export default function NewOrderPage() {
       .catch(() => {});
     fetchProducts().then(setCatalog).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("new-order-items", JSON.stringify(items));
+  }, [items]);
 
   // ─── Step 1 helpers ────────────────────────────────────────────────────
 
@@ -364,7 +376,7 @@ export default function NewOrderPage() {
 
           <div className="flex gap-3">
             <button
-              onClick={() => { setStep(1); setItems([]); setSuggestion(null); setPlaced(null); }}
+              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); }}
               className="flex-1 border border-gray-300 rounded-xl py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition"
             >
               הזמנה חדשה
