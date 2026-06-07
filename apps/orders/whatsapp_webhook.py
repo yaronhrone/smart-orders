@@ -2,11 +2,13 @@ import json
 import logging
 import re
 from collections import defaultdict
+from datetime import datetime, time as dtime
 from decimal import Decimal, InvalidOperation
 
 from django.core.cache import cache
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
 
 from apps.orders.whatsapp import send_whatsapp_message
 
@@ -14,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_TTL = 3600          # שעה
 SUPPLIER_SESSION_TTL = 86400  # 24 שעות
+CUTOFF_TTL = 86400           # שמור cutoff עד 24 שעות
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -84,16 +87,25 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
         order.status = OrderRequest.Status.SENT
         order.save(update_fields=["status"])
 
+        profile = getattr(user, "profile", None)
+        company_name = profile.company_name if profile else ""
+        company_address = profile.company_address if profile else ""
+        company_phone = profile.company_phone if profile else ""
+
         by_supplier = defaultdict(list)
         for orp in order.products.select_related("product", "supplier").all():
             by_supplier[orp.supplier].append(orp)
 
         for supplier, items in by_supplier.items():
-            lines = ["שלום, ברצוני להזמין:"]
+            lines = [f"שלום, *{company_name}* מבקש להזמין:"]
             for item in items:
                 lines.append(
                     f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}"
                 )
+            if company_address:
+                lines.append(f"\n📍 *כתובת למשלוח:* {company_address}")
+            if company_phone:
+                lines.append(f"📞 {company_phone}")
             lines.append("\nאנא ענה *אישור* לאישור הכל, או שלח כמויות מעודכנות.")
             send_whatsapp_message(supplier.whatsapp_number, "\n".join(lines))
 
@@ -197,11 +209,168 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
     return HttpResponse(status=200)
 
 
+def _parse_supplier_cutoff(body: str):
+    """
+    Detect cutoff time from supplier message, e.g. 'ניתן לשנות עד 10:00'.
+    Returns a time object or None.
+    """
+    pattern = re.compile(
+        r"(?:ניתן|אפשר|בסדר|עד)\s+(?:לשנות\s+)?עד\s+(\d{1,2}:\d{2})",
+        re.IGNORECASE,
+    )
+    m = pattern.search(body)
+    if not m:
+        return None
+    try:
+        h, mi = m.group(1).split(":")
+        return dtime(int(h), int(mi))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _handle_order_modification(phone: str, body: str, user, order) -> HttpResponse:
+    """Handle ADD or UPDATE modification to a SENT order."""
+    from apps.catalog.models import Product, SupplierProduct
+    from apps.orders.models import OrderRequestProduct
+    from apps.orders.order_parser import parse_modification_intent
+
+    product_names = list(Product.objects.values_list("name", flat=True))
+    parsed = parse_modification_intent(body, product_names)
+    intent = parsed["intent"]
+    items = parsed["items"]
+
+    if intent == "none" or not items:
+        return _handle_new_order(phone, body)
+
+    profile = getattr(user, "profile", None)
+    region = profile.region if profile else "center"
+
+    changes_made = []
+    errors = []
+
+    for item in items:
+        product = Product.objects.filter(name=item["product_name"]).first()
+        if not product:
+            errors.append(item["product_name"])
+            continue
+
+        # Check cutoff for the supplier handling this product
+        existing_orp = OrderRequestProduct.objects.filter(
+            order_request=order, product=product
+        ).select_related("supplier").first()
+
+        if existing_orp:
+            cutoff_key = f"supplier_cutoff:{existing_orp.supplier.whatsapp_number}:{order.id}"
+            cutoff = cache.get(cutoff_key)
+            if cutoff:
+                now = timezone.localtime().time()
+                cutoff_time = dtime(*map(int, cutoff.split(":")))
+                if now > cutoff_time:
+                    send_whatsapp_message(
+                        phone,
+                        f"⛔ לא ניתן לשנות את {product.name} — "
+                        f"{existing_orp.supplier.name} קבע שעת הגבלה עד {cutoff}.",
+                    )
+                    continue
+
+        if intent == "update" and existing_orp:
+            old_qty = existing_orp.quantity
+            existing_orp.quantity = item["quantity"]
+            existing_orp.save(update_fields=["quantity"])
+            order.total_price = sum(
+                p.quantity * p.unit_price
+                for p in order.products.all()
+            )
+            order.save(update_fields=["total_price"])
+
+            msg_lines = [f"📝 *{user.profile.company_name if profile else ''}* עדכן הזמנה:"]
+            msg_lines.append(
+                f"- {product.name}: {old_qty} → {item['quantity']} {product.get_unit_display()}"
+            )
+            msg_lines.append("\nאנא ענה *אישור* לאישור השינוי.")
+            send_whatsapp_message(existing_orp.supplier.whatsapp_number, "\n".join(msg_lines))
+            changes_made.append(
+                f"עודכן: {product.name} {old_qty}→{item['quantity']} {product.get_unit_display()}"
+            )
+
+        elif intent == "add":
+            sp = (
+                SupplierProduct.objects
+                .filter(product=product)
+                .select_related("supplier")
+                .order_by("price_per_unit")
+                .first()
+            )
+            if not sp:
+                errors.append(product.name)
+                continue
+
+            orp, created = OrderRequestProduct.objects.get_or_create(
+                order_request=order,
+                product=product,
+                supplier=sp.supplier,
+                defaults={"quantity": item["quantity"], "unit_price": sp.price_per_unit},
+            )
+            if not created:
+                orp.quantity += item["quantity"]
+                orp.save(update_fields=["quantity"])
+
+            order.total_price = sum(
+                p.quantity * p.unit_price
+                for p in order.products.all()
+            )
+            order.save(update_fields=["total_price"])
+
+            company = profile.company_name if profile else ""
+            address = profile.company_address if profile else ""
+            msg_lines = [f"📝 *{company}* הוסיף להזמנה:"]
+            msg_lines.append(f"- {product.name} x{item['quantity']} {product.get_unit_display()}")
+            if address:
+                msg_lines.append(f"📍 {address}")
+            msg_lines.append("\nאנא ענה *אישור* לאישור השינוי.")
+            send_whatsapp_message(sp.supplier.whatsapp_number, "\n".join(msg_lines))
+            changes_made.append(
+                f"נוסף: {product.name} x{item['quantity']} {product.get_unit_display()}"
+            )
+
+    if not changes_made and not errors:
+        send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
+        return HttpResponse(status=200)
+
+    reply_lines = []
+    if changes_made:
+        reply_lines.append(f"✅ השינויים נשלחו לספקים:")
+        reply_lines += [f"  • {c}" for c in changes_made]
+    if errors:
+        reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
+
+    send_whatsapp_message(phone, "\n".join(reply_lines))
+    return HttpResponse(status=200)
+
+
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
+    from apps.users.models import Profile
+    from apps.orders.models import OrderRequest
+
     key = f"whatsapp_order:{phone}"
     raw = cache.get(key)
 
     if not raw:
+        # Check if user has a SENT order (awaiting supplier confirmation) → offer modification
+        profile = Profile.objects.filter(phone=phone).select_related("user").first()
+        if not profile and phone.startswith("+972"):
+            profile = Profile.objects.filter(phone="0" + phone[4:]).select_related("user").first()
+
+        if profile:
+            sent_order = (
+                OrderRequest.objects
+                .filter(user=profile.user, status=OrderRequest.Status.SENT)
+                .order_by("-created_at")
+                .first()
+            )
+            if sent_order:
+                return _handle_order_modification(phone, body, profile.user, sent_order)
+
         return _handle_new_order(phone, body)
 
     data = json.loads(raw)
@@ -350,11 +519,40 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
 
     cache.delete(key)
 
+    # Check if supplier set a cutoff time in their confirmation message
+    cutoff_time = _parse_supplier_cutoff(body)
+    if cutoff_time:
+        cutoff_str = cutoff_time.strftime("%H:%M")
+        cutoff_key = f"supplier_cutoff:{phone}:{data['order_request_id']}"
+        cache.set(cutoff_key, cutoff_str, timeout=CUTOFF_TTL)
+
     lines = ["✅ תודה! קיבלתי אישור:"]
     for p in products:
         qty = confirmed.get(p["orp_id"], p["quantity"])
         lines.append(f"  • {p['product_name']} x{qty} {p['unit']}")
+    if cutoff_time:
+        lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
     send_whatsapp_message(phone, "\n".join(lines))
+
+    # Notify customer that this supplier confirmed
+    try:
+        order_request_id = data["order_request_id"]
+        orp = OrderRequestProduct.objects.select_related(
+            "order_request__user__profile", "supplier"
+        ).filter(order_request_id=order_request_id).first()
+
+        if orp:
+            customer_profile = getattr(orp.order_request.user, "profile", None)
+            customer_phone = customer_profile.phone if customer_profile else None
+            if customer_phone:
+                customer_lines = [f"✅ *{supplier.name}* אישר את ההזמנה:"]
+                for p in products:
+                    qty = confirmed.get(p["orp_id"], p["quantity"])
+                    customer_lines.append(f"  • {p['product_name']} x{qty} {p['unit']}")
+                customer_lines.append(f"\nמספר הזמנה: #{order_request_id}")
+                send_whatsapp_message(customer_phone, "\n".join(customer_lines))
+    except Exception as exc:
+        logger.error("Failed to notify customer after supplier confirmation: %s", exc)
 
     return HttpResponse(status=200)
 

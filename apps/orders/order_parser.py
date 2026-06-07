@@ -17,6 +17,55 @@ def _get_client():
     return _client
 
 
+def parse_modification_intent(message: str, product_names: list) -> dict:
+    """
+    Detects if message is a modification to an existing order.
+    Returns {"intent": "add"|"update"|"none", "items": [{"product_name": str, "quantity": Decimal}]}.
+    """
+    known = ", ".join(product_names) if product_names else "—"
+    prompt = (
+        "You are an order-modification parser for a Hebrew vegetable ordering system.\n"
+        "Determine if the customer wants to ADD new products or UPDATE existing quantities.\n"
+        f"Known products: {known}\n"
+        "Rules:\n"
+        "1. 'add'  — customer wants to add something new to the order.\n"
+        "2. 'update' — customer wants to change the quantity of an existing item.\n"
+        "3. 'none' — message is not a modification request.\n"
+        "Match product names to known products using fuzzy Hebrew matching.\n"
+        "Return ONLY JSON: "
+        '{"intent": "add"|"update"|"none", "items": [{"product_name": "...", "quantity": "5.0"}]}\n'
+        f"Message: {message}"
+    )
+    try:
+        response = _get_client().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        data = json.loads(response.choices[0].message.content)
+    except Exception as exc:
+        logger.error("OpenAI modification parsing failed: %s", exc)
+        return {"intent": "none", "items": []}
+
+    intent = data.get("intent", "none")
+    raw_items = data.get("items", [])
+    items = []
+    for entry in raw_items:
+        name = entry.get("product_name", "").strip()
+        qty_raw = str(entry.get("quantity", "")).strip()
+        if not name or not qty_raw:
+            continue
+        try:
+            qty = Decimal(qty_raw)
+            if qty > 0:
+                items.append({"product_name": name, "quantity": qty})
+        except InvalidOperation:
+            pass
+
+    return {"intent": intent, "items": items}
+
+
 def parse_customer_order(message: str, product_names: list) -> list:
     """
     Extracts products and quantities from a free-text customer order message.
