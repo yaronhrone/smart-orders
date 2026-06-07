@@ -34,6 +34,25 @@ class ProductDestroyView(generics.DestroyAPIView):
     queryset = Product.objects.all()
 
 
+class SupplierUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    PATCH  /api/catalog/suppliers/{id}/  — update supplier fields
+    DELETE /api/catalog/suppliers/{id}/  — delete supplier + all prices (cascade)
+    Admin can act on any supplier; owner can act on their own private supplier.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = SupplierSerializer
+
+    def get_queryset(self):
+        if self.request.user.is_staff:
+            return Supplier.objects.all()
+        return Supplier.objects.filter(owner=self.request.user)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+
 class SupplierListCreateView(generics.ListCreateAPIView):
     """
     GET  /api/catalog/suppliers/?region=center  — list available suppliers

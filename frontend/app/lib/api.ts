@@ -381,6 +381,33 @@ export async function createSupplier(data: CreateSupplierPayload): Promise<Suppl
   });
 }
 
+export async function deleteSupplier(id: number): Promise<void> {
+  return request<void>(`/api/catalog/suppliers/${id}/`, { method: "DELETE" });
+}
+
+export async function updateSupplier(id: number, data: Partial<CreateSupplierPayload>): Promise<SupplierWithProducts> {
+  return request<SupplierWithProducts>(`/api/catalog/suppliers/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface ProfilePayload {
+  company_name?: string;
+  company_phone?: string;
+  company_address?: string;
+  phone?: string;
+  position?: string;
+  region?: string;
+}
+
+export async function updateProfile(data: ProfilePayload): Promise<ProfilePayload> {
+  return request<ProfilePayload>("/api/users/me/profile/", {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
 export async function deleteProduct(id: number): Promise<void> {
   return request<void>(`/api/catalog/products/${id}/`, { method: "DELETE" });
 }
