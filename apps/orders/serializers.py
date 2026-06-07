@@ -1,7 +1,24 @@
 from decimal import Decimal
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from apps.catalog.models import Product, Region
 from apps.orders.models import OrderRequest, ShoppingList, ShoppingListProduct
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+class HebrewProductField(serializers.SlugRelatedField):
+    """SlugRelatedField that returns a Hebrew error when a product is not found."""
+
+    def to_internal_value(self, data):
+        try:
+            return self.get_queryset().get(**{self.slug_field: data})
+        except ObjectDoesNotExist:
+            raise serializers.ValidationError(f'המוצר "{data}" לא נמצא במערכת')
+        except (TypeError, ValueError):
+            raise serializers.ValidationError(f'ערך לא תקין: {data}')
 
 
 # ---------------------------------------------------------------------------
@@ -9,7 +26,7 @@ from apps.orders.models import OrderRequest, ShoppingList, ShoppingListProduct
 # ---------------------------------------------------------------------------
 
 class OrderItemInputSerializer(serializers.Serializer):
-    product_name = serializers.SlugRelatedField(
+    product_name = HebrewProductField(
         queryset=Product.objects.all(),
         slug_field="name",
         source="product",
@@ -142,7 +159,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 
 class ShoppingListItemSerializer(serializers.ModelSerializer):
-    product_name = serializers.SlugRelatedField(
+    product_name = HebrewProductField(
         queryset=Product.objects.all(),
         slug_field="name",
         source="product",

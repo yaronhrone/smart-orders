@@ -1,10 +1,15 @@
 from rest_framework import generics, permissions
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenObtainPairView
 from django.shortcuts import get_object_or_404
-from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer
+from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer, HebrewTokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
+
 User = get_user_model()
+
+
+class HebrewLoginView(TokenObtainPairView):
+    serializer_class = HebrewTokenObtainPairSerializer
 
 
 class RegisterView(generics.CreateAPIView):

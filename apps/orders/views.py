@@ -28,7 +28,7 @@ class SuggestOrderView(APIView):
         serializer.is_valid(raise_exception=True)
         user = request.user
         if not hasattr(user, "profile"):
-            return Response({"detail": "User has no profile"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "המשתמש אינו מקושר לפרופיל חברה"}, status=status.HTTP_400_BAD_REQUEST)
         products = serializer.validated_data["products"]
         region = user.profile.region
         try:
@@ -46,7 +46,7 @@ class PlaceOrderView(APIView):
         user = request.user
 
         if not hasattr(user, "profile"):
-            return Response({"detail": "User has no profile"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "המשתמש אינו מקושר לפרופיל חברה"}, status=status.HTTP_400_BAD_REQUEST)
 
         region = user.profile.region
         scenario = serializer.validated_data["scenario"]

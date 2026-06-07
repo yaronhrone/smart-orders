@@ -118,7 +118,7 @@ class SupplierPriceMessageView(APIView):
             supplier = Supplier.objects.get(phone=clean_phone)
         except Supplier.DoesNotExist:
             return Response(
-                {"error": "Supplier not found"},
+                {"error": "הספק לא נמצא"},
                 status=status.HTTP_404_NOT_FOUND
             )
 
@@ -160,14 +160,14 @@ class SupplierPriceUpdateView(APIView):
             supplier = Supplier.objects.get(phone=clean_phone)
         except Supplier.DoesNotExist:
             return Response(
-                {"error": "Supplier not found"},
+                {"error": "הספק לא נמצא"},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         # 🔥 optional security check
         if supplier.owner and supplier.owner != request.user:
             return Response(
-                {"error": "Not allowed"},
+                {"error": "אין הרשאה לפעולה זו"},
                 status=status.HTTP_403_FORBIDDEN
             )
 

@@ -1,14 +1,39 @@
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from apps.users.models import Profile
 from apps.catalog.models import Region
 
 User = get_user_model()
 
 
+class HebrewTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        try:
+            return super().validate(attrs)
+        except AuthenticationFailed:
+            raise AuthenticationFailed("אימייל או סיסמה שגויים")
+
+
+_SYMBOLS = set('!@#$%^&*()_+-=[]{}|;:\',.<>?/`~"\\')
+
+
+def validate_password_hebrew(value):
+    errors = []
+    if len(value) < 8:
+        errors.append("לפחות 8 תווים")
+    if not any(c.isupper() for c in value):
+        errors.append("לפחות אות גדולה אחת (A-Z)")
+    if not any(c in _SYMBOLS for c in value):
+        errors.append("לפחות סימן מיוחד אחד (!@#$ וכדומה)")
+    if errors:
+        raise serializers.ValidationError("הסיסמה חייבת לכלול: " + ", ".join(errors))
+    return value
+
+
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password = serializers.CharField(write_only=True, validators=[validate_password_hebrew])
     password2 = serializers.CharField(write_only=True)
 
     company_name = serializers.CharField(write_only=True)
@@ -26,7 +51,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password2"]:
-            raise serializers.ValidationError({"password": "Passwords do not match."})
+            raise serializers.ValidationError({"password": "הסיסמאות אינן תואמות"})
         return attrs
 
     def create(self, validated_data):

@@ -274,15 +274,35 @@ export default function NewOrderPage() {
             )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {(["cheapest", "fewest_suppliers"] as const).map((key) => {
-              const sc = suggestion[key];
-              const label = key === "cheapest" ? "זול ביותר" : "ספקים מינימלי";
-              const issues = suggestion.minimum_issues[key];
+            {(["cheapest", "fewest_suppliers"] as const)
+              .map((key) => ({
+                key,
+                sc: suggestion[key],
+                issues: suggestion.minimum_issues[key],
+              }))
+              .sort((a, b) => Number(a.sc.total_price) - Number(b.sc.total_price))
+              .map(({ key, sc, issues }, idx) => {
+              const isCheapest = idx === 0;
+              const label = isCheapest ? "הכי זול" : (key === "fewest_suppliers" ? "ספק אחד" : "אפשרות נוספת");
               return (
-                <div key={key} className="border-2 border-gray-200 hover:border-blue-400 rounded-xl p-4 flex flex-col gap-3 transition">
+                <div
+                  key={key}
+                  className={`border-2 rounded-xl p-4 flex flex-col gap-3 transition ${
+                    isCheapest
+                      ? "border-blue-500 hover:border-blue-600"
+                      : "border-gray-200 hover:border-gray-400"
+                  }`}
+                >
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</p>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-xs font-semibold uppercase tracking-wide ${isCheapest ? "text-blue-600" : "text-gray-500"}`}>
+                          {label}
+                        </p>
+                        {isCheapest && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">מומלץ</span>
+                        )}
+                      </div>
                       <p className="text-2xl font-bold text-gray-900 mt-0.5">
                         {formatCurrency(sc.total_price)}
                       </p>
@@ -293,12 +313,15 @@ export default function NewOrderPage() {
                   </div>
 
                   <ul className="text-xs text-gray-600 space-y-1 flex-1">
-                    {sc.products.map((p, i) => (
-                      <li key={i} className="flex justify-between gap-2">
-                        <span className="truncate">{p.product_name} × {formatQty(p.quantity)}</span>
-                        <span className="shrink-0 text-gray-400">{p.supplier_name}</span>
-                      </li>
-                    ))}
+                    {sc.products.map((p, i) => {
+                      const unitDisplay = catalog.find(c => c.id === p.product_id)?.unit_display ?? p.unit;
+                      return (
+                        <li key={i} className="flex justify-between gap-2">
+                          <span className="truncate">{p.product_name} × {formatQty(p.quantity)} {unitDisplay}</span>
+                          <span className="shrink-0 text-gray-400">{p.supplier_name}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
 
                   {issues.length > 0 && (
@@ -314,7 +337,11 @@ export default function NewOrderPage() {
                   <button
                     onClick={() => handlePlace(key)}
                     disabled={placing}
-                    className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
+                    className={`w-full py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition ${
+                      isCheapest
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
                   >
                     {placing ? "מבצע הזמנה..." : `הזמן — ${label}`}
                   </button>

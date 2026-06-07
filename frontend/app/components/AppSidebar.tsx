@@ -4,12 +4,12 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Me } from "../lib/api";
 
+
 const NAV = [
   { href: "/dashboard", label: "לוח בקרה", exact: true },
   { href: "/dashboard/new-order", label: "הזמנה חדשה" },
   { href: "/dashboard/shopping-lists", label: "רשימות קניות" },
   { href: "/dashboard/catalog", label: "קטלוג מחירים" },
-  { href: "/dashboard/profile", label: "פרופיל חברה" },
 ];
 
 const ADMIN_NAV = [
@@ -35,9 +35,13 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
       <div className="px-4 py-5 border-b border-gray-100">
         <p className="text-base font-bold text-gray-900">Smart Orders</p>
         {me && (
-          <p className="text-xs text-gray-500 mt-0.5 truncate">
+          <Link
+            href="/dashboard/profile"
+            className="block text-xs text-gray-500 mt-0.5 truncate hover:text-blue-600 transition"
+            title="פרופיל חברה"
+          >
             {me.first_name} {me.last_name}
-          </p>
+          </Link>
         )}
       </div>
 
