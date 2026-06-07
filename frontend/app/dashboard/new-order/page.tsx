@@ -19,6 +19,13 @@ function formatCurrency(n: string | number) {
   })}`;
 }
 
+function formatQty(qty: string | number): string {
+  const n = Number(qty);
+  return n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
+}
+
+const WHOLE_UNITS = new Set(["UNIT", "BOX"]);
+
 type Step = 1 | 2 | 3;
 
 interface OrderItem {
@@ -199,14 +206,20 @@ export default function NewOrderPage() {
                 {items.map((item, idx) => (
                   <div key={idx} className="flex items-center gap-3 px-4 py-3">
                     <span className="flex-1 text-sm text-gray-800">{item.name}</span>
-                    <input
-                      type="number"
-                      min="0.1"
-                      step="0.1"
-                      value={item.quantity}
-                      onChange={(e) => updateQty(idx, e.target.value)}
-                      className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400"
-                    />
+                    {(() => {
+                      const unit = catalog.find(p => p.name === item.name)?.unit ?? "";
+                      const whole = WHOLE_UNITS.has(unit);
+                      return (
+                        <input
+                          type="number"
+                          min={whole ? "1" : "0.5"}
+                          step={whole ? "1" : "0.5"}
+                          value={item.quantity}
+                          onChange={(e) => updateQty(idx, whole ? String(Math.round(Number(e.target.value))) : e.target.value)}
+                          className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                      );
+                    })()}
                     <button
                       onClick={() => removeItem(idx)}
                       className="text-gray-400 hover:text-red-500 transition text-lg leading-none"
@@ -219,7 +232,12 @@ export default function NewOrderPage() {
             </div>
           )}
 
-          {suggestError && <p className="text-red-600 text-sm">{suggestError}</p>}
+          {suggestError && (
+            <div className="bg-red-50 border border-red-300 rounded-xl px-4 py-3 flex items-start gap-2">
+              <span className="text-red-500 text-lg leading-tight">⚠️</span>
+              <p className="text-red-700 text-sm font-semibold">{suggestError}</p>
+            </div>
+          )}
 
           <button
             onClick={handleSuggest}
@@ -265,7 +283,7 @@ export default function NewOrderPage() {
                   <ul className="text-xs text-gray-600 space-y-1 flex-1">
                     {sc.products.map((p, i) => (
                       <li key={i} className="flex justify-between gap-2">
-                        <span className="truncate">{p.product_name} × {p.quantity}</span>
+                        <span className="truncate">{p.product_name} × {formatQty(p.quantity)}</span>
                         <span className="shrink-0 text-gray-400">{p.supplier_name}</span>
                       </li>
                     ))}
@@ -293,7 +311,12 @@ export default function NewOrderPage() {
             })}
           </div>
 
-          {placeError && <p className="text-red-600 text-sm">{placeError}</p>}
+          {placeError && (
+            <div className="bg-red-50 border border-red-300 rounded-xl px-4 py-3 flex items-start gap-2">
+              <span className="text-red-500 text-lg leading-tight">⚠️</span>
+              <p className="text-red-700 text-sm font-semibold">{placeError}</p>
+            </div>
+          )}
 
           <button
             onClick={() => { setStep(1); setSuggestion(null); }}

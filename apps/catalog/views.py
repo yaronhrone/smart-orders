@@ -73,8 +73,9 @@ class SupplierListCreateView(generics.ListCreateAPIView):
         return qs.filter(owner__isnull=True) | qs.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
-        # Supplier created via API is always private (owned by the requesting user)
-        serializer.save(owner=self.request.user)
+        # Admin-created suppliers are global (owner=None); regular users own their own
+        owner = None if self.request.user.is_staff else self.request.user
+        serializer.save(owner=owner)
 
 
 # class SupplierUpdatePricesView(APIView):

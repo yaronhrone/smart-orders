@@ -63,7 +63,7 @@ def _build_initial_assignments(products, suppliers):
     for product in products:
         prices = _prices_for_product(product["product"], suppliers)
         if not prices:
-            raise ValueError(f"No supplier for {product['product'].name}")
+            raise ValueError(f"לא נמצא ספק עבור: {product['product'].name}")
         supplier, price = prices[0]
         assignments.append({
             "product": product["product"],
@@ -79,7 +79,7 @@ def _validate_all_products_present(assignments, products):
     assigned_products = {a["product"].id for a in assignments}
     requested_products = {i["product"].id for i in products}
     if assigned_products != requested_products:
-        raise ValueError("Some products are missing in assignment")
+        raise ValueError("חלק מהמוצרים לא שובצו לספק")
 
 
 def _get_available_suppliers(user, region):
@@ -115,7 +115,7 @@ def _assign_fewest_suppliers(products, user, region):
     for p in products:
         prices = _prices_for_product(p["product"], suppliers)
         if not prices:
-            raise ValueError(f"No supplier for {p['product'].name}")
+            raise ValueError(f"לא נמצא ספק עבור: {p['product'].name}")
         product_options[p["product"].id] = prices
 
     supplier_coverage = defaultdict(set)
@@ -143,7 +143,7 @@ def _assign_fewest_suppliers(products, user, region):
                 best_sid = sid
                 best_score = score
         if best_sid is None:
-            raise ValueError("Cannot cover all products")
+            raise ValueError("לא ניתן לכסות את כל המוצרים עם הספקים הזמינים")
         chosen_suppliers.add(best_sid)
         uncovered -= supplier_coverage[best_sid]
 
