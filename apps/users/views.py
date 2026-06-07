@@ -1,5 +1,6 @@
 from rest_framework import generics, permissions
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from django.shortcuts import get_object_or_404
 from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
@@ -37,6 +38,20 @@ class AdminUserDetailView(generics.RetrieveDestroyAPIView):
     queryset = User.objects.select_related("profile").all()
     serializer_class = UserWithProfileSerializer
     permission_classes = [permissions.IsAdminUser]
+
+
+class AdminUserProfileUpdateView(generics.UpdateAPIView):
+    """PATCH /api/users/admin/users/<id>/profile/ — admin edits any user's profile."""
+    serializer_class = ProfileSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_object(self):
+        user = get_object_or_404(User, pk=self.kwargs["pk"])
+        return user.profile
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
 
 class ProfileUpdateView(generics.UpdateAPIView):

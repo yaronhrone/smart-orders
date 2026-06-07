@@ -96,6 +96,13 @@ export async function deleteUser(id: number): Promise<void> {
   return request<void>(`/api/users/admin/users/${id}/`, { method: "DELETE" });
 }
 
+export async function updateAdminUserProfile(id: number, data: Partial<UserProfile>): Promise<UserProfile> {
+  return request<UserProfile>(`/api/users/admin/users/${id}/profile/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
 // ─────────────── Orders ───────────────
 
 export interface OrderSummary {
