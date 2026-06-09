@@ -123,6 +123,7 @@ class SupplierWithProductsSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "phone",
+            "whatsapp_number",
             "region",
             "minimum_order",
             "products",
