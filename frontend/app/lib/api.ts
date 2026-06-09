@@ -364,6 +364,7 @@ export interface SupplierWithProducts {
   id: number;
   name: string;
   phone: string;
+  whatsapp_number: string;
   region: string;
   minimum_order: string;
   products: SupplierProduct[];
