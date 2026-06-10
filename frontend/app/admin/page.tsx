@@ -228,7 +228,7 @@ export default function AdminPage() {
               <Field label="שם חברה" name="company_name" value={editForm.company_name} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
               <div className="grid grid-cols-2 gap-3">
                 <Field label="טלפון חברה" name="company_phone" value={editForm.company_phone} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
-                <Field label="טלפון אישי (WhatsApp)" name="phone" value={editForm.phone} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
+                <Field label="מספר WhatsApp" name="phone" value={editForm.phone} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} placeholder="+972XXXXXXXXX" />
               </div>
               <Field label="כתובת למשלוח" name="company_address" value={editForm.company_address} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
               <Field label="תפקיד" name="position" value={editForm.position} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
@@ -272,14 +272,14 @@ export default function AdminPage() {
               </div>
               <Field label="אימייל" name="email" type="email" value={form.email} onChange={handleChange} required />
               <div className="grid grid-cols-2 gap-3">
-                <Field label="סיסמה" name="password" type="password" value={form.password} onChange={handleChange} required />
-                <Field label="אימות סיסמה" name="password2" type="password" value={form.password2} onChange={handleChange} required />
+                <PasswordField label="סיסמה" name="password" value={form.password} onChange={handleChange} required />
+                <PasswordField label="אימות סיסמה" name="password2" value={form.password2} onChange={handleChange} required />
               </div>
               <hr className="my-1" />
               <Field label="שם חברה" name="company_name" value={form.company_name} onChange={handleChange} required />
               <div className="grid grid-cols-2 gap-3">
-                <Field label="טלפון חברה" name="company_phone" value={form.company_phone} onChange={handleChange} />
-                <Field label="טלפון אישי" name="phone" value={form.phone} onChange={handleChange} />
+                <Field label="טלפון חברה" name="company_phone" value={form.company_phone} onChange={handleChange} placeholder="+972XXXXXXXXX" />
+                <Field label="מספר WhatsApp" name="phone" value={form.phone} onChange={handleChange} placeholder="+972XXXXXXXXX" />
               </div>
               <Field label="כתובת" name="company_address" value={form.company_address} onChange={handleChange} />
               <Field label="תפקיד" name="position" value={form.position} onChange={handleChange} />
@@ -317,20 +317,51 @@ function Detail({ label, value }: { label: string; value?: string | null }) {
 }
 
 function Field({
-  label, name, value, onChange, type = "text", required = false,
+  label, name, value, onChange, type = "text", required = false, placeholder,
 }: {
   label: string; name: string; value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  type?: string; required?: boolean;
+  type?: string; required?: boolean; placeholder?: string;
 }) {
   return (
     <div>
       <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
       <input
         type={type} name={name} value={value} onChange={onChange} required={required}
-        autoComplete={type === "password" ? "new-password" : type === "email" ? "email" : "off"}
+        placeholder={placeholder}
+        autoComplete={type === "email" ? "email" : "off"}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
+    </div>
+  );
+}
+
+function PasswordField({
+  label, name, value, onChange, required = false,
+}: {
+  label: string; name: string; value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  required?: boolean;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
+      <div className="relative">
+        <input
+          type={show ? "text" : "password"} name={name} value={value} onChange={onChange}
+          required={required} autoComplete="new-password"
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 pl-9"
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-base leading-none"
+          tabIndex={-1}
+        >
+          {show ? "🙈" : "👁"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -261,8 +261,8 @@ export default function SuppliersPage() {
             <form onSubmit={handleEditSave} className="space-y-3">
               <SupField label="שם ספק" name="name" value={editForm.name} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} required />
               <div className="grid grid-cols-2 gap-3">
-                <SupField label="טלפון" name="phone" value={editForm.phone} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
-                <SupField label="WhatsApp" name="whatsapp_number" value={editForm.whatsapp_number} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
+                <SupField label="טלפון" name="phone" value={editForm.phone} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} placeholder="+972XXXXXXXXX" />
+                <SupField label="WhatsApp" name="whatsapp_number" value={editForm.whatsapp_number} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} placeholder="+972XXXXXXXXX" />
               </div>
               <SupField label="הזמנה מינימלית (₪)" name="minimum_order" type="number" value={editForm.minimum_order} onChange={(e) => setEditForm(p => ({ ...p, [e.target.name]: e.target.value }))} />
               <div>
@@ -334,8 +334,8 @@ export default function SuppliersPage() {
             <form onSubmit={handleCreate} className="space-y-3">
               <SupField label="שם ספק" name="name" value={form.name} onChange={handleChange} required />
               <div className="grid grid-cols-2 gap-3">
-                <SupField label="טלפון" name="phone" value={form.phone} onChange={handleChange} />
-                <SupField label="WhatsApp" name="whatsapp_number" value={form.whatsapp_number} onChange={handleChange} />
+                <SupField label="טלפון" name="phone" value={form.phone} onChange={handleChange} placeholder="+972XXXXXXXXX" />
+                <SupField label="WhatsApp" name="whatsapp_number" value={form.whatsapp_number} onChange={handleChange} placeholder="+972XXXXXXXXX" />
               </div>
               <SupField
                 label="הזמנה מינימלית (₪)"
@@ -385,29 +385,18 @@ export default function SuppliersPage() {
 }
 
 function SupField({
-  label,
-  name,
-  value,
-  onChange,
-  type = "text",
-  required = false,
+  label, name, value, onChange, type = "text", required = false, placeholder,
 }: {
-  label: string;
-  name: string;
-  value: string;
+  label: string; name: string; value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  type?: string;
-  required?: boolean;
+  type?: string; required?: boolean; placeholder?: string;
 }) {
   return (
     <div>
       <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
       <input
-        type={type}
-        name={name}
-        value={value}
-        onChange={onChange}
-        required={required}
+        type={type} name={name} value={value} onChange={onChange}
+        required={required} placeholder={placeholder}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
     </div>

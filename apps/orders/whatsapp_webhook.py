@@ -469,17 +469,27 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
     if existing:
         lines.append("✅ מחירים עודכנו:")
         for u in existing:
-            lines.append(f"  • {u['product_name']}: {u['price']}₪")
+            lines.append(f"  • {u['product_name']}: {u['price']}₪/{u.get('unit', 'ק\"ג')}")
 
     if new_products:
         lines.append("\n🆕 מוצרים חדשים נוספו לקטלוג:")
         for u in new_products:
-            lines.append(f"  • {u['product_name']}: {u['price']}₪")
+            lines.append(f"  • {u['product_name']}: {u['price']}₪/{u.get('unit', 'ק\"ג')}")
 
     if skipped:
         lines.append("\n⚠️ לא זוהה:")
         for s in skipped:
             lines.append(f"  • {s['product_name']} — {s['reason']}")
+
+    total = len(existing) + len(new_products)
+    parts = []
+    if existing:
+        parts.append(f"{len(existing)} עודכנו")
+    if new_products:
+        parts.append(f"{len(new_products)} חדשים נוספו")
+    if skipped:
+        parts.append(f"{len(skipped)} לא זוהו")
+    lines.append(f"\nסה\"כ: {', '.join(parts)} ({total} מוצרים)")
 
     send_whatsapp_message(phone, "\n".join(lines))
     return HttpResponse(status=200)

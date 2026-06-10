@@ -14,7 +14,7 @@ class ProductSerializer(serializers.ModelSerializer):
 class SupplierProductSerializer(serializers.ModelSerializer):
     product_id = serializers.IntegerField(source="product.id", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
-    unit = serializers.CharField(source="product.unit", read_only=True)
+    unit = serializers.CharField(source="product.get_unit_display", read_only=True)
 
     class Meta:
         model = SupplierProduct

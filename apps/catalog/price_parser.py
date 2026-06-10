@@ -132,6 +132,7 @@ def update_prices_from_message(supplier, message: str) -> dict:
         updated.append({
             "product_name": name,
             "price": str(price),
+            "unit": product.get_unit_display(),
             "is_new": created_product,
         })
 
