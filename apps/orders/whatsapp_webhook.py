@@ -469,12 +469,14 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
     if existing:
         lines.append("✅ מחירים עודכנו:")
         for u in existing:
-            lines.append(f"  • {u['product_name']}: {u['price']}₪/{u.get('unit', 'ק\"ג')}")
+            unit = u.get("unit", 'ק"ג')
+            lines.append(f"  • {u['product_name']}: {u['price']}₪/{unit}")
 
     if new_products:
         lines.append("\n🆕 מוצרים חדשים נוספו לקטלוג:")
         for u in new_products:
-            lines.append(f"  • {u['product_name']}: {u['price']}₪/{u.get('unit', 'ק\"ג')}")
+            unit = u.get("unit", 'ק"ג')
+            lines.append(f"  • {u['product_name']}: {u['price']}₪/{unit}")
 
     if skipped:
         lines.append("\n⚠️ לא זוהה:")
