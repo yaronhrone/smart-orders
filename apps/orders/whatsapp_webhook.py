@@ -31,7 +31,8 @@ class DecimalEncoder(json.JSONEncoder):
 def save_pending_order(phone: str, cheapest: dict, fewest: dict,
                        products: list = None,
                        user_id: int = None,
-                       region: str = None):
+                       region: str = None,
+                       minimum_issues: dict = None):
     """
     Cache the suggested order options for a user.
     `products` (list of {product_id, quantity}), `user_id`, and `region`
@@ -45,6 +46,8 @@ def save_pending_order(phone: str, cheapest: dict, fewest: dict,
         payload["user_id"] = user_id
     if region is not None:
         payload["region"] = region
+    if minimum_issues is not None:
+        payload["minimum_issues"] = minimum_issues
     cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
 
 
@@ -180,6 +183,7 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
 
     cheapest = result["cheapest"]
     fewest = result["fewest_suppliers"]
+    minimum_issues = result.get("minimum_issues", {})
 
     save_pending_order(
         phone,
@@ -188,25 +192,51 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
         products=[{"product_id": p["product"].id, "quantity": str(p["quantity"])} for p in products],
         user_id=user.id,
         region=profile.region,
+        minimum_issues=minimum_issues,
     )
 
     same = cheapest["total_price"] == fewest["total_price"]
     if same:
         msg = _format_scenario("ההזמנה שלך", cheapest)
-        msg += "\n\nענה *אישור* לאישור."
+        cheapest_issues = minimum_issues.get("cheapest", [])
+        if cheapest_issues:
+            msg += "\n\n" + _format_minimum_warning(cheapest_issues)
+            msg += "\n\nהוסף כמויות ושלח שוב, או ענה *אישור* אם ברצונך להמשיך."
+        else:
+            msg += "\n\nענה *אישור* לאישור."
     else:
+        cheapest_issues = minimum_issues.get("cheapest", [])
+        fewest_issues = minimum_issues.get("fewest_suppliers", [])
+        cheapest_label = "אפשרות א׳ — הזול ביותר"
+        fewest_label = "אפשרות ב׳ — הכי פחות ספקים"
+        if cheapest_issues:
+            cheapest_label += " ⚠️"
+        if fewest_issues:
+            fewest_label += " ⚠️"
         msg = (
-            _format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
+            _format_scenario(cheapest_label, cheapest)
             + "\n\n"
-            + _format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
+            + _format_scenario(fewest_label, fewest)
             + "\n\nענה *א* לאפשרות הזולה יותר, *ב* לאפשרות עם פחות ספקים."
         )
+        if cheapest_issues or fewest_issues:
+            msg += "\n\n⚠️ — אפשרות זו אינה עומדת במינימום הזמנה של ספק"
 
     if unrecognized:
         msg += f"\n\n⚠️ לא זוהה: {', '.join(unrecognized)}"
 
     send_whatsapp_message(phone, msg)
     return HttpResponse(status=200)
+
+
+def _format_minimum_warning(issues: list) -> str:
+    lines = ["⛔ מינימום הזמנה לא עומד:"]
+    for issue in issues:
+        lines.append(
+            f"  • {issue['supplier_name']}: נדרש ₪{issue['minimum_required']}, "
+            f"חסר ₪{Decimal(str(issue['missing_amount'])):.2f}"
+        )
+    return "\n".join(lines)
 
 
 def _parse_supplier_cutoff(body: str):
@@ -389,6 +419,14 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         scenario = "fewest_suppliers"
     else:
         send_whatsapp_message(phone, "אנא ענה *א* או *ב* כדי לבחור.")
+        return HttpResponse(status=200)
+
+    minimum_issues = data.get("minimum_issues", {})
+    scenario_issues = minimum_issues.get(scenario, [])
+    if scenario_issues:
+        msg = _format_minimum_warning(scenario_issues)
+        msg += "\n\nשלח הזמנה מחודשת עם כמויות גדולות יותר כדי לעמוד במינימום."
+        send_whatsapp_message(phone, msg)
         return HttpResponse(status=200)
 
     cache.delete(key)

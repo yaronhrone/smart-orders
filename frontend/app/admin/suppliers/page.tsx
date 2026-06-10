@@ -56,6 +56,10 @@ export default function SuppliersPage() {
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
+  const [whatsappLink, setWhatsappLink] = useState<{ name: string } | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const WA_LINK = "https://wa.me/14155238886?text=join%20special-orbit";
+
   useEffect(() => {
     load();
   }, []);
@@ -125,9 +129,12 @@ export default function SuppliersPage() {
     setSaving(true);
     try {
       await createSupplier(form);
+      const createdName = form.name;
       setShowModal(false);
       setForm(EMPTY_FORM);
       await load();
+      setWhatsappLink({ name: createdName });
+      setLinkCopied(false);
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "שגיאה ביצירת הספק");
     } finally {
@@ -318,6 +325,49 @@ export default function SuppliersPage() {
                 ביטול
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp onboarding link popup */}
+      {whatsappLink && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center" dir="rtl">
+            <div className="text-4xl mb-3">✅</div>
+            <h2 className="text-lg font-bold text-gray-800 mb-1">
+              {whatsappLink.name} נוסף בהצלחה!
+            </h2>
+            <p className="text-sm text-gray-500 mb-4">
+              שלח לספק את הקישור הבא כדי שיוכל להתחבר לבוט:
+            </p>
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-blue-600 break-all mb-3 font-mono select-all">
+              {WA_LINK}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(WA_LINK);
+                  setLinkCopied(true);
+                }}
+                className="flex-1 border border-gray-300 rounded-lg py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+              >
+                {linkCopied ? "✓ הועתק!" : "העתק קישור"}
+              </button>
+              <a
+                href={WA_LINK}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 bg-green-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-green-600 transition flex items-center justify-center gap-1"
+              >
+                פתח וואטסאפ
+              </a>
+            </div>
+            <button
+              onClick={() => setWhatsappLink(null)}
+              className="mt-3 text-sm text-gray-400 hover:text-gray-600"
+            >
+              סגור
+            </button>
           </div>
         </div>
       )}
