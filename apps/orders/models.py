@@ -32,6 +32,7 @@ class OrderRequest(models.Model):
         PENDING = "pending", "ממתין לאישור"
         APPROVED = "approved", "אושר"
         SENT = "sent", "נשלח לספקים"
+        DELIVERED = "delivered", "נמסר"
         CANCELLED = "cancelled", "בוטל"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="orders")
