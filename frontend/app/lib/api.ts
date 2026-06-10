@@ -11,7 +11,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   if (res.status === 401) {
     localStorage.removeItem("token");
     window.location.href = "/login";
-    throw new Error("Unauthorized");
+    throw new Error("פג תוקף ההתחברות, מועבר לדף הכניסה");
   }
   if (!res.ok) {
     const body = await res.text();

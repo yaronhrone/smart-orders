@@ -29,14 +29,14 @@ class SupplierProductWriteSerializer(serializers.Serializer):
 
 
 class SupplierSerializer(serializers.ModelSerializer):
-    # region_display = serializers.CharField(source="get_region_display", read_only=True)
-    # is_global = serializers.BooleanField(read_only=True)
-    # products = SupplierProductSerializer(many=True, read_only=True)
-
     class Meta:
         model = Supplier
-        fields = ("id", "name", "phone", "whatsapp_number", "region",
-                  "minimum_order")
+        fields = ("id", "name", "phone", "whatsapp_number", "region", "minimum_order")
+        extra_kwargs = {
+            "name": {"error_messages": {"unique": "ספק עם שם זה כבר קיים במערכת."}},
+            "phone": {"error_messages": {"unique": "מספר הטלפון כבר קיים במערכת."}},
+            "whatsapp_number": {"error_messages": {"unique": "מספר הוואטסאפ כבר קיים במערכת."}},
+        }
 
     def validate_phone(self, value):
         return "".join(filter(str.isdigit, value))
@@ -62,6 +62,11 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = ("id", "name", "phone", "whatsapp_number", "region", "minimum_order", "prices")
+        extra_kwargs = {
+            "name": {"error_messages": {"unique": "ספק עם שם זה כבר קיים במערכת."}},
+            "phone": {"error_messages": {"unique": "מספר הטלפון כבר קיים במערכת."}},
+            "whatsapp_number": {"error_messages": {"unique": "מספר הוואטסאפ כבר קיים במערכת."}},
+        }
 
     from .models import Product, SupplierProduct
 

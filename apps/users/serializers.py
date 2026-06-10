@@ -46,8 +46,11 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("email", "password", "password2", "first_name", "last_name"
-                  , "company_name", "company_phone", "company_address", "phone", "position", "region")
+        fields = ("email", "password", "password2", "first_name", "last_name",
+                  "company_name", "company_phone", "company_address", "phone", "position", "region")
+        extra_kwargs = {
+            "email": {"error_messages": {"unique": "כתובת האימייל כבר רשומה במערכת."}},
+        }
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password2"]:

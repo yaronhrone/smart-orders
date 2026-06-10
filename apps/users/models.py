@@ -9,7 +9,7 @@ class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
 
         if not email:
-            raise ValueError("Users must have an email address")
+            raise ValueError("חובה להזין כתובת אימייל")
 
         email = self.normalize_email(email).lower()
 
