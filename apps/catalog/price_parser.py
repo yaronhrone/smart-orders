@@ -87,9 +87,6 @@ def update_prices_from_message(supplier, message: str) -> dict:
     """
     all_products = {p.name: p for p in Product.objects.all()}
 
-    if not all_products:
-        return {"updated": [], "skipped": [{"product_name": "*", "reason": "אין מוצרים בקטלוג"}]}
-
     try:
         parsed = _parse_with_ai(message, list(all_products.keys()))
     except Exception as exc:
