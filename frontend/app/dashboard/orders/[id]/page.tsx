@@ -122,7 +122,7 @@ export default function OrderDetailPage() {
                 <thead>
                   <tr className="bg-gray-50 text-gray-500 text-xs">
                     <th className="text-right px-4 py-2 font-medium">מוצר</th>
-                    <th className="text-right px-4 py-2 font-medium">כמות</th>
+                    <th className="text-right px-4 py-2 font-medium">כמות / יחידה</th>
                     <th className="text-right px-4 py-2 font-medium">מחיר יחידה</th>
                     <th className="text-right px-4 py-2 font-medium">סה&quot;כ</th>
                   </tr>
@@ -131,7 +131,7 @@ export default function OrderDetailPage() {
                   {group.items.map((item) => (
                     <tr key={item.product_id}>
                       <td className="px-4 py-3 font-medium text-gray-800">{item.product_name}</td>
-                      <td className="px-4 py-3 text-gray-600">{Number(item.quantity)}</td>
+                      <td className="px-4 py-3 text-gray-600">{Number(item.quantity)} {item.unit_display}</td>
                       <td className="px-4 py-3 text-gray-600">{formatCurrency(item.unit_price)}</td>
                       <td className="px-4 py-3 font-semibold text-gray-800">
                         {formatCurrency(item.subtotal)}

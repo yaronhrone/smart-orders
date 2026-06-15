@@ -214,17 +214,23 @@ export default function NewOrderPage() {
                   <div key={idx} className="flex items-center gap-3 px-4 py-3">
                     <span className="flex-1 text-sm text-gray-800">{item.name}</span>
                     {(() => {
-                      const unit = catalog.find(p => p.name === item.name)?.unit ?? "";
+                      const p = catalog.find(c => c.name === item.name);
+                      const unit = p?.unit ?? "";
                       const whole = WHOLE_UNITS.has(unit);
                       return (
-                        <input
-                          type="number"
-                          min={whole ? "1" : "0.5"}
-                          step={whole ? "1" : "0.5"}
-                          value={item.quantity}
-                          onChange={(e) => updateQty(idx, whole ? String(Math.round(Number(e.target.value))) : e.target.value)}
-                          className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400"
-                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={whole ? "1" : "0.5"}
+                            step={whole ? "1" : "0.5"}
+                            value={item.quantity}
+                            onChange={(e) => updateQty(idx, whole ? String(Math.round(Number(e.target.value))) : e.target.value)}
+                            className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          />
+                          {p?.unit_display && (
+                            <span className="text-xs text-gray-500 whitespace-nowrap">{p.unit_display}</span>
+                          )}
+                        </div>
                       );
                     })()}
                     <button

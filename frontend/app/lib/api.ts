@@ -161,6 +161,7 @@ export interface OrderItemDetail {
   supplier_id: number;
   supplier_name: string;
   quantity: string;
+  unit_display: string;
   unit_price: string;
   subtotal: string;
 }

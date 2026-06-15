@@ -127,8 +127,12 @@ class OrderItemDetailSerializer(serializers.Serializer):
     supplier_id = serializers.IntegerField(source="supplier.id")
     supplier_name = serializers.CharField(source="supplier.name")
     quantity = serializers.DecimalField(max_digits=10, decimal_places=2)
+    unit_display = serializers.SerializerMethodField()
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+    def get_unit_display(self, obj):
+        return obj.product.get_unit_display()
 
 
 class OrderDetailSerializer(serializers.Serializer):
