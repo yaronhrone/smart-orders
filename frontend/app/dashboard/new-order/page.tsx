@@ -7,6 +7,7 @@ import {
   fetchProducts,
   suggestOrder,
   placeOrder,
+  updateOrderStatus,
   Product,
   SuggestOrderResponse,
   PlaceOrderResponse,
@@ -63,6 +64,8 @@ export default function NewOrderPage() {
   const [placed, setPlaced] = useState<PlaceOrderResponse | null>(null);
   const [placing, setPlacing] = useState(false);
   const [placeError, setPlaceError] = useState("");
+  const [markingSent, setMarkingSent] = useState(false);
+  const [markedSent, setMarkedSent] = useState(false);
 
   useEffect(() => {
     fetchMe()
@@ -402,16 +405,38 @@ export default function NewOrderPage() {
             </div>
           )}
 
+          {!markedSent ? (
+            <button
+              onClick={async () => {
+                setMarkingSent(true);
+                try {
+                  await updateOrderStatus(placed.order_id, "sent");
+                  setMarkedSent(true);
+                } finally {
+                  setMarkingSent(false);
+                }
+              }}
+              disabled={markingSent}
+              className="w-full bg-blue-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
+            >
+              {markingSent ? "מעדכן..." : "✅ שלחתי לכל הספקים"}
+            </button>
+          ) : (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-center text-sm text-blue-700 font-medium">
+              ההזמנה נוספה ללוח הבקרה
+            </div>
+          )}
+
           <div className="flex gap-3">
             <button
-              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); }}
+              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); setMarkedSent(false); }}
               className="flex-1 border border-gray-300 rounded-xl py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition"
             >
               הזמנה חדשה
             </button>
             <button
               onClick={() => router.push("/dashboard")}
-              className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-blue-700 transition"
+              className="flex-1 bg-gray-800 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-gray-900 transition"
             >
               לוח בקרה
             </button>
