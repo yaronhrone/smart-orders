@@ -16,7 +16,6 @@ const ADMIN_NAV = [
   { href: "/admin", label: "לקוחות", exact: true },
   { href: "/admin/suppliers", label: "ספקים" },
   { href: "/admin/catalog", label: "קטלוג מוצרים" },
-  { href: "/admin/profile", label: "פרופיל חברה" },
 ];
 
 export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => void }) {

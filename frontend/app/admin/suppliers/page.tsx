@@ -185,11 +185,11 @@ export default function SuppliersPage() {
                   onClick={() => toggleExpand(s.id)}
                   className="flex-1 flex items-center gap-4 hover:bg-gray-50 transition text-right"
                 >
-                  <div className="flex-1 grid grid-cols-4 gap-4 text-sm">
-                    <span className="font-medium text-gray-800">{s.name}</span>
-                    <span className="text-gray-500">{REGION_LABEL[s.region] ?? s.region}</span>
-                    <span className="text-gray-500">{s.phone}</span>
-                    <span className="text-gray-500">
+                  <div className="flex-1 grid grid-cols-4 gap-4 text-sm min-w-0">
+                    <span className="font-medium text-gray-800 truncate">{s.name}</span>
+                    <span className="text-gray-500 truncate">{REGION_LABEL[s.region] ?? s.region}</span>
+                    <span className="text-gray-500 truncate">{s.phone}</span>
+                    <span className="text-gray-500 truncate">
                       מינימום: {formatCurrency(s.minimum_order)}
                     </span>
                   </div>

@@ -199,13 +199,8 @@ export default function NewOrderPage() {
               </ul>
             )}
             {dropdownOpen && search && filtered.length === 0 && (
-              <div className="absolute right-0 left-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow p-3 z-10">
-                <button
-                  onMouseDown={() => { if (search.trim()) selectProduct(search.trim()); }}
-                  className="text-sm text-blue-600 hover:text-blue-800"
-                >
-                  + הוסף &ldquo;{search}&rdquo;
-                </button>
+              <div className="absolute right-0 left-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow p-3 z-10 text-sm text-gray-400">
+                לא נמצא מוצר בקטלוג
               </div>
             )}
           </div>

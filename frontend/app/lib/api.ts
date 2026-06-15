@@ -1,3 +1,24 @@
+function _flattenErrors(obj: unknown): string {
+  if (typeof obj === "string") return obj;
+  if (Array.isArray(obj)) return obj.map(_flattenErrors).filter(Boolean).join(" | ");
+  if (obj && typeof obj === "object") {
+    return Object.values(obj as Record<string, unknown>)
+      .map(_flattenErrors)
+      .filter(Boolean)
+      .join(" | ");
+  }
+  return "";
+}
+
+function _parseErrorBody(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    return _flattenErrors(parsed) || body;
+  } catch {
+    return body;
+  }
+}
+
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
   const res = await fetch(path, {
@@ -15,7 +36,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(body || res.statusText);
+    throw new Error(_parseErrorBody(body) || res.statusText);
   }
   if (res.status === 204) return null as T;
   return res.json();

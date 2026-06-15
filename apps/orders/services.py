@@ -60,10 +60,12 @@ def build_order(user, region, products, scenario="cheapest"):
 
 def _build_initial_assignments(products, suppliers):
     assignments = []
+    missing = []
     for product in products:
         prices = _prices_for_product(product["product"], suppliers)
         if not prices:
-            raise ValueError(f"לא נמצא ספק עבור: {product['product'].name}")
+            missing.append(product["product"].name)
+            continue
         supplier, price = prices[0]
         assignments.append({
             "product": product["product"],
@@ -72,6 +74,8 @@ def _build_initial_assignments(products, suppliers):
             "unit_price": price,
             "all_prices": prices,
         })
+    if missing:
+        raise ValueError(f"לא נמצא ספק עבור: {', '.join(missing)}")
     return assignments
 
 
@@ -83,10 +87,7 @@ def _validate_all_products_present(assignments, products):
 
 
 def _get_available_suppliers(user, region):
-    return Supplier.objects.filter(
-        region=region,
-        owner__isnull=True,
-    ) | Supplier.objects.filter(owner=user)
+    return Supplier.objects.all()
 
 
 def _prices_for_product(product, suppliers):
@@ -112,11 +113,15 @@ def _assign_fewest_suppliers(products, user, region):
     suppliers = _get_available_suppliers(user, region)
 
     product_options = {}
+    missing = []
     for p in products:
         prices = _prices_for_product(p["product"], suppliers)
         if not prices:
-            raise ValueError(f"לא נמצא ספק עבור: {p['product'].name}")
-        product_options[p["product"].id] = prices
+            missing.append(p["product"].name)
+        else:
+            product_options[p["product"].id] = prices
+    if missing:
+        raise ValueError(f"לא נמצא ספק עבור: {', '.join(missing)}")
 
     supplier_coverage = defaultdict(set)
     for pid, prices in product_options.items():

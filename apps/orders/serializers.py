@@ -16,7 +16,7 @@ class HebrewProductField(serializers.SlugRelatedField):
         try:
             return self.get_queryset().get(**{self.slug_field: data})
         except ObjectDoesNotExist:
-            raise serializers.ValidationError(f'המוצר "{data}" לא נמצא במערכת')
+            raise serializers.ValidationError(f'המוצר {data} לא נמצא במערכת')
         except (TypeError, ValueError):
             raise serializers.ValidationError(f'ערך לא תקין: {data}')
 
