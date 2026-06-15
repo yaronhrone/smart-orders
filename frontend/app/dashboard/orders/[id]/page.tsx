@@ -8,6 +8,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:   { label: "ממתין",  color: "bg-yellow-100 text-yellow-800" },
   approved:  { label: "אושר",   color: "bg-blue-100 text-blue-800" },
   sent:      { label: "נשלח",   color: "bg-purple-100 text-purple-800" },
+  delivered: { label: "נמסר",   color: "bg-green-100 text-green-800" },
   cancelled: { label: "בוטל",   color: "bg-red-100 text-red-800" },
 };
 

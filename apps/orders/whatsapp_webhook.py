@@ -692,6 +692,8 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
         )
         return HttpResponse(status=200)
 
+    order_request_id = data["order_request_id"]
+
     for orp_id, qty in confirmed.items():
         try:
             orp = OrderRequestProduct.objects.get(id=int(orp_id))
@@ -701,6 +703,18 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
             )
         except (OrderRequestProduct.DoesNotExist, ValueError):
             pass
+
+    # אם כל מוצרי ההזמנה קיבלו אישור ספק → סמן כ-APPROVED
+    try:
+        from apps.orders.models import OrderRequest
+        total_orps = OrderRequestProduct.objects.filter(order_request_id=order_request_id).count()
+        confirmed_orps = SupplierConfirmation.objects.filter(
+            order_request_product__order_request_id=order_request_id
+        ).count()
+        if total_orps > 0 and confirmed_orps >= total_orps:
+            OrderRequest.objects.filter(id=order_request_id).update(status=OrderRequest.Status.APPROVED)
+    except Exception as exc:
+        logger.error("Failed to update order status after supplier confirmation: %s", exc)
 
     cache.delete(key)
 

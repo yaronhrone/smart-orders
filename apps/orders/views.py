@@ -62,6 +62,9 @@ class PlaceOrderView(APIView):
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        order.status = OrderRequest.Status.SENT
+        order.save(update_fields=["status"])
+
         response_data = {
             "order_id": order.id,
             "status": order.status,
