@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useAutoError } from "../../lib/useAutoError";
 import {
   fetchSuppliersAll,
   createSupplier,
@@ -45,7 +46,7 @@ export default function SuppliersPage() {
 
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState<CreateSupplierPayload>(EMPTY_FORM);
-  const [formError, setFormError] = useState("");
+  const [formError, setFormError] = useAutoError(5000);
   const [saving, setSaving] = useState(false);
 
   const [confirmDelete, setConfirmDelete] = useState<SupplierWithProducts | null>(null);
@@ -53,7 +54,7 @@ export default function SuppliersPage() {
 
   const [editSupplier, setEditSupplier] = useState<SupplierWithProducts | null>(null);
   const [editForm, setEditForm] = useState<CreateSupplierPayload>(EMPTY_FORM);
-  const [editError, setEditError] = useState("");
+  const [editError, setEditError] = useAutoError(5000);
   const [editSaving, setEditSaving] = useState(false);
 
   const [whatsappLink, setWhatsappLink] = useState<{ name: string } | null>(null);

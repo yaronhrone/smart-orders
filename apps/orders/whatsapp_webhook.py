@@ -201,7 +201,7 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
         cheapest_issues = minimum_issues.get("cheapest", [])
         if cheapest_issues:
             msg += "\n\n" + _format_minimum_warning(cheapest_issues)
-            msg += "\n\nהוסף כמויות ושלח שוב, או ענה *אישור* אם ברצונך להמשיך."
+            msg += "\n\nשלח הזמנה מחודשת עם כמויות גדולות יותר."
         else:
             msg += "\n\nענה *אישור* לאישור."
     else:

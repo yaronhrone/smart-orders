@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useAutoError } from "../lib/useAutoError";
 import {
   fetchAdminUsers,
   createUser,
@@ -55,7 +56,7 @@ export default function AdminPage() {
   // Create modal
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState<CreateUserPayload>(EMPTY_FORM);
-  const [formError, setFormError] = useState("");
+  const [formError, setFormError] = useAutoError(5000);
   const [saving, setSaving] = useState(false);
 
   // Delete
@@ -64,7 +65,7 @@ export default function AdminPage() {
   // Edit profile modal
   const [editUser, setEditUser] = useState<AdminUser | null>(null);
   const [editForm, setEditForm] = useState<UserProfile>(EMPTY_PROFILE);
-  const [editError, setEditError] = useState("");
+  const [editError, setEditError] = useAutoError(5000);
   const [editSaving, setEditSaving] = useState(false);
 
   const [whatsappLink, setWhatsappLink] = useState<{ name: string } | null>(null);

@@ -3,12 +3,13 @@
 import { useState, FormEvent, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { login } from "../lib/api";
+import { useAutoError } from "../lib/useAutoError";
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useAutoError(5000);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const togglePassword = useCallback(() => setShowPassword((v) => !v), []);
