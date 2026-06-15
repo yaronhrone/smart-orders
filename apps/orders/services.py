@@ -75,7 +75,7 @@ def _build_initial_assignments(products, suppliers):
             "all_prices": prices,
         })
     if missing:
-        raise ValueError(f"לא נמצא ספק עבור: {', '.join(missing)}")
+        raise ValueError(f"אין ספק שיכול לספק: {', '.join(missing)}")
     return assignments
 
 
@@ -121,7 +121,7 @@ def _assign_fewest_suppliers(products, user, region):
         else:
             product_options[p["product"].id] = prices
     if missing:
-        raise ValueError(f"לא נמצא ספק עבור: {', '.join(missing)}")
+        raise ValueError(f"אין ספק שיכול לספק: {', '.join(missing)}")
 
     supplier_coverage = defaultdict(set)
     for pid, prices in product_options.items():

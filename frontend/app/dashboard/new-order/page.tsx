@@ -331,14 +331,14 @@ export default function NewOrderPage() {
 
                   <button
                     onClick={() => handlePlace(key)}
-                    disabled={placing}
-                    className={`w-full py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition ${
+                    disabled={placing || issues.length > 0}
+                    className={`w-full py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition ${
                       isCheapest
                         ? "bg-blue-600 text-white hover:bg-blue-700"
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                     }`}
                   >
-                    {placing ? "מבצע הזמנה..." : `הזמן — ${label}`}
+                    {placing ? "מבצע הזמנה..." : issues.length > 0 ? "⛔ מינימום לא עומד" : `הזמן — ${label}`}
                   </button>
                 </div>
               );
