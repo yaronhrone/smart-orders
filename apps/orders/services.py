@@ -350,3 +350,119 @@ def _move_items_to_supplier(items, new_supplier):
                 a["supplier"] = new_supplier
                 a["unit_price"] = p
                 break
+
+
+def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int):
+    """
+    Find the best single supplier to take over ALL remaining items from a failing supplier.
+
+    Returns {supplier, items: [{orp, new_price}], new_total, minimum_met} or None.
+    Prefers suppliers that meet minimum; tie-breaks by cheapest redirect cost.
+    """
+    from apps.orders.models import OrderRequestProduct
+
+    orps = list(
+        OrderRequestProduct.objects
+        .filter(order_request_id=order_request_id, supplier_id=failing_supplier_id)
+        .select_related("product")
+    )
+    if not orps:
+        return None
+
+    # For each ORP, collect alternative (supplier, price) options
+    product_alternatives = {}
+    for orp in orps:
+        options = [
+            (sp.supplier, sp.price_per_unit)
+            for sp in SupplierProduct.objects
+            .filter(product=orp.product, price_per_unit__isnull=False)
+            .exclude(supplier_id=failing_supplier_id)
+            .select_related("supplier")
+            .order_by("price_per_unit")
+        ]
+        product_alternatives[orp.id] = options
+
+    # Build coverage: which suppliers cover which orp_ids
+    supplier_coverage = defaultdict(set)
+    supplier_obj = {}
+    for orp_id, options in product_alternatives.items():
+        for s, _ in options:
+            supplier_coverage[s.id].add(orp_id)
+            supplier_obj[s.id] = s
+
+    all_orp_ids = {orp.id for orp in orps}
+    full_coverage_ids = [
+        sid for sid, covered in supplier_coverage.items()
+        if all_orp_ids <= covered
+    ]
+    if not full_coverage_ids:
+        return None
+
+    # Existing order totals for candidate suppliers
+    existing_totals = defaultdict(Decimal)
+    for orp in OrderRequestProduct.objects.filter(
+        order_request_id=order_request_id, supplier_id__in=full_coverage_ids
+    ):
+        existing_totals[orp.supplier_id] += orp.quantity * orp.unit_price
+
+    scored = []
+    for sid in full_coverage_ids:
+        supplier = supplier_obj[sid]
+        item_details = []
+        redirect_total = Decimal(0)
+        for orp in orps:
+            price = next(p for s, p in product_alternatives[orp.id] if s.id == sid)
+            redirect_total += orp.quantity * price
+            item_details.append({"orp": orp, "new_price": price})
+        new_total = existing_totals.get(sid, Decimal(0)) + redirect_total
+        minimum_met = new_total >= supplier.minimum_order
+        scored.append({
+            "supplier": supplier,
+            "items": item_details,
+            "redirect_total": redirect_total,
+            "new_total": new_total,
+            "minimum_met": minimum_met,
+            "missing_amount": max(Decimal(0), supplier.minimum_order - new_total),
+        })
+
+    scored.sort(key=lambda x: (not x["minimum_met"], x["redirect_total"]))
+    return scored[0]
+
+
+def find_fallback_for_product(product, excluded_supplier_id: int, order_request_id: int, quantity: Decimal):
+    """
+    Find the cheapest alternative supplier for a product a supplier can't fulfill.
+    Returns {"supplier", "price", "minimum_met", "missing_amount"} or None.
+    """
+    from apps.orders.models import OrderRequestProduct
+
+    candidates = (
+        SupplierProduct.objects
+        .filter(product=product, price_per_unit__isnull=False)
+        .exclude(supplier_id=excluded_supplier_id)
+        .select_related("supplier")
+        .order_by("price_per_unit")
+    )
+
+    if not candidates.exists():
+        return None
+
+    existing_totals = defaultdict(Decimal)
+    for orp in OrderRequestProduct.objects.filter(order_request_id=order_request_id).select_related("supplier"):
+        existing_totals[orp.supplier_id] += orp.quantity * orp.unit_price
+
+    for sp in candidates:
+        supplier = sp.supplier
+        price = sp.price_per_unit
+        existing = existing_totals.get(supplier.id, Decimal(0))
+        new_total = existing + quantity * price
+        minimum_met = new_total >= supplier.minimum_order
+        missing_amount = max(Decimal(0), supplier.minimum_order - new_total)
+        return {
+            "supplier": supplier,
+            "price": price,
+            "minimum_met": minimum_met,
+            "missing_amount": missing_amount,
+        }
+
+    return None

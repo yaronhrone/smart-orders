@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 SESSION_TTL = 3600          # שעה
 SUPPLIER_SESSION_TTL = 86400  # 24 שעות
 CUTOFF_TTL = 86400           # שמור cutoff עד 24 שעות
+FALLBACK_TTL = 3600          # שעה להחלטת לקוח על ספק חלופי
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -386,6 +387,10 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     if delivery_response is not None:
         return delivery_response
 
+    fallback_response = _handle_fallback_approval(phone, body)
+    if fallback_response is not None:
+        return fallback_response
+
     key = f"whatsapp_order:{phone}"
     raw = cache.get(key)
 
@@ -586,36 +591,90 @@ def save_supplier_pending_order(supplier_phone: str, order_request_id: int, prod
     cache.set(key, json.dumps(data, cls=DecimalEncoder), timeout=SUPPLIER_SESSION_TTL)
 
 
-def _parse_supplier_reply(body: str, products: list) -> dict:
+# ─────────────────────── Fallback state helpers ───────────────────────
+
+def _save_fallback_state(phone: str, state: dict):
+    cache.set(f"whatsapp_fallback:{phone}", json.dumps(state, cls=DecimalEncoder), timeout=FALLBACK_TTL)
+
+
+def _get_fallback_state(phone: str):
+    return cache.get(f"whatsapp_fallback:{phone}")
+
+
+def _clear_fallback_state(phone: str):
+    cache.delete(f"whatsapp_fallback:{phone}")
+
+
+# ─────────────────────── Supplier reply parsing ───────────────────────
+
+MISSING_KEYWORDS = ["חסר", "אין", "נגמר", "אזל", "לא קיים"]
+
+
+def _parse_supplier_reply(body: str, products: list) -> tuple[dict, list]:
     """
-    Returns {orp_id: confirmed_quantity} parsed from the supplier's reply.
-    Falls back to full confirmation if body contains a confirmation word.
+    Returns (confirmed: {orp_id: Decimal}, missing: [product_dict]).
+
+    Handles:
+    - "אישור" → all products confirmed
+    - "חסר עגבניות, שאר אישור" → tomatoes missing, rest confirmed
+    - "עגבניות 40, מלפפון 25" → explicit quantities
+    - "עגבניות 40, מלפפון חסר" → mixed
     """
-    body_stripped = body.strip()
-    confirm_words = ["אישור", "אוקי", "כן", "ok", "yes", "בסדר", "מאושר", "✅", "👍"]
-    if any(w in body_stripped.lower() for w in confirm_words):
-        return {p["orp_id"]: Decimal(str(p["quantity"])) for p in products}
+    body_lower = body.strip().lower()
+
+    # Step 1: detect which products the supplier flagged as missing
+    # Extract the words that DIRECTLY follow each missing keyword (e.g. "חסר עגבניות" → "עגבניות")
+    # Using Hebrew Unicode range so we don't over-match across commas or conjunctions.
+    _HEB = r"[֐-׿]+"
+    missing_mentions: set[str] = set()
+    for kw in MISSING_KEYWORDS:
+        for m in re.finditer(rf"{re.escape(kw)}\s+({_HEB}(?:\s+{_HEB})?)", body_lower):
+            missing_mentions.add(m.group(1).strip())
+        for m in re.finditer(rf"({_HEB})\s+{re.escape(kw)}", body_lower):
+            missing_mentions.add(m.group(1).strip())
+
+    missing = []
+    remaining = []
+    for p in products:
+        name_lower = p["product_name"].lower()
+        # Prefix to handle Hebrew pluralization: עגבניה → עגבני (matches עגבניות)
+        match_name = name_lower[:-1] if len(name_lower) > 4 else name_lower
+        is_missing = any(
+            mention.startswith(match_name) or match_name in mention
+            for mention in missing_mentions
+        )
+        if is_missing:
+            missing.append(p)
+        else:
+            remaining.append(p)
+
+    # Step 2: parse confirmed quantities for non-missing products
+    confirm_words = ["אישור", "אוקי", "כן", "ok", "yes", "בסדר", "מאושר", "✅", "👍", "שאר", "הכל"]
+    has_general_confirm = any(w in body_lower for w in confirm_words)
 
     confirmed = {}
-    for p in products:
-        pattern = re.compile(re.escape(p["product_name"]) + r"[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
-        m = pattern.search(body_stripped)
-        if m:
-            try:
-                confirmed[p["orp_id"]] = Decimal(m.group(1))
-            except InvalidOperation:
-                pass
+    if has_general_confirm:
+        for p in remaining:
+            confirmed[p["orp_id"]] = Decimal(str(p["quantity"]))
+    else:
+        for p in remaining:
+            pattern = re.compile(re.escape(p["product_name"]) + r"[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
+            m = pattern.search(body)
+            if m:
+                try:
+                    confirmed[p["orp_id"]] = Decimal(m.group(1))
+                except InvalidOperation:
+                    pass
 
-    # Single product and a lone number → treat as its quantity
-    if not confirmed and len(products) == 1:
-        numbers = re.findall(r"\d+(?:\.\d+)?", body_stripped)
-        if numbers:
-            try:
-                confirmed[products[0]["orp_id"]] = Decimal(numbers[0])
-            except InvalidOperation:
-                pass
+        if not confirmed and len(remaining) == 1:
+            numbers = re.findall(r"\d+(?:\.\d+)?", body)
+            if numbers:
+                try:
+                    confirmed[remaining[0]["orp_id"]] = Decimal(numbers[0])
+                except InvalidOperation:
+                    pass
 
-    return confirmed
+    return confirmed, missing
 
 
 def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpResponse:
@@ -682,18 +741,18 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
 
     data = json.loads(raw)
     products = data["products"]
+    order_request_id = data["order_request_id"]
 
-    confirmed = _parse_supplier_reply(body, products)
+    confirmed, missing = _parse_supplier_reply(body, products)
 
-    if not confirmed:
+    if not confirmed and not missing:
         send_whatsapp_message(
             phone,
-            "לא הצלחתי להבין.\nשלח *אישור* לאישור הכל, או כמויות כגון:\nעגבניות 40, מלפפונים 25",
+            "לא הצלחתי להבין.\nשלח *אישור* לאישור הכל, כמויות כגון:\nעגבניות 40, מלפפונים 25\nאו *חסר עגבניות* לדיווח על מוצר חסר.",
         )
         return HttpResponse(status=200)
 
-    order_request_id = data["order_request_id"]
-
+    # Save confirmations
     for orp_id, qty in confirmed.items():
         try:
             orp = OrderRequestProduct.objects.get(id=int(orp_id))
@@ -704,55 +763,407 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
         except (OrderRequestProduct.DoesNotExist, ValueError):
             pass
 
-    # אם כל מוצרי ההזמנה קיבלו אישור ספק → סמן כ-APPROVED
-    try:
-        from apps.orders.models import OrderRequest
-        total_orps = OrderRequestProduct.objects.filter(order_request_id=order_request_id).count()
-        confirmed_orps = SupplierConfirmation.objects.filter(
-            order_request_product__order_request_id=order_request_id
-        ).count()
-        if total_orps > 0 and confirmed_orps >= total_orps:
-            OrderRequest.objects.filter(id=order_request_id).update(status=OrderRequest.Status.APPROVED)
-    except Exception as exc:
-        logger.error("Failed to update order status after supplier confirmation: %s", exc)
+    # Mark order APPROVED only if all items confirmed and nothing missing
+    if not missing:
+        try:
+            from apps.orders.models import OrderRequest
+            total_orps = OrderRequestProduct.objects.filter(order_request_id=order_request_id).count()
+            confirmed_orps = SupplierConfirmation.objects.filter(
+                order_request_product__order_request_id=order_request_id
+            ).count()
+            if total_orps > 0 and confirmed_orps >= total_orps:
+                OrderRequest.objects.filter(id=order_request_id).update(status=OrderRequest.Status.APPROVED)
+        except Exception as exc:
+            logger.error("Failed to update order status after supplier confirmation: %s", exc)
 
     cache.delete(key)
 
-    # Check if supplier set a cutoff time in their confirmation message
+    # Parse optional cutoff time
     cutoff_time = _parse_supplier_cutoff(body)
     if cutoff_time:
         cutoff_str = cutoff_time.strftime("%H:%M")
-        cutoff_key = f"supplier_cutoff:{phone}:{data['order_request_id']}"
-        cache.set(cutoff_key, cutoff_str, timeout=CUTOFF_TTL)
+        cache.set(f"supplier_cutoff:{phone}:{order_request_id}", cutoff_str, timeout=CUTOFF_TTL)
 
-    lines = ["✅ תודה! קיבלתי אישור:"]
+    # Acknowledge supplier
+    ack_lines = ["✅ תודה! קיבלתי:"]
     for p in products:
-        qty = confirmed.get(p["orp_id"], p["quantity"])
-        lines.append(f"  • {p['product_name']} x{qty} {p['unit']}")
+        if p["orp_id"] in confirmed:
+            ack_lines.append(f"  ✅ {p['product_name']} x{confirmed[p['orp_id']]} {p['unit']}")
+        elif p in missing:
+            ack_lines.append(f"  ❌ {p['product_name']} — חסר")
     if cutoff_time:
-        lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
-    send_whatsapp_message(phone, "\n".join(lines))
+        ack_lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
+    send_whatsapp_message(phone, "\n".join(ack_lines))
 
-    # Notify customer that this supplier confirmed
+    # Notify customer about confirmed items
     try:
-        order_request_id = data["order_request_id"]
         orp = OrderRequestProduct.objects.select_related(
-            "order_request__user__profile", "supplier"
+            "order_request__user__profile"
         ).filter(order_request_id=order_request_id).first()
 
-        if orp:
+        if orp and confirmed:
             customer_profile = getattr(orp.order_request.user, "profile", None)
             customer_phone = customer_profile.phone if customer_profile else None
             if customer_phone:
-                customer_lines = [f"✅ *{supplier.name}* אישר את ההזמנה:"]
+                customer_lines = [f"✅ *{supplier.name}* אישר:"]
                 for p in products:
-                    qty = confirmed.get(p["orp_id"], p["quantity"])
-                    customer_lines.append(f"  • {p['product_name']} x{qty} {p['unit']}")
+                    if p["orp_id"] in confirmed:
+                        customer_lines.append(f"  • {p['product_name']} x{confirmed[p['orp_id']]} {p['unit']}")
                 customer_lines.append(f"\nמספר הזמנה: #{order_request_id}")
                 send_whatsapp_message(customer_phone, "\n".join(customer_lines))
     except Exception as exc:
         logger.error("Failed to notify customer after supplier confirmation: %s", exc)
 
+    # Find fallback suppliers for missing items and notify customer
+    if missing:
+        _handle_missing_items(supplier, missing, order_request_id)
+
+    return HttpResponse(status=200)
+
+
+def _handle_missing_items(original_supplier, missing_products: list, order_request_id: int):
+    """Find fallback suppliers for items the supplier can't fulfill and notify the customer."""
+    from apps.catalog.models import Product
+    from apps.orders.models import OrderRequest, OrderRequestProduct
+    from apps.orders.services import find_fallback_for_product
+
+    order = (
+        OrderRequest.objects
+        .select_related("user__profile")
+        .filter(id=order_request_id)
+        .first()
+    )
+    if not order:
+        return
+
+    customer_profile = getattr(order.user, "profile", None)
+    customer_phone = customer_profile.phone if customer_profile else None
+    if not customer_phone:
+        return
+
+    redirects = []
+    no_fallback = []
+
+    for mp in missing_products:
+        product = Product.objects.filter(name=mp["product_name"]).first()
+        if not product:
+            no_fallback.append(mp["product_name"])
+            continue
+
+        existing_orp = OrderRequestProduct.objects.filter(
+            order_request_id=order_request_id, product=product
+        ).first()
+        original_price = str(existing_orp.unit_price) if existing_orp else "?"
+
+        fallback = find_fallback_for_product(
+            product=product,
+            excluded_supplier_id=original_supplier.id,
+            order_request_id=order_request_id,
+            quantity=Decimal(str(mp["quantity"])),
+        )
+
+        if not fallback:
+            no_fallback.append(mp["product_name"])
+            continue
+
+        redirects.append({
+            "orp_id": mp["orp_id"],
+            "product_name": mp["product_name"],
+            "quantity": mp["quantity"],
+            "unit": mp["unit"],
+            "original_supplier_id": original_supplier.id,
+            "original_supplier_name": original_supplier.name,
+            "original_price": original_price,
+            "fallback_supplier_id": fallback["supplier"].id,
+            "fallback_supplier_name": fallback["supplier"].name,
+            "fallback_supplier_whatsapp": fallback["supplier"].whatsapp_number,
+            "fallback_price": str(fallback["price"]),
+            "minimum_met": fallback["minimum_met"],
+            "missing_amount": str(fallback["missing_amount"]),
+        })
+
+    lines = [f"⚠️ *{original_supplier.name}* דיווח על פריטים חסרים:"]
+    for r in redirects:
+        lines.append(
+            f"\n• *{r['product_name']}* x{r['quantity']} {r['unit']}"
+            f"\n  ❌ {r['original_supplier_name']} — חסר"
+            f"\n  ✅ {r['fallback_supplier_name']} — {r['fallback_price']}₪ (במקום {r['original_price']}₪)"
+        )
+        if not r["minimum_met"]:
+            lines.append(f"  ⚠️ חסר עוד {Decimal(r['missing_amount']):.2f}₪ למינימום ספק זה")
+
+    if no_fallback:
+        lines.append(f"\n❌ אין ספק חלופי עבור: {', '.join(no_fallback)}")
+
+    if redirects:
+        lines.append("\nענה *כן* להעברה לספק חלופי, *לא* לביטול.")
+        _save_fallback_state(customer_phone, {
+            "order_request_id": order_request_id,
+            "original_supplier_name": original_supplier.name,
+            "redirects": redirects,
+        })
+    else:
+        lines.append("\nאין ספק חלופי זמין לפריטים אלו.")
+
+    send_whatsapp_message(customer_phone, "\n".join(lines))
+
+
+def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
+    """Handle customer's yes/no to a fallback supplier suggestion. Returns None if no fallback pending."""
+    raw = _get_fallback_state(phone)
+    if not raw:
+        return None
+
+    state = json.loads(raw)
+    body_lower = body.strip().lower()
+
+    yes_words = ["כן", "yes", "אישור", "אוקי", "ok", "בסדר", "1"]
+    no_words = ["לא", "no", "ביטול", "cancel", "2"]
+
+    if any(w in body_lower for w in yes_words):
+        return _execute_fallback_redirect(phone, state)
+    elif any(w in body_lower for w in no_words):
+        return _remove_missing_items(phone, state)
+    else:
+        supplier_name = state.get("original_supplier_name", "הספק")
+        send_whatsapp_message(
+            phone,
+            f"⏳ ממתין לתשובתך: *{supplier_name}* דיווח על פריטים חסרים.\n"
+            "ענה *כן* להעברה לספק חלופי, *לא* לביטול.",
+        )
+        return HttpResponse(status=200)
+
+
+def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
+    """Customer declined fallback — remove the missing products and check remaining minimums."""
+    from apps.catalog.models import Supplier
+    from apps.orders.models import OrderRequestProduct
+
+    _clear_fallback_state(phone)
+
+    order_request_id = state["order_request_id"]
+    redirects = state["redirects"]
+
+    removed_lines = []
+    affected_supplier_ids = set()
+
+    for r in redirects:
+        try:
+            orp = OrderRequestProduct.objects.get(id=r["orp_id"])
+            affected_supplier_ids.add(orp.supplier_id)
+            orp.delete()
+            removed_lines.append(f"  • {r['product_name']} x{r['quantity']} {r['unit']} הוסר")
+        except OrderRequestProduct.DoesNotExist:
+            pass
+
+    lines = ["🗑️ הבנתי — הפריטים הבאים הוסרו מההזמנה:"]
+    lines += removed_lines
+
+    # Check if remaining suppliers still meet their minimum
+    remaining_orps = list(
+        OrderRequestProduct.objects.filter(order_request_id=order_request_id)
+        .select_related("supplier")
+    )
+
+    from collections import defaultdict as _defaultdict
+    from decimal import Decimal as _Decimal
+    supplier_totals = _defaultdict(_Decimal)
+    supplier_obj = {}
+    for orp in remaining_orps:
+        supplier_totals[orp.supplier_id] += orp.quantity * orp.unit_price
+        supplier_obj[orp.supplier_id] = orp.supplier
+
+    for sid in affected_supplier_ids:
+        if sid not in supplier_obj:
+            continue
+        supplier = supplier_obj[sid]
+        total = supplier_totals.get(sid, _Decimal(0))
+        if total >= supplier.minimum_order:
+            continue
+
+        missing_amount = supplier.minimum_order - total
+        lines.append(
+            f"\n⚠️ {supplier.name} נפל ל-{total:.2f}₪ (מינימום {supplier.minimum_order}₪, חסר {missing_amount:.2f}₪)."
+        )
+        lines.append("מחפש ספק חלופי לשאר המוצרים...")
+
+        _auto_transfer_remaining(
+            phone=phone,
+            order_request_id=order_request_id,
+            failing_supplier=supplier,
+            lines=lines,
+        )
+
+    send_whatsapp_message(phone, "\n".join(lines))
+    return HttpResponse(status=200)
+
+
+def _auto_transfer_remaining(phone: str, order_request_id: int, failing_supplier, lines: list):
+    """Move all remaining items from failing_supplier to the best available fallback."""
+    from apps.orders.models import OrderRequest, OrderRequestProduct
+    from apps.orders.services import find_full_coverage_fallback
+
+    result = find_full_coverage_fallback(
+        order_request_id=order_request_id,
+        failing_supplier_id=failing_supplier.id,
+    )
+
+    if not result:
+        lines.append(f"❌ לא נמצא ספק שיכול לכסות את כל המוצרים של {failing_supplier.name}.")
+        return
+
+    new_supplier = result["supplier"]
+
+    if not result["minimum_met"]:
+        lines.append(
+            f"⛔ {new_supplier.name} יכול לכסות הכל אך גם לא עומד במינימום "
+            f"(חסר {result['missing_amount']:.2f}₪). הוסף מוצרים נוספים."
+        )
+        return
+
+    # Execute the transfer
+    for item in result["items"]:
+        orp = item["orp"]
+        orp.supplier = new_supplier
+        orp.unit_price = item["new_price"]
+        orp.save(update_fields=["supplier", "unit_price"])
+        lines.append(f"  ↪ {orp.product.name} x{orp.quantity} → {new_supplier.name} ({item['new_price']}₪)")
+
+    lines.append(f"✅ כל המוצרים של {failing_supplier.name} הועברו ל-{new_supplier.name}.")
+
+    # Notify the new supplier
+    try:
+        order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+        profile = getattr(order.user, "profile", None)
+        company = profile.company_name if profile else ""
+        address = profile.company_address if profile else ""
+        company_phone_str = profile.company_phone if profile else ""
+    except OrderRequest.DoesNotExist:
+        company = address = company_phone_str = ""
+
+    msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה:"]
+    for item in result["items"]:
+        orp = item["orp"]
+        msg_lines.append(f"- {orp.product.name} x{orp.quantity} {orp.product.get_unit_display()}")
+    if address:
+        msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
+    if company_phone_str:
+        msg_lines.append(f"📞 {company_phone_str}")
+    msg_lines.append("\nאנא ענה *אישור* לאישור.")
+
+    send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
+    save_supplier_pending_order(
+        supplier_phone=new_supplier.whatsapp_number,
+        order_request_id=order_request_id,
+        products=[
+            {
+                "orp_id": item["orp"].id,
+                "product_name": item["orp"].product.name,
+                "quantity": str(item["orp"].quantity),
+                "unit": item["orp"].product.get_unit_display(),
+            }
+            for item in result["items"]
+        ],
+    )
+
+
+def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
+    """Execute approved fallback: update order items, send WhatsApp to new supplier."""
+    from apps.catalog.models import Supplier
+    from apps.orders.models import OrderRequest, OrderRequestProduct
+
+    _clear_fallback_state(phone)
+
+    order_request_id = state["order_request_id"]
+    redirects = state["redirects"]
+
+    by_supplier = defaultdict(list)
+    for r in redirects:
+        by_supplier[r["fallback_supplier_id"]].append(r)
+
+    success_lines = ["✅ ההעברה בוצעה:"]
+    below_minimum_msgs = []
+
+    for supplier_id, items in by_supplier.items():
+        try:
+            supplier = Supplier.objects.get(id=supplier_id)
+        except Supplier.DoesNotExist:
+            continue
+
+        # Check minimum with existing + redirected items BEFORE updating DB
+        existing_total = sum(
+            orp.quantity * orp.unit_price
+            for orp in OrderRequestProduct.objects.filter(
+                order_request_id=order_request_id, supplier=supplier
+            )
+        )
+        redirect_total = sum(
+            Decimal(r["quantity"]) * Decimal(r["fallback_price"]) for r in items
+        )
+        new_total = existing_total + redirect_total
+
+        if new_total < supplier.minimum_order:
+            missing_amount = supplier.minimum_order - new_total
+            below_minimum_msgs.append(
+                f"⛔ {supplier.name}: סה\"כ {new_total:.2f}₪, חסר {missing_amount:.2f}₪ למינימום ({supplier.minimum_order}₪)\n"
+                f"   הוסף מוצרים נוספים מ-{supplier.name} כדי לעמוד במינימום."
+            )
+            continue  # Skip this supplier — don't update DB or send message
+
+        # Update DB and collect items for supplier message
+        supplier_items_for_msg = []
+        for r in items:
+            try:
+                orp = OrderRequestProduct.objects.get(id=r["orp_id"])
+                orp.supplier = supplier
+                orp.unit_price = Decimal(r["fallback_price"])
+                orp.save(update_fields=["supplier", "unit_price"])
+                success_lines.append(f"  • {r['product_name']} x{r['quantity']} {r['unit']} → {supplier.name}")
+                supplier_items_for_msg.append(r)
+            except OrderRequestProduct.DoesNotExist:
+                pass
+
+        if not supplier_items_for_msg:
+            continue
+
+        # Build supplier WhatsApp message
+        try:
+            order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+            profile = getattr(order.user, "profile", None)
+            company = profile.company_name if profile else ""
+            address = profile.company_address if profile else ""
+            company_phone_str = profile.company_phone if profile else ""
+        except OrderRequest.DoesNotExist:
+            company = address = company_phone_str = ""
+
+        msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה:"]
+        for r in supplier_items_for_msg:
+            msg_lines.append(f"- {r['product_name']} x{r['quantity']} {r['unit']}")
+        if address:
+            msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
+        if company_phone_str:
+            msg_lines.append(f"📞 {company_phone_str}")
+        msg_lines.append("\nאנא ענה *אישור* לאישור.")
+
+        send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
+        save_supplier_pending_order(
+            supplier_phone=supplier.whatsapp_number,
+            order_request_id=order_request_id,
+            products=[
+                {
+                    "orp_id": r["orp_id"],
+                    "product_name": r["product_name"],
+                    "quantity": r["quantity"],
+                    "unit": r["unit"],
+                }
+                for r in supplier_items_for_msg
+            ],
+        )
+
+    reply = "\n".join(success_lines)
+    if below_minimum_msgs:
+        reply += "\n\n" + "\n".join(below_minimum_msgs)
+    send_whatsapp_message(phone, reply)
     return HttpResponse(status=200)
 
 
