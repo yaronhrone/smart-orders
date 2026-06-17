@@ -25,7 +25,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--step", type=int, default=1,
-                            help="1=full flow, 2=customer approval only, 3=show cache state, 4=auto-transfer test")
+                            help="1=full flow, 2=customer approval only, 3=show cache state, 4=auto-transfer test, 5=partial qty test")
         parser.add_argument("--cleanup", action="store_true",
                             help="Delete test orders and clear cache")
         parser.add_argument("--missing", default="חסר עגבניות, שאר אישור",
@@ -44,6 +44,9 @@ class Command(BaseCommand):
             return
         if step == 4:
             self._test_auto_transfer()
+            return
+        if step == 5:
+            self._test_partial_qty(options["customer_reply"])
             return
         if step == 2:
             self._step2_customer_approval(options["customer_reply"])
@@ -242,6 +245,68 @@ class Command(BaseCommand):
         # Cleanup
         order.refresh_from_db()
         self.stdout.write(f"  ניקוי הזמנה #{order.id}...")
+        OrderRequestProduct.objects.filter(order_request=order).delete()
+        order.delete()
+
+    def _test_partial_qty(self, customer_reply: str):
+        """
+        Scenario: order has 100kg tomatoes from supplier A.
+        Supplier A replies 'עגבניות 40' (can only give 40kg).
+        System detects partial (remaining 60kg) and finds supplier B for the rest.
+        Customer says כן/לא.
+        """
+        from apps.catalog.models import Supplier, Product
+        from apps.orders.models import OrderRequest, OrderRequestProduct
+        from apps.users.models import Profile
+        from apps.orders.whatsapp_webhook import save_supplier_pending_order
+
+        self.stdout.write(self.style.SUCCESS("\n══ בדיקת כמות חלקית ══\n"))
+
+        profile = Profile.objects.filter(phone=CUSTOMER_PHONE).select_related("user").first()
+        supplier_a = Supplier.objects.get(whatsapp_number=SUPPLIER_A_PHONE)
+        tomato = Product.objects.get(name="עגבניה")
+
+        # Order: 100kg tomatoes, but supplier A can only supply 40kg
+        order = OrderRequest.objects.create(
+            user=profile.user,
+            total_price=Decimal("490"),
+            status=OrderRequest.Status.SENT,
+        )
+        orp = OrderRequestProduct.objects.create(
+            order_request=order, product=tomato, supplier=supplier_a,
+            quantity=Decimal("100"), unit_price=Decimal("4.90"),
+        )
+        self.stdout.write(f"  הזמנה #{order.id}: 100ק\"ג עגבניה מ-{supplier_a.name} (סה\"כ ₪490)")
+
+        save_supplier_pending_order(
+            supplier_phone=SUPPLIER_A_PHONE,
+            order_request_id=order.id,
+            products=[{"orp_id": orp.id, "product_name": tomato.name, "quantity": "100", "unit": tomato.get_unit_display()}],
+        )
+
+        # Supplier confirms only 40kg
+        self.stdout.write(f"\n  📱 ספק A: \"עגבניות 40\"\n")
+        msgs1 = self._run_with_mock(
+            lambda: self._call_supplier_webhook(SUPPLIER_A_PHONE, supplier_a, "עגבניות 40")
+        )
+        self._print_messages(msgs1)
+
+        # Customer responds
+        self.stdout.write(self.style.WARNING("─" * 60))
+        self.stdout.write(f"  📱 לקוח: \"{customer_reply}\"\n")
+        msgs2 = self._run_with_mock(
+            lambda: self._call_user_webhook(CUSTOMER_PHONE, customer_reply)
+        )
+        self._print_messages(msgs2)
+
+        # Show DB state
+        order.refresh_from_db()
+        self.stdout.write(f"  📊 הזמנה #{order.id} לאחר עדכון: סה\"כ ₪{order.total_price}")
+        for o in OrderRequestProduct.objects.filter(order_request=order).select_related("product", "supplier"):
+            self.stdout.write(f"    • {o.product.name} x{o.quantity} — {o.supplier.name} @ {o.unit_price}₪")
+
+        # Cleanup
+        self.stdout.write(f"\n  ניקוי הזמנה #{order.id}...")
         OrderRequestProduct.objects.filter(order_request=order).delete()
         order.delete()
 

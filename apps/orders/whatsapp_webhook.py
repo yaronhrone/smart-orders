@@ -595,6 +595,14 @@ def save_supplier_pending_order(supplier_phone: str, order_request_id: int, prod
 
 def _save_fallback_state(phone: str, state: dict):
     cache.set(f"whatsapp_fallback:{phone}", json.dumps(state, cls=DecimalEncoder), timeout=FALLBACK_TTL)
+    try:
+        from apps.orders.tasks import handle_fallback_timeout
+        handle_fallback_timeout.apply_async(
+            args=[phone, state.get("order_request_id")],
+            countdown=FALLBACK_TTL,
+        )
+    except Exception as exc:
+        logger.warning("Could not schedule fallback timeout task: %s", exc)
 
 
 def _get_fallback_state(phone: str):
@@ -603,6 +611,20 @@ def _get_fallback_state(phone: str):
 
 def _clear_fallback_state(phone: str):
     cache.delete(f"whatsapp_fallback:{phone}")
+
+
+def _recalculate_order_total(order_request_id: int):
+    """Recalculate and persist order.total_price from its remaining ORPs."""
+    from apps.orders.models import OrderRequest, OrderRequestProduct
+    try:
+        total = sum(
+            (orp.quantity * orp.unit_price
+             for orp in OrderRequestProduct.objects.filter(order_request_id=order_request_id)),
+            Decimal(0),
+        )
+        OrderRequest.objects.filter(id=order_request_id).update(total_price=total)
+    except Exception as exc:
+        logger.error("_recalculate_order_total(%s): %s", order_request_id, exc)
 
 
 # ─────────────────────── Supplier reply parsing ───────────────────────
@@ -763,8 +785,33 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
         except (OrderRequestProduct.DoesNotExist, ValueError):
             pass
 
-    # Mark order APPROVED only if all items confirmed and nothing missing
-    if not missing:
+    # Detect partial confirmations (supplier can supply less than the requested qty)
+    # Edge case 2: split ORP — reduce original to confirmed_qty, find fallback for remainder
+    partial_products = []
+    for p in products:
+        orp_id = p["orp_id"]
+        if orp_id not in confirmed:
+            continue
+        requested_qty = Decimal(str(p["quantity"]))
+        confirmed_qty = confirmed[orp_id]
+        if confirmed_qty >= requested_qty:
+            continue
+        remaining_qty = requested_qty - confirmed_qty
+        try:
+            orp = OrderRequestProduct.objects.get(id=int(orp_id))
+            orp.quantity = confirmed_qty
+            orp.save(update_fields=["quantity"])
+            partial_products.append({
+                "orp_id": orp_id,
+                "product_name": p["product_name"],
+                "quantity": str(remaining_qty),
+                "unit": p["unit"],
+            })
+        except OrderRequestProduct.DoesNotExist:
+            pass
+
+    # Mark order APPROVED only if all items confirmed, none missing, none partial
+    if not missing and not partial_products:
         try:
             from apps.orders.models import OrderRequest
             total_orps = OrderRequestProduct.objects.filter(order_request_id=order_request_id).count()
@@ -787,8 +834,14 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
     # Acknowledge supplier
     ack_lines = ["✅ תודה! קיבלתי:"]
     for p in products:
-        if p["orp_id"] in confirmed:
-            ack_lines.append(f"  ✅ {p['product_name']} x{confirmed[p['orp_id']]} {p['unit']}")
+        orp_id = p["orp_id"]
+        if orp_id in confirmed:
+            c_qty = confirmed[orp_id]
+            r_qty = Decimal(str(p["quantity"]))
+            if c_qty < r_qty:
+                ack_lines.append(f"  ⚠️ {p['product_name']} {c_qty}/{r_qty} {p['unit']} (חלקי)")
+            else:
+                ack_lines.append(f"  ✅ {p['product_name']} x{c_qty} {p['unit']}")
         elif p in missing:
             ack_lines.append(f"  ❌ {p['product_name']} — חסר")
     if cutoff_time:
@@ -807,25 +860,38 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
             if customer_phone:
                 customer_lines = [f"✅ *{supplier.name}* אישר:"]
                 for p in products:
-                    if p["orp_id"] in confirmed:
-                        customer_lines.append(f"  • {p['product_name']} x{confirmed[p['orp_id']]} {p['unit']}")
+                    orp_id_p = p["orp_id"]
+                    if orp_id_p in confirmed:
+                        c_qty = confirmed[orp_id_p]
+                        r_qty = Decimal(str(p["quantity"]))
+                        if c_qty < r_qty:
+                            customer_lines.append(f"  • {p['product_name']} {c_qty}/{r_qty} {p['unit']} (חלקי)")
+                        else:
+                            customer_lines.append(f"  • {p['product_name']} x{c_qty} {p['unit']}")
                 customer_lines.append(f"\nמספר הזמנה: #{order_request_id}")
                 send_whatsapp_message(customer_phone, "\n".join(customer_lines))
     except Exception as exc:
         logger.error("Failed to notify customer after supplier confirmation: %s", exc)
 
-    # Find fallback suppliers for missing items and notify customer
-    if missing:
-        _handle_missing_items(supplier, missing, order_request_id)
+    # Find fallback suppliers for missing/partial items and notify customer
+    if missing or partial_products:
+        _handle_missing_items(supplier, missing, order_request_id, partial_products=partial_products)
 
     return HttpResponse(status=200)
 
 
-def _handle_missing_items(original_supplier, missing_products: list, order_request_id: int):
-    """Find fallback suppliers for items the supplier can't fulfill and notify the customer."""
+def _handle_missing_items(original_supplier, missing_products: list, order_request_id: int, partial_products: list = None):
+    """
+    Find fallback suppliers for items the supplier can't fulfill and notify the customer.
+    missing_products: fully missing (entire ORP needs redirect).
+    partial_products: supplier confirmed partial qty; remaining qty needs fallback (ORP already reduced).
+    Edge case 5: if no fallback exists for a product, auto-remove it from the order.
+    """
     from apps.catalog.models import Product
     from apps.orders.models import OrderRequest, OrderRequestProduct
     from apps.orders.services import find_fallback_for_product
+
+    partial_products = partial_products or []
 
     order = (
         OrderRequest.objects
@@ -842,12 +908,14 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
         return
 
     redirects = []
-    no_fallback = []
+    no_fallback = []  # list of {"product_name", "quantity", "unit", "partial"}
+    auto_removed = False
 
+    # ── Process fully missing items ──
     for mp in missing_products:
         product = Product.objects.filter(name=mp["product_name"]).first()
         if not product:
-            no_fallback.append(mp["product_name"])
+            no_fallback.append({"product_name": mp["product_name"], "quantity": mp.get("quantity", ""), "unit": mp.get("unit", "")})
             continue
 
         existing_orp = OrderRequestProduct.objects.filter(
@@ -863,14 +931,19 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
         )
 
         if not fallback:
-            no_fallback.append(mp["product_name"])
+            # Edge case 5: no supplier at all — auto-remove from order immediately
+            if existing_orp:
+                existing_orp.delete()
+                auto_removed = True
+            no_fallback.append({"product_name": mp["product_name"], "quantity": mp.get("quantity", ""), "unit": mp.get("unit", "")})
             continue
 
         redirects.append({
+            "type": "missing",
             "orp_id": mp["orp_id"],
             "product_name": mp["product_name"],
             "quantity": mp["quantity"],
-            "unit": mp["unit"],
+            "unit": mp.get("unit", ""),
             "original_supplier_id": original_supplier.id,
             "original_supplier_name": original_supplier.name,
             "original_price": original_price,
@@ -882,18 +955,80 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
             "missing_amount": str(fallback["missing_amount"]),
         })
 
-    lines = [f"⚠️ *{original_supplier.name}* דיווח על פריטים חסרים:"]
-    for r in redirects:
-        lines.append(
-            f"\n• *{r['product_name']}* x{r['quantity']} {r['unit']}"
-            f"\n  ❌ {r['original_supplier_name']} — חסר"
-            f"\n  ✅ {r['fallback_supplier_name']} — {r['fallback_price']}₪ (במקום {r['original_price']}₪)"
+    # ── Process partially confirmed items (edge case 2) ──
+    for pp in partial_products:
+        try:
+            orp = OrderRequestProduct.objects.select_related("product").get(id=int(pp["orp_id"]))
+        except OrderRequestProduct.DoesNotExist:
+            continue
+        product = orp.product
+
+        fallback = find_fallback_for_product(
+            product=product,
+            excluded_supplier_id=original_supplier.id,
+            order_request_id=order_request_id,
+            quantity=Decimal(str(pp["quantity"])),
         )
+
+        if not fallback:
+            no_fallback.append({
+                "product_name": pp["product_name"],
+                "quantity": pp["quantity"],
+                "unit": pp.get("unit", ""),
+                "partial": True,
+            })
+            continue
+
+        redirects.append({
+            "type": "partial",
+            "orp_id": pp["orp_id"],  # original ORP already reduced to confirmed_qty
+            "product_name": pp["product_name"],
+            "quantity": pp["quantity"],  # remaining (unconfirmed) qty
+            "unit": pp.get("unit", ""),
+            "original_supplier_id": original_supplier.id,
+            "original_supplier_name": original_supplier.name,
+            "original_price": str(orp.unit_price),
+            "fallback_supplier_id": fallback["supplier"].id,
+            "fallback_supplier_name": fallback["supplier"].name,
+            "fallback_supplier_whatsapp": fallback["supplier"].whatsapp_number,
+            "fallback_price": str(fallback["price"]),
+            "minimum_met": fallback["minimum_met"],
+            "missing_amount": str(fallback["missing_amount"]),
+        })
+
+    # Edge case 1: recalculate total after any auto-removals
+    if auto_removed:
+        _recalculate_order_total(order_request_id)
+
+    # ── Build customer message ──
+    lines = [f"⚠️ *{original_supplier.name}* דיווח:"]
+    for r in redirects:
+        if r["type"] == "partial":
+            lines.append(
+                f"\n• *{r['product_name']}* — ספק אישר רק חלק מהכמות"
+                f"\n  נשארו {r['quantity']} {r['unit']} שטרם סופקו"
+                f"\n  ✅ {r['fallback_supplier_name']} יכול לספק את הנותר ב-{r['fallback_price']}₪"
+            )
+        else:
+            lines.append(
+                f"\n• *{r['product_name']}* x{r['quantity']} {r['unit']}"
+                f"\n  ❌ {r['original_supplier_name']} — חסר"
+                f"\n  ✅ {r['fallback_supplier_name']} — {r['fallback_price']}₪ (במקום {r['original_price']}₪)"
+            )
         if not r["minimum_met"]:
             lines.append(f"  ⚠️ חסר עוד {Decimal(r['missing_amount']):.2f}₪ למינימום ספק זה")
 
-    if no_fallback:
-        lines.append(f"\n❌ אין ספק חלופי עבור: {', '.join(no_fallback)}")
+    for nf in no_fallback:
+        if nf.get("partial"):
+            lines.append(
+                f"\n• *{nf['product_name']}* {nf['quantity']} {nf['unit']} — "
+                "לא נמצא ספק חלופי לכמות הנותרת"
+            )
+        else:
+            lines.append(
+                f"\n• *{nf['product_name']}* x{nf['quantity']} {nf['unit']} — "
+                "חסר המוצר הזה במלאי לכל הספקים, הוסר מההזמנה אוטומטית"
+            )
 
     if redirects:
         lines.append("\nענה *כן* להעברה לספק חלופי, *לא* לביטול.")
@@ -902,8 +1037,9 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
             "original_supplier_name": original_supplier.name,
             "redirects": redirects,
         })
-    else:
-        lines.append("\nאין ספק חלופי זמין לפריטים אלו.")
+    elif not lines[1:]:
+        # Only auto-removed items with no fallback — nothing to confirm
+        pass
 
     send_whatsapp_message(customer_phone, "\n".join(lines))
 
@@ -948,13 +1084,22 @@ def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
     affected_supplier_ids = set()
 
     for r in redirects:
-        try:
-            orp = OrderRequestProduct.objects.get(id=r["orp_id"])
-            affected_supplier_ids.add(orp.supplier_id)
-            orp.delete()
-            removed_lines.append(f"  • {r['product_name']} x{r['quantity']} {r['unit']} הוסר")
-        except OrderRequestProduct.DoesNotExist:
-            pass
+        if r.get("type") == "partial":
+            # Original ORP was already reduced to confirmed_qty; just skip creating new ORP
+            removed_lines.append(
+                f"  • {r['product_name']} {r['quantity']} {r.get('unit', '')} (כמות חלקית — לא תוזמן)"
+            )
+        else:
+            try:
+                orp = OrderRequestProduct.objects.get(id=r["orp_id"])
+                affected_supplier_ids.add(orp.supplier_id)
+                orp.delete()
+                removed_lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} הוסר")
+            except OrderRequestProduct.DoesNotExist:
+                pass
+
+    # Edge case 1: update total_price after removals
+    _recalculate_order_total(order_request_id)
 
     lines = ["🗑️ הבנתי — הפריטים הבאים הוסרו מההזמנה:"]
     lines += removed_lines
@@ -1030,6 +1175,9 @@ def _auto_transfer_remaining(phone: str, order_request_id: int, failing_supplier
         lines.append(f"  ↪ {orp.product.name} x{orp.quantity} → {new_supplier.name} ({item['new_price']}₪)")
 
     lines.append(f"✅ כל המוצרים של {failing_supplier.name} הועברו ל-{new_supplier.name}.")
+
+    # Edge case 1: recalculate total after price changes
+    _recalculate_order_total(order_request_id)
 
     # Notify the new supplier
     try:
@@ -1113,15 +1261,35 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
         # Update DB and collect items for supplier message
         supplier_items_for_msg = []
         for r in items:
-            try:
-                orp = OrderRequestProduct.objects.get(id=r["orp_id"])
-                orp.supplier = supplier
-                orp.unit_price = Decimal(r["fallback_price"])
-                orp.save(update_fields=["supplier", "unit_price"])
-                success_lines.append(f"  • {r['product_name']} x{r['quantity']} {r['unit']} → {supplier.name}")
-                supplier_items_for_msg.append(r)
-            except OrderRequestProduct.DoesNotExist:
-                pass
+            if r.get("type") == "partial":
+                # Edge case 2: create NEW ORP for remaining qty — original ORP already reduced
+                try:
+                    original_orp = OrderRequestProduct.objects.select_related("product").get(id=r["orp_id"])
+                    new_orp = OrderRequestProduct.objects.create(
+                        order_request_id=order_request_id,
+                        product=original_orp.product,
+                        supplier=supplier,
+                        quantity=Decimal(r["quantity"]),
+                        unit_price=Decimal(r["fallback_price"]),
+                    )
+                    success_lines.append(
+                        f"  • {r['product_name']} {r['quantity']} {r.get('unit', '')} (חלקי) → {supplier.name}"
+                    )
+                    # Build redirect entry for supplier pending cache using new ORP id
+                    supplier_items_for_msg.append({**r, "orp_id": new_orp.id, "quantity": r["quantity"]})
+                except OrderRequestProduct.DoesNotExist:
+                    pass
+            else:
+                # Full redirect: change existing ORP to new supplier
+                try:
+                    orp = OrderRequestProduct.objects.get(id=r["orp_id"])
+                    orp.supplier = supplier
+                    orp.unit_price = Decimal(r["fallback_price"])
+                    orp.save(update_fields=["supplier", "unit_price"])
+                    success_lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} → {supplier.name}")
+                    supplier_items_for_msg.append(r)
+                except OrderRequestProduct.DoesNotExist:
+                    pass
 
         if not supplier_items_for_msg:
             continue
@@ -1138,7 +1306,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
 
         msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה:"]
         for r in supplier_items_for_msg:
-            msg_lines.append(f"- {r['product_name']} x{r['quantity']} {r['unit']}")
+            msg_lines.append(f"- {r['product_name']} x{r['quantity']} {r.get('unit', '')}")
         if address:
             msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
         if company_phone_str:
@@ -1154,11 +1322,14 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
                     "orp_id": r["orp_id"],
                     "product_name": r["product_name"],
                     "quantity": r["quantity"],
-                    "unit": r["unit"],
+                    "unit": r.get("unit", ""),
                 }
                 for r in supplier_items_for_msg
             ],
         )
+
+    # Edge case 1: recalculate total after all redirect changes
+    _recalculate_order_total(order_request_id)
 
     reply = "\n".join(success_lines)
     if below_minimum_msgs:
