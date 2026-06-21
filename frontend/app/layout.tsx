@@ -5,7 +5,7 @@ import "./globals.css";
 const geist = Geist({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Smart Orders",
+  title: "Smart Order",
   description: "מערכת הזמנות חכמה",
 };
 

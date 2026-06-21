@@ -32,7 +32,7 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
       dir="rtl"
     >
       <div className="px-4 py-5 border-b border-gray-100">
-        <p className="text-base font-bold text-gray-900">Smart Orders</p>
+        <p className="text-base font-bold text-gray-900">Smart Order</p>
         {me && (
           <Link
             href="/dashboard/profile"
