@@ -4,8 +4,7 @@ from collections import defaultdict
 
 from celery import shared_task
 
-from apps.orders.whatsapp import send_whatsapp_message
-from apps.orders.whatsapp_webhook import save_supplier_pending_order
+from apps.orders.whatsapp import send_whatsapp_message, save_supplier_pending_order
 
 logger = logging.getLogger(__name__)
 

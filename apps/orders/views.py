@@ -62,6 +62,13 @@ class PlaceOrderView(APIView):
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            from apps.orders.whatsapp import notify_suppliers_for_order
+            notify_suppliers_for_order(order)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("Failed to notify suppliers for order %s: %s", order.id, exc)
+
         response_data = {
             "order_id": order.id,
             "status": order.status,

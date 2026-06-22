@@ -21,8 +21,8 @@ from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfir
 from apps.orders.whatsapp_webhook import (
     _parse_supplier_reply,
     save_pending_order,
-    save_supplier_pending_order,
 )
+from apps.orders.whatsapp import save_supplier_pending_order
 from apps.users.models import Profile
 
 User = get_user_model()
@@ -352,16 +352,18 @@ class UserConfirmationFlowTests(TestCase):
 
         self.assertIsNone(cache.get("whatsapp_order:+972505555555"))
 
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
-    def test_confirmation_sends_supplier_whatsapp(self, mock_send):
+    def test_confirmation_sends_supplier_whatsapp(self, mock_send_webhook, mock_send_whatsapp):
         """Supplier receives a WhatsApp message when user confirms."""
         self._seed_cache("+972505555555")
 
         self._post("+972505555555", "א")
 
-        # Two calls: one to supplier (order message), one to user (confirmation)
-        self.assertGreaterEqual(mock_send.call_count, 2)
-        all_calls_text = " ".join(str(c) for c in mock_send.call_args_list)
+        # Supplier order message goes through whatsapp.py; user confirmation through whatsapp_webhook.py
+        all_calls_text = " ".join(
+            str(c) for c in mock_send_webhook.call_args_list + mock_send_whatsapp.call_args_list
+        )
         self.assertIn("להזמין", all_calls_text)
 
     @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")

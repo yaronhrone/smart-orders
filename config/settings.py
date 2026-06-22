@@ -216,6 +216,7 @@ AUTH_USER_MODEL = "users.User"
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+WHATSAPP_OVERRIDE_NUMBER = os.environ.get("WHATSAPP_OVERRIDE_NUMBER")
 
 # Shared secret for the local Market Agent → server push.
 # Set MARKET_AGENT_SECRET in .env.  If empty, the push endpoint is disabled.

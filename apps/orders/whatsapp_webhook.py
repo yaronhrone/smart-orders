@@ -10,14 +10,13 @@ from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 
-from apps.orders.whatsapp import send_whatsapp_message
+from apps.orders.whatsapp import send_whatsapp_message, save_supplier_pending_order, notify_suppliers_for_order
 
 logger = logging.getLogger(__name__)
 
-SESSION_TTL = 3600          # שעה
-SUPPLIER_SESSION_TTL = 86400  # 24 שעות
-CUTOFF_TTL = 86400           # שמור cutoff עד 24 שעות
-FALLBACK_TTL = 3600          # שעה להחלטת לקוח על ספק חלופי
+SESSION_TTL = 3600
+CUTOFF_TTL = 86400
+FALLBACK_TTL = 3600
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -68,7 +67,6 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
     from django.contrib.auth import get_user_model
     from apps.catalog.models import Product
     from apps.orders.services import build_order
-    from apps.orders.models import OrderRequest
 
     user_id = data.get("user_id")
     raw_products = data.get("products")
@@ -88,45 +86,7 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
             for p in raw_products
         ]
         order, _ = build_order(user, region, products, scenario=scenario)
-        order.status = OrderRequest.Status.SENT
-        order.save(update_fields=["status"])
-
-        profile = getattr(user, "profile", None)
-        company_name = profile.company_name if profile else ""
-        company_address = profile.company_address if profile else ""
-        company_phone = profile.company_phone if profile else ""
-
-        by_supplier = defaultdict(list)
-        for orp in order.products.select_related("product", "supplier").all():
-            by_supplier[orp.supplier].append(orp)
-
-        for supplier, items in by_supplier.items():
-            lines = [f"שלום, *{company_name}* מבקש להזמין:"]
-            for item in items:
-                lines.append(
-                    f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}"
-                )
-            if company_address:
-                lines.append(f"\n📍 *כתובת למשלוח:* {company_address}")
-            if company_phone:
-                lines.append(f"📞 {company_phone}")
-            lines.append("\nאנא ענה *אישור* לאישור הכל, או שלח כמויות מעודכנות.")
-            send_whatsapp_message(supplier.whatsapp_number, "\n".join(lines))
-
-            save_supplier_pending_order(
-                supplier_phone=supplier.whatsapp_number,
-                order_request_id=order.id,
-                products=[
-                    {
-                        "orp_id": item.id,
-                        "product_name": item.product.name,
-                        "quantity": str(item.quantity),
-                        "unit": item.product.get_unit_display(),
-                    }
-                    for item in items
-                ],
-            )
-
+        notify_suppliers_for_order(order)
     except Exception as exc:
         logger.error("Failed to build/send confirmed order for user %s: %s", user_id, exc)
 
@@ -577,18 +537,6 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
 
     send_whatsapp_message(phone, "\n".join(reply_lines))
     return HttpResponse(status=200)
-
-
-# ─────────────────────── Supplier flow helpers ───────────────────────
-
-def save_supplier_pending_order(supplier_phone: str, order_request_id: int, products: list):
-    """
-    Call this after sending an order to a supplier so the webhook can match the reply.
-    products: list of dicts with keys: orp_id, product_name, quantity, unit
-    """
-    key = f"whatsapp_supplier_pending:{supplier_phone}"
-    data = {"order_request_id": order_request_id, "products": products}
-    cache.set(key, json.dumps(data, cls=DecimalEncoder), timeout=SUPPLIER_SESSION_TTL)
 
 
 # ─────────────────────── Fallback state helpers ───────────────────────
@@ -1350,10 +1298,8 @@ def whatsapp_webhook(request):
     phone = from_raw.replace("whatsapp:", "")
 
     from apps.catalog.models import Supplier
-    try:
-        supplier = Supplier.objects.get(whatsapp_number=phone)
+    supplier = Supplier.objects.filter(whatsapp_number=phone).first()
+    if supplier:
         return _handle_supplier_flow(phone, supplier, body)
-    except Supplier.DoesNotExist:
-        pass
 
     return _handle_user_flow(phone, body)

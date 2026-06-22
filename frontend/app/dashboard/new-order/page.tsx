@@ -7,7 +7,6 @@ import {
   fetchProducts,
   suggestOrder,
   placeOrder,
-  updateOrderStatus,
   Product,
   SuggestOrderResponse,
   PlaceOrderResponse,
@@ -42,15 +41,7 @@ export default function NewOrderPage() {
   const [catalog, setCatalog] = useState<Product[]>([]);
 
   // Step 1
-  const [items, setItems] = useState<OrderItem[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const saved = localStorage.getItem("new-order-items");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [items, setItems] = useState<OrderItem[]>([]);
   const [search, setSearch] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -64,14 +55,16 @@ export default function NewOrderPage() {
   const [placed, setPlaced] = useState<PlaceOrderResponse | null>(null);
   const [placing, setPlacing] = useState(false);
   const [placeError, setPlaceError] = useState("");
-  const [markingSent, setMarkingSent] = useState(false);
-  const [markedSent, setMarkedSent] = useState(false);
 
   useEffect(() => {
     fetchMe()
       .then((me) => { if (me.profile?.region) setRegion(me.profile.region); })
       .catch(() => {});
     fetchProducts().then(setCatalog).catch(() => {});
+    try {
+      const saved = localStorage.getItem("new-order-items");
+      if (saved) setItems(JSON.parse(saved));
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -378,58 +371,12 @@ export default function NewOrderPage() {
             <p className="text-sm text-green-700 mt-1">
               הזמנה #{placed.order_id} — {formatCurrency(placed.total_price)}
             </p>
+            <p className="text-sm text-green-600 mt-2">הודעות WhatsApp נשלחו לספקים אוטומטית</p>
           </div>
-
-          {placed.whatsapp_links.length > 0 && (
-            <div>
-              <p className="text-sm font-semibold text-gray-700 mb-3">שלח הזמנה לספקים:</p>
-              <div className="space-y-2">
-                {placed.whatsapp_links.map((wl) => (
-                  <a
-                    key={wl.supplier_id}
-                    href={wl.whatsapp_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-between bg-green-600 text-white px-4 py-3 rounded-xl hover:bg-green-700 transition"
-                  >
-                    <div>
-                      <p className="font-medium">{wl.supplier_name}</p>
-                      <p className="text-xs text-green-200">{wl.phone}</p>
-                    </div>
-                    <span className="text-sm font-medium bg-white/20 px-3 py-1 rounded-lg">
-                      פתח WhatsApp
-                    </span>
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {!markedSent ? (
-            <button
-              onClick={async () => {
-                setMarkingSent(true);
-                try {
-                  await updateOrderStatus(placed.order_id, "sent");
-                  setMarkedSent(true);
-                } finally {
-                  setMarkingSent(false);
-                }
-              }}
-              disabled={markingSent}
-              className="w-full bg-blue-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
-            >
-              {markingSent ? "מעדכן..." : "✅ שלחתי לכל הספקים"}
-            </button>
-          ) : (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-center text-sm text-blue-700 font-medium">
-              ההזמנה נוספה ללוח הבקרה
-            </div>
-          )}
 
           <div className="flex gap-3">
             <button
-              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); setMarkedSent(false); }}
+              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); }}
               className="flex-1 border border-gray-300 rounded-xl py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition"
             >
               הזמנה חדשה

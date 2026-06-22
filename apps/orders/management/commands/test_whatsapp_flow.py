@@ -67,7 +67,7 @@ class Command(BaseCommand):
         from apps.catalog.models import Supplier, Product
         from apps.orders.models import OrderRequest, OrderRequestProduct
         from apps.users.models import Profile
-        from apps.orders.whatsapp_webhook import save_supplier_pending_order
+        from apps.orders.whatsapp import save_supplier_pending_order
 
         self.stdout.write(self.style.SUCCESS("\n══ שלב 1: יצירת הזמנה ← ספק מדווח על חסר ══\n"))
 
@@ -190,7 +190,7 @@ class Command(BaseCommand):
         from apps.catalog.models import Supplier, Product
         from apps.orders.models import OrderRequest, OrderRequestProduct
         from apps.users.models import Profile
-        from apps.orders.whatsapp_webhook import save_supplier_pending_order
+        from apps.orders.whatsapp import save_supplier_pending_order
 
         self.stdout.write(self.style.SUCCESS("\n══ בדיקת Auto-Transfer ══\n"))
 
@@ -258,7 +258,7 @@ class Command(BaseCommand):
         from apps.catalog.models import Supplier, Product
         from apps.orders.models import OrderRequest, OrderRequestProduct
         from apps.users.models import Profile
-        from apps.orders.whatsapp_webhook import save_supplier_pending_order
+        from apps.orders.whatsapp import save_supplier_pending_order
 
         self.stdout.write(self.style.SUCCESS("\n══ בדיקת כמות חלקית ══\n"))
 
