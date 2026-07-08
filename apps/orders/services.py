@@ -87,7 +87,7 @@ def _validate_all_products_present(assignments, products):
 
 
 def _get_available_suppliers(user, region):
-    return Supplier.objects.all()
+    return Supplier.objects.filter(region=region)
 
 
 def _prices_for_product(product, suppliers):
@@ -361,6 +361,9 @@ def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int)
     """
     from apps.orders.models import OrderRequestProduct
 
+    order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+    customer_region = getattr(getattr(order.user, "profile", None), "region", None)
+
     orps = list(
         OrderRequestProduct.objects
         .filter(order_request_id=order_request_id, supplier_id=failing_supplier_id)
@@ -369,17 +372,19 @@ def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int)
     if not orps:
         return None
 
-    # For each ORP, collect alternative (supplier, price) options
+    # For each ORP, collect alternative (supplier, price) options filtered by customer region
     product_alternatives = {}
     for orp in orps:
-        options = [
-            (sp.supplier, sp.price_per_unit)
-            for sp in SupplierProduct.objects
+        sp_qs = (
+            SupplierProduct.objects
             .filter(product=orp.product, price_per_unit__isnull=False)
             .exclude(supplier_id=failing_supplier_id)
             .select_related("supplier")
             .order_by("price_per_unit")
-        ]
+        )
+        if customer_region:
+            sp_qs = sp_qs.filter(supplier__region=customer_region)
+        options = [(sp.supplier, sp.price_per_unit) for sp in sp_qs]
         product_alternatives[orp.id] = options
 
     # Build coverage: which suppliers cover which orp_ids
@@ -436,13 +441,19 @@ def find_fallback_for_product(product, excluded_supplier_id: int, order_request_
     """
     from apps.orders.models import OrderRequestProduct
 
-    candidates = (
+    order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+    customer_region = getattr(getattr(order.user, "profile", None), "region", None)
+
+    sp_qs = (
         SupplierProduct.objects
         .filter(product=product, price_per_unit__isnull=False)
         .exclude(supplier_id=excluded_supplier_id)
         .select_related("supplier")
         .order_by("price_per_unit")
     )
+    if customer_region:
+        sp_qs = sp_qs.filter(supplier__region=customer_region)
+    candidates = sp_qs
 
     if not candidates.exists():
         return None
