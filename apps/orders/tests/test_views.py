@@ -51,8 +51,8 @@ class OrderListViewTests(APITestCase):
 
     def test_returns_only_own_orders(self):
         """User sees only their own orders."""
-        make_order(self.user)
-        make_order(self.other)
+        make_order(self.user, status_val=OrderRequest.Status.SENT)
+        make_order(self.other, status_val=OrderRequest.Status.SENT)
 
         res = self.client.get(reverse("orders-list"))
 
@@ -61,7 +61,7 @@ class OrderListViewTests(APITestCase):
 
     def test_returns_correct_fields(self):
         """Response includes id, status, total_price, created_at, item_count."""
-        order = make_order(self.user, total="50.00")
+        order = make_order(self.user, total="50.00", status_val=OrderRequest.Status.SENT)
         product = make_product("עגבנייה")
         supplier = make_supplier("ספק א")
         make_order_item(order, product, supplier)
@@ -86,8 +86,8 @@ class OrderListViewTests(APITestCase):
 
     def test_ordered_newest_first(self):
         """Orders are returned newest first."""
-        o1 = make_order(self.user, total="10.00")
-        o2 = make_order(self.user, total="20.00")
+        o1 = make_order(self.user, total="10.00", status_val=OrderRequest.Status.SENT)
+        o2 = make_order(self.user, total="20.00", status_val=OrderRequest.Status.SENT)
 
         res = self.client.get(reverse("orders-list"))
 

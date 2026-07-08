@@ -68,39 +68,40 @@ class ParseSupplierReplyTests(TestCase):
 
     def test_confirm_word_returns_all_products(self):
         """'אישור' returns all products at their full requested quantity."""
-        result = _parse_supplier_reply("אישור", self._products())
-        self.assertEqual(result[1], Decimal("20"))
-        self.assertEqual(result[2], Decimal("15"))
+        confirmed, _ = _parse_supplier_reply("אישור", self._products())
+        self.assertEqual(confirmed[1], Decimal("20"))
+        self.assertEqual(confirmed[2], Decimal("15"))
 
     def test_ok_english_confirms_all(self):
-        result = _parse_supplier_reply("ok", self._products())
-        self.assertEqual(len(result), 2)
+        confirmed, _ = _parse_supplier_reply("ok", self._products())
+        self.assertEqual(len(confirmed), 2)
 
     def test_thumbsup_emoji_confirms_all(self):
-        result = _parse_supplier_reply("👍", self._products())
-        self.assertEqual(len(result), 2)
+        confirmed, _ = _parse_supplier_reply("👍", self._products())
+        self.assertEqual(len(confirmed), 2)
 
     def test_partial_reply_by_name(self):
         """Product name followed by number updates that product's qty."""
-        result = _parse_supplier_reply("עגבניה: 18", self._products())
-        self.assertEqual(result[1], Decimal("18"))
-        self.assertNotIn(2, result)
+        confirmed, _ = _parse_supplier_reply("עגבניה: 18", self._products())
+        self.assertEqual(confirmed[1], Decimal("18"))
+        self.assertNotIn(2, confirmed)
 
     def test_single_product_lone_number(self):
         """Single product + bare number → treated as its quantity."""
         products = [{"orp_id": 5, "product_name": "עגבניה", "quantity": "10", "unit": 'ק"ג'}]
-        result = _parse_supplier_reply("25", products)
-        self.assertEqual(result[5], Decimal("25"))
+        confirmed, _ = _parse_supplier_reply("25", products)
+        self.assertEqual(confirmed[5], Decimal("25"))
 
     def test_unrecognized_reply_returns_empty(self):
         """Gibberish → no confirmations."""
-        result = _parse_supplier_reply("בדיקה בדיקה", self._products())
-        self.assertEqual(result, {})
+        confirmed, missing = _parse_supplier_reply("בדיקה בדיקה", self._products())
+        self.assertEqual(confirmed, {})
+        self.assertEqual(missing, [])
 
     def test_single_product_lone_number_not_applied_to_multi(self):
         """Lone number is NOT auto-applied when there are multiple products."""
-        result = _parse_supplier_reply("25", self._products())
-        self.assertEqual(result, {})
+        confirmed, _ = _parse_supplier_reply("25", self._products())
+        self.assertEqual(confirmed, {})
 
 
 # ─────────────────────── Webhook routing ───────────────────────
@@ -297,8 +298,9 @@ class UserConfirmationFlowTests(TestCase):
             "Body": body,
         })
 
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
-    def test_reply_aleph_builds_cheapest_order(self, mock_send):
+    def test_reply_aleph_builds_cheapest_order(self, mock_send_webhook, mock_send_whatsapp):
         """Replying 'א' selects cheapest scenario and builds DB order."""
         self._seed_cache("+972505555555")
 
@@ -366,8 +368,9 @@ class UserConfirmationFlowTests(TestCase):
         )
         self.assertIn("להזמין", all_calls_text)
 
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
-    def test_confirmation_saves_supplier_pending_in_cache(self, mock_send):
+    def test_confirmation_saves_supplier_pending_in_cache(self, mock_send_webhook, mock_send_whatsapp):
         """After confirmation, supplier's pending order is cached for their reply."""
         self._seed_cache("+972505555555")
 
@@ -451,8 +454,9 @@ class SupplierConfirmationFlowTests(TestCase):
         """After confirming, supplier receives a summary of the confirmed quantities."""
         self._post_supplier("כן")
 
-        mock_send.assert_called_once()
-        msg = mock_send.call_args[0][1]
+        # First call is the supplier ack; customer notification may add a second call
+        self.assertGreaterEqual(mock_send.call_count, 1)
+        msg = mock_send.call_args_list[0][0][1]
         self.assertIn("✅", msg)
         self.assertIn("עגבניה", msg)
 
