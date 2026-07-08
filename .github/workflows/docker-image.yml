@@ -1,18 +1,66 @@
-name: Docker Image CI
+name: CI/CD → AWS EC2
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
 
 jobs:
-
-  build:
-
+  test:
     runs-on: ubuntu-latest
-
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements.dev.txt
+      - name: Run Django tests
+        env:
+          DB_HOST: localhost
+          DB_NAME: testdb
+          DB_USER: testuser
+          DB_PASS: testpass
+          DB_PORT: 5432
+          REDIS_HOST: localhost
+          DJANGO_SECRET_KEY: ci-only-secret-key
+          DEBUG: 1
+          TWILIO_ACCOUNT_SID: dummy
+          TWILIO_AUTH_TOKEN: dummy
+          TWILIO_WHATSAPP_NUMBER: "+10000000000"
+          OPENAI_API_KEY: dummy
+          MARKET_AGENT_SECRET: dummy
+        run: python manage.py test --verbosity=2
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/smart-orders
+            git pull origin main
+            docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            docker image prune -f
