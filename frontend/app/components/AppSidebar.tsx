@@ -28,11 +28,11 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
 
   return (
     <aside
-      className="w-56 fixed top-0 right-0 bottom-0 bg-white border-l border-gray-200 flex flex-col z-20"
+      className="w-56 fixed top-0 right-0 bottom-0 backdrop-blur-md bg-white/80 border-l border-white/40 flex flex-col z-20 shadow-xl"
       dir="rtl"
     >
-      <div className="px-4 py-5 border-b border-gray-100">
-        <p className="text-base font-bold text-gray-900">Smart Order</p>
+      <div className="px-4 py-5 border-b border-gray-200/60">
+        <p className="text-base font-bold text-green-800">🌿 Smart Order</p>
         {me && (
           <Link
             href="/dashboard/profile"

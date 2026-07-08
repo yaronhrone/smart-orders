@@ -29,7 +29,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="min-h-screen bg-gray-50" dir="rtl">
+    <div className="min-h-screen relative z-10" dir="rtl">
       <AppSidebar me={me} onLogout={logout} />
       <div className="mr-56 min-h-screen">{children}</div>
     </div>

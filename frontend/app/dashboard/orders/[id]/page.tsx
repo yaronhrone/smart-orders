@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { fetchOrderDetail, OrderDetail } from "../../../lib/api";
+import { fetchOrderDetail, updateOrderStatus, OrderDetail } from "../../../lib/api";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:   { label: "ממתין",  color: "bg-yellow-100 text-yellow-800" },
@@ -46,10 +46,24 @@ export default function OrderDetailPage() {
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [error, setError] = useState("");
+  const [marking, setMarking] = useState(false);
 
   useEffect(() => {
     fetchOrderDetail(id).then(setOrder).catch(() => setError("שגיאה בטעינת ההזמנה"));
   }, [id]);
+
+  async function handleMarkDelivered() {
+    if (!order) return;
+    setMarking(true);
+    try {
+      await updateOrderStatus(order.id, "delivered");
+      setOrder({ ...order, status: "delivered" });
+    } catch {
+      setError("שגיאה בעדכון הסטטוס");
+    } finally {
+      setMarking(false);
+    }
+  }
 
   if (error) {
     return (
@@ -103,6 +117,17 @@ export default function OrderDetailPage() {
           <p className="text-2xl font-bold text-gray-900">{formatCurrency(order.total_price)}</p>
         </div>
       </div>
+
+      {/* קיבלתי button */}
+      {(order.status === "sent" || order.status === "approved") && (
+        <button
+          onClick={handleMarkDelivered}
+          disabled={marking}
+          className="w-full bg-green-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-green-700 disabled:opacity-50 transition"
+        >
+          {marking ? "מעדכן..." : "✅ קיבלתי את ההזמנה"}
+        </button>
+      )}
 
       {/* Per-supplier breakdown */}
       {groups.map((group) => {

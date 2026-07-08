@@ -73,7 +73,7 @@ def notify_suppliers_for_order(order) -> None:
             lines.append(f"\n📍 *כתובת למשלוח:* {company_address}")
         if company_phone:
             lines.append(f"📞 {company_phone}")
-        lines.append("\nאנא ענה *אישור* לאישור הכל, או שלח כמויות מעודכנות.")
+        lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
         send_whatsapp_message(phone, "\n".join(lines))
 
         save_supplier_pending_order(

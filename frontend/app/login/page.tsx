@@ -37,9 +37,13 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="bg-white rounded-2xl shadow-md p-8 w-full max-w-sm" dir="rtl">
-        <h1 className="text-2xl font-bold text-gray-800 mb-6 text-center">כניסה למערכת</h1>
+    <main className="min-h-screen flex items-center justify-center relative z-10">
+      <div className="backdrop-blur-md bg-white/70 border border-white/40 rounded-2xl shadow-2xl p-8 w-full max-w-sm" dir="rtl">
+        <div className="text-center mb-6">
+          <div className="text-4xl mb-2">🥦🍅🧅</div>
+          <h1 className="text-2xl font-bold text-gray-800">כניסה למערכת</h1>
+          <p className="text-sm text-gray-500 mt-1">Smart Orders</p>
+        </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">אימייל</label>
