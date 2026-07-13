@@ -4,7 +4,7 @@ from rest_framework import status, permissions
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 
-from .models import OrderRequest, ShoppingList
+from .models import OrderRequest
 from .serializers import (
     SuggestOrderInputSerializer,
     SuggestOrderResponseSerializer,
@@ -13,8 +13,6 @@ from .serializers import (
     OrderListSerializer,
     OrderDetailSerializer,
     OrderStatusUpdateSerializer,
-    ShoppingListSerializer,
-    ShoppingListSuggestSerializer,
     OrderStatsSerializer,
 )
 from decimal import Decimal
@@ -138,53 +136,6 @@ class OrderStatusUpdateView(APIView):
         order.save(update_fields=["status"])
 
         return Response({"id": order.id, "status": order.status})
-class ShoppingListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    @extend_schema(responses=ShoppingListSerializer(many=True))
-    def get(self, request):
-        """GET /api/orders/shopping-lists/ — list the user's shopping lists."""
-        lists = ShoppingList.objects.filter(user=request.user).prefetch_related("products__product").order_by("-id")
-        return Response(ShoppingListSerializer(lists, many=True).data)
-
-    @extend_schema(request=ShoppingListSerializer, responses={201: ShoppingListSerializer})
-    def post(self, request):
-        """POST /api/orders/shopping-lists/ — create a new shopping list."""
-        serializer = ShoppingListSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        shopping_list = serializer.save(user=request.user)
-        return Response(ShoppingListSerializer(shopping_list).data, status=status.HTTP_201_CREATED)
-
-
-class ShoppingListDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_object(self, pk, user):
-        return get_object_or_404(
-            ShoppingList.objects.prefetch_related("products__product"),
-            pk=pk, user=user,
-        )
-
-    @extend_schema(responses=ShoppingListSerializer)
-    def get(self, request, pk):
-        """GET /api/orders/shopping-lists/{id}/"""
-        return Response(ShoppingListSerializer(self.get_object(pk, request.user)).data)
-
-    @extend_schema(request=ShoppingListSerializer, responses=ShoppingListSerializer)
-    def put(self, request, pk):
-        """PUT /api/orders/shopping-lists/{id}/ — replace name and products."""
-        instance = self.get_object(pk, request.user)
-        serializer = ShoppingListSerializer(instance, data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-    def delete(self, request, pk):
-        """DELETE /api/orders/shopping-lists/{id}/"""
-        self.get_object(pk, request.user).delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
 class OrderStatsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -232,28 +183,3 @@ class OrderStatsView(APIView):
         return Response(OrderStatsSerializer(result).data)
 
 
-class ShoppingListSuggestView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    @extend_schema(request=ShoppingListSuggestSerializer, responses=SuggestOrderResponseSerializer)
-    def post(self, request, pk):
-        """POST /api/orders/shopping-lists/{id}/suggest/ — suggest order from saved list."""
-        shopping_list = get_object_or_404(
-            ShoppingList.objects.prefetch_related("products__product"),
-            pk=pk, user=request.user,
-        )
-        serializer = ShoppingListSuggestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        products = [
-            {"product": product.product, "quantity": product.default_quantity * 2}
-            for product in shopping_list.products.all()
-        ]
-
-        try:
-            region = serializer.validated_data["region"]
-            result = suggest_order(user=request.user, region=region, products=products)
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(SuggestOrderResponseSerializer(result).data)

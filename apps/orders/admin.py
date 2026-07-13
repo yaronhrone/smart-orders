@@ -1,18 +1,5 @@
 from django.contrib import admin
-from .models import ShoppingList, ShoppingListProduct, OrderRequest, OrderRequestProduct, SupplierConfirmation
-
-
-class ShoppingListItemInline(admin.TabularInline):
-    model = ShoppingListProduct
-    extra = 1
-
-
-@admin.register(ShoppingList)
-class ShoppingListAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "name", "is_primary", "created_at")
-    list_filter = ("is_primary",)
-    search_fields = ("name", "user__email")
-    inlines = [ShoppingListItemInline]
+from .models import OrderRequest, OrderRequestProduct, SupplierConfirmation
 
 
 @admin.register(SupplierConfirmation)

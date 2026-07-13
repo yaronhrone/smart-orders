@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from apps.catalog.models import Product, Region
-from apps.orders.models import OrderRequest, ShoppingList, ShoppingListProduct
+from apps.orders.models import OrderRequest
 
 
 # ---------------------------------------------------------------------------
@@ -156,62 +156,6 @@ class OrderListSerializer(serializers.Serializer):
 
 class OrderStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=OrderRequest.Status.choices)
-
-
-# ---------------------------------------------------------------------------
-# Shopping List
-# ---------------------------------------------------------------------------
-
-class ShoppingListItemSerializer(serializers.ModelSerializer):
-    product_name = HebrewProductField(
-        queryset=Product.objects.all(),
-        slug_field="name",
-        source="product",
-    )
-
-    class Meta:
-        model = ShoppingListProduct
-        fields = ("id", "product_name", "default_quantity")
-class ShoppingListSerializer(serializers.ModelSerializer):
-    products = ShoppingListItemSerializer(many=True)
-
-    class Meta:
-        model = ShoppingList
-        fields = ("id", "name", "is_primary", "created_at", "products")
-        read_only_fields = ("id", "created_at")
-
-    def create(self, validated_data):
-        products_data = validated_data.pop("products")
-        shopping_list = ShoppingList.objects.create(**validated_data)
-        ShoppingListProduct.objects.bulk_create([
-            ShoppingListProduct(
-                shopping_list=shopping_list,
-                product=product["product"],
-                default_quantity=product["default_quantity"],
-            )
-            for product in products_data
-        ])
-        return shopping_list
-
-    def update(self, instance, validated_data):
-        products_data = validated_data.pop("products", None)
-        instance.name = validated_data.get("name", instance.name)
-        instance.save()
-
-        if products_data is not None:
-            instance.products.all().delete()
-            ShoppingListProduct.objects.bulk_create([
-                ShoppingListProduct(
-                    shopping_list=instance,
-                    product=product["product"],
-                    default_quantity=product["default_quantity"],
-                )
-                for product in products_data
-            ])
-        return instance
-class ShoppingListSuggestSerializer(serializers.Serializer):
-    """Input for suggesting an order directly from a shopping list."""
-    region = serializers.ChoiceField(choices=Region.choices)
 
 
 # ---------------------------------------------------------------------------
