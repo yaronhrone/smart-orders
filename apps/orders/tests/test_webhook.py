@@ -106,7 +106,7 @@ class ParseSupplierReplyTests(TestCase):
 
 # ─────────────────────── Webhook routing ───────────────────────
 
-@override_settings(CACHES=LOCMEM_CACHE)
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True)
 class WebhookRoutingTests(TestCase):
 
     def setUp(self):
@@ -140,7 +140,7 @@ class WebhookRoutingTests(TestCase):
 
 # ─────────────────────── User: new order flow ───────────────────────
 
-@override_settings(CACHES=LOCMEM_CACHE)
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True)
 class UserNewOrderFlowTests(TestCase):
 
     def setUp(self):
@@ -251,7 +251,7 @@ class UserNewOrderFlowTests(TestCase):
 
 # ─────────────────────── User: confirmation flow ───────────────────────
 
-@override_settings(CACHES=LOCMEM_CACHE)
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True)
 class UserConfirmationFlowTests(TestCase):
 
     def setUp(self):
@@ -382,7 +382,7 @@ class UserConfirmationFlowTests(TestCase):
 
 # ─────────────────────── Supplier: confirmation flow ───────────────────────
 
-@override_settings(CACHES=LOCMEM_CACHE)
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True)
 class SupplierConfirmationFlowTests(TestCase):
 
     def setUp(self):
@@ -463,7 +463,7 @@ class SupplierConfirmationFlowTests(TestCase):
 
 # ─────────────────────── Supplier: price update flow ───────────────────────
 
-@override_settings(CACHES=LOCMEM_CACHE)
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True)
 class SupplierPriceUpdateFlowTests(TestCase):
 
     def setUp(self):
