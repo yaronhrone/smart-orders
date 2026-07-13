@@ -10,7 +10,13 @@ from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 
-from apps.orders.whatsapp import send_whatsapp_message, save_supplier_pending_order, notify_suppliers_for_order
+from django.conf import settings
+from apps.orders.whatsapp import (
+    send_whatsapp_message,
+    save_supplier_pending_order,
+    notify_suppliers_for_order,
+    DecimalEncoder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +25,26 @@ CUTOFF_TTL = 86400
 FALLBACK_TTL = 3600
 
 
-class DecimalEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, Decimal):
-            return str(obj)
-        return super().default(obj)
+def _normalize_phone(phone: str) -> str:
+    """Ensure phone is in +XXXXXXXXXXX format."""
+    if phone.startswith("972") and not phone.startswith("+"):
+        return "+" + phone
+    return phone
+
+
+def _validate_twilio_signature(request) -> bool:
+    """Return True if the request came from Twilio (or DEBUG is on)."""
+    if settings.DEBUG:
+        return True
+    try:
+        from twilio.request_validator import RequestValidator
+        validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
+        signature = request.META.get("HTTP_X_TWILIO_SIGNATURE", "")
+        url = request.build_absolute_uri()
+        return validator.validate(url, request.POST, signature)
+    except Exception as exc:
+        logger.error("Twilio signature validation error: %s", exc)
+        return False
 
 
 # ─────────────────────── User flow helpers ───────────────────────
@@ -62,8 +83,8 @@ def _format_scenario(label, s):
     return "\n".join(lines)
 
 
-def _build_and_send_confirmed_order(data: dict, scenario: str):
-    """Build order in DB and send WhatsApp to each supplier. Errors are logged, not raised."""
+def _build_and_send_confirmed_order(data: dict, scenario: str) -> bool:
+    """Build order in DB and send WhatsApp to each supplier. Returns True on success."""
     from django.contrib.auth import get_user_model
     from apps.catalog.models import Product
     from apps.orders.services import build_order
@@ -73,7 +94,7 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
     region = data.get("region")
 
     if not user_id or not raw_products or not region:
-        return
+        return False
 
     User = get_user_model()
     try:
@@ -87,8 +108,10 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
         ]
         order, _ = build_order(user, region, products, scenario=scenario)
         notify_suppliers_for_order(order)
+        return True
     except Exception as exc:
         logger.error("Failed to build/send confirmed order for user %s: %s", user_id, exc)
+        return False
 
 
 def _handle_new_order(phone: str, body: str) -> HttpResponse:
@@ -108,7 +131,8 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     user = profile.user
-    product_names = list(Product.objects.values_list("name", flat=True))
+    all_products = list(Product.objects.all())
+    product_names = [p.name for p in all_products]
 
     try:
         parsed_items = parse_customer_order(body, product_names)
@@ -119,7 +143,7 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
         )
         return HttpResponse(status=200)
 
-    all_products_map = {p.name: p for p in Product.objects.all()}
+    all_products_map = {p.name: p for p in all_products}
     products = []
     unrecognized = []
     for item in parsed_items:
@@ -285,9 +309,11 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
             )
 
         elif intent == "add":
+            from django.db.models import Q as _Q
             sp = (
                 SupplierProduct.objects
-                .filter(product=product)
+                .filter(product=product, supplier__region=region)
+                .filter(_Q(supplier__owner__isnull=True) | _Q(supplier__owner=user))
                 .select_related("supplier")
                 .order_by("price_per_unit")
                 .first()
@@ -399,10 +425,13 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     cache.delete(key)
-    _build_and_send_confirmed_order(data, scenario)
+    success = _build_and_send_confirmed_order(data, scenario)
 
-    confirm = _format_scenario(f"✅ אושר! {label}", chosen)
-    confirm += "\n\nההזמנה נשלחה לספקים."
+    if success:
+        confirm = _format_scenario(f"✅ אושר! {label}", chosen)
+        confirm += "\n\nההזמנה נשלחה לספקים."
+    else:
+        confirm = "❌ אירעה שגיאה בעיבוד ההזמנה. אנא נסה שנית או פנה לתמיכה."
     send_whatsapp_message(phone, confirm)
 
     return HttpResponse(status=200)
@@ -700,6 +729,19 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
 
 
 def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
+    from apps.orders.models import OrderRequestProduct, SupplierConfirmation
+
+    processing_key = f"whatsapp_supplier_processing:{phone}"
+    if not cache.add(processing_key, 1, timeout=30):
+        return HttpResponse(status=200)
+
+    try:
+        return _handle_supplier_flow_inner(phone, supplier, body)
+    finally:
+        cache.delete(processing_key)
+
+
+def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse:
     from apps.orders.models import OrderRequestProduct, SupplierConfirmation
 
     key = f"whatsapp_supplier_pending:{phone}"
@@ -1386,9 +1428,19 @@ def whatsapp_webhook(request):
     if request.method != "POST":
         return HttpResponse(status=405)
 
+    if not _validate_twilio_signature(request):
+        logger.warning("Rejected request with invalid Twilio signature")
+        return HttpResponse(status=403)
+
+    message_sid = request.POST.get("MessageSid", "")
+    if message_sid:
+        dedup_key = f"twilio_msg:{message_sid}"
+        if not cache.add(dedup_key, 1, timeout=3600):
+            return HttpResponse(status=200)
+
     body = request.POST.get("Body", "").strip()
     from_raw = request.POST.get("From", "")
-    phone = from_raw.replace("whatsapp:", "")
+    phone = _normalize_phone(from_raw.replace("whatsapp:", ""))
 
     from apps.catalog.models import Supplier
     supplier = Supplier.objects.filter(whatsapp_number=phone).first()
