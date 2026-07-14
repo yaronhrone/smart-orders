@@ -8,7 +8,6 @@ import { Me } from "../lib/api";
 const NAV = [
   { href: "/dashboard", label: "לוח בקרה", exact: true },
   { href: "/dashboard/new-order", label: "הזמנה חדשה" },
-  { href: "/dashboard/shopping-lists", label: "רשימות קניות" },
   { href: "/dashboard/catalog", label: "קטלוג מחירים" },
 ];
 
@@ -28,15 +27,15 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
 
   return (
     <aside
-      className="w-56 fixed top-0 right-0 bottom-0 backdrop-blur-md bg-white/80 border-l border-white/40 flex flex-col z-20 shadow-xl"
+      className="w-56 fixed top-0 right-0 bottom-0 bg-green-900 flex flex-col z-20 shadow-2xl"
       dir="rtl"
     >
-      <div className="px-4 py-5 border-b border-gray-200/60">
-        <p className="text-base font-bold text-green-800">🌿 Smart Order</p>
+      <div className="px-4 py-5 border-b border-green-700">
+        <p className="text-base font-bold text-white">🌿 Smart Order</p>
         {me && (
           <Link
             href="/dashboard/profile"
-            className="block text-xs text-gray-500 mt-0.5 truncate hover:text-blue-600 transition"
+            className="block text-xs text-green-300 mt-0.5 truncate hover:text-white transition"
             title="פרופיל חברה"
           >
             {me.first_name} {me.last_name}
@@ -51,8 +50,8 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
             href={item.href}
             className={`flex items-center px-3 py-2 rounded-lg text-sm transition ${
               isActive(item.href, item.exact)
-                ? "bg-blue-50 text-blue-700 font-semibold"
-                : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                ? "bg-white text-green-900 font-semibold"
+                : "text-green-100 hover:bg-green-700 hover:text-white"
             }`}
           >
             {item.label}
@@ -61,15 +60,15 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
 
         {me?.is_staff && (
           <>
-            <p className="text-xs text-gray-400 px-3 pt-4 pb-1 font-medium">ניהול</p>
+            <p className="text-xs text-green-400 px-3 pt-4 pb-1 font-medium">ניהול</p>
             {ADMIN_NAV.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
                 className={`flex items-center px-3 py-2 rounded-lg text-sm transition ${
                   isActive(item.href, item.exact)
-                    ? "bg-gray-800 text-white font-semibold"
-                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    ? "bg-white text-green-900 font-semibold"
+                    : "text-green-100 hover:bg-green-700 hover:text-white"
                 }`}
               >
                 {item.label}
@@ -79,10 +78,10 @@ export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => vo
         )}
       </nav>
 
-      <div className="px-3 py-3 border-t border-gray-100">
+      <div className="px-3 py-3 border-t border-green-700">
         <button
           onClick={onLogout}
-          className="w-full text-right px-3 py-2 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+          className="w-full text-right px-3 py-2 text-sm text-green-300 hover:text-white hover:bg-green-700 rounded-lg transition"
         >
           יציאה
         </button>

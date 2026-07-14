@@ -72,42 +72,42 @@ export default function DashboardPage() {
 
   return (
     <div className="px-6 py-6 space-y-8">
-      <h1 className="text-xl font-bold text-gray-800">לוח בקרה</h1>
+      <h1 className="text-2xl font-bold text-green-900">לוח בקרה</h1>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        <div className="bg-white rounded-xl shadow-sm p-4">
-          <p className="text-xs text-gray-500 mb-1">סה&quot;כ הוצאות</p>
-          <p className="text-2xl font-bold text-gray-800">
+        <div className="bg-green-700 rounded-xl shadow-md p-4">
+          <p className="text-xs text-green-200 mb-1">סה&quot;כ הוצאות</p>
+          <p className="text-2xl font-bold text-white">
             {formatCurrency(stats.total_spent)}
           </p>
         </div>
-        <div className="bg-white rounded-xl shadow-sm p-4">
-          <p className="text-xs text-gray-500 mb-1">מספר הזמנות</p>
-          <p className="text-2xl font-bold text-gray-800">{stats.order_count}</p>
+        <div className="bg-blue-600 rounded-xl shadow-md p-4">
+          <p className="text-xs text-blue-100 mb-1">מספר הזמנות</p>
+          <p className="text-2xl font-bold text-white">{stats.order_count}</p>
         </div>
-        <div className="bg-white rounded-xl shadow-sm p-4">
-          <p className="text-xs text-gray-500 mb-1">מספר ספקים</p>
-          <p className="text-2xl font-bold text-gray-800">{stats.by_supplier.length}</p>
+        <div className="bg-orange-500 rounded-xl shadow-md p-4">
+          <p className="text-xs text-orange-100 mb-1">מספר ספקים</p>
+          <p className="text-2xl font-bold text-white">{stats.by_supplier.length}</p>
         </div>
       </div>
 
       {/* Spending by supplier */}
       {stats.by_supplier.length > 0 && (
         <section>
-          <h2 className="text-base font-semibold text-gray-700 mb-3">הוצאות לפי ספק</h2>
-          <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
+          <h2 className="text-base font-semibold text-green-900 mb-3">הוצאות לפי ספק</h2>
+          <div className="bg-white rounded-xl shadow-md divide-y divide-gray-100">
             {stats.by_supplier.map((s) => (
               <div key={s.supplier_id} className="px-4 py-3">
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-sm font-medium text-gray-800">{s.supplier_name}</span>
-                  <span className="text-sm font-semibold text-gray-900">
+                  <span className="text-sm font-semibold text-green-700">
                     {formatCurrency(s.total_spent)}
                   </span>
                 </div>
-                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                <div className="w-full bg-gray-100 rounded-full h-2">
                   <div
-                    className="bg-blue-500 h-1.5 rounded-full"
+                    className="bg-green-500 h-2 rounded-full"
                     style={{ width: `${(Number(s.total_spent) / maxSpend) * 100}%` }}
                   />
                 </div>
@@ -120,19 +120,19 @@ export default function DashboardPage() {
 
       {/* Recent orders */}
       <section>
-        <h2 className="text-base font-semibold text-gray-700 mb-3">הזמנות אחרונות</h2>
+        <h2 className="text-base font-semibold text-green-900 mb-3">הזמנות אחרונות</h2>
         {orders.length === 0 ? (
-          <p className="text-sm text-gray-500">אין הזמנות עדיין.</p>
+          <p className="text-sm text-gray-600">אין הזמנות עדיין.</p>
         ) : (
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="bg-white rounded-xl shadow-md overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-gray-50 text-gray-500 text-xs">
-                  <th className="text-right px-4 py-2 font-medium">#</th>
-                  <th className="text-right px-4 py-2 font-medium">תאריך</th>
-                  <th className="text-right px-4 py-2 font-medium">פריטים</th>
-                  <th className="text-right px-4 py-2 font-medium">סה&quot;כ</th>
-                  <th className="text-right px-4 py-2 font-medium">סטטוס</th>
+                <tr className="bg-green-800 text-green-100 text-xs">
+                  <th className="text-right px-4 py-3 font-medium">#</th>
+                  <th className="text-right px-4 py-3 font-medium">תאריך</th>
+                  <th className="text-right px-4 py-3 font-medium">פריטים</th>
+                  <th className="text-right px-4 py-3 font-medium">סה&quot;כ</th>
+                  <th className="text-right px-4 py-3 font-medium">סטטוס</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -140,12 +140,12 @@ export default function DashboardPage() {
                   <tr
                     key={o.id}
                     onClick={() => router.push(`/dashboard/orders/${o.id}`)}
-                    className="hover:bg-blue-50 cursor-pointer transition"
+                    className="hover:bg-green-50 cursor-pointer transition"
                   >
                     <td className="px-4 py-3 text-gray-500">{o.id}</td>
                     <td className="px-4 py-3 text-gray-700">{formatDate(o.created_at)}</td>
                     <td className="px-4 py-3 text-gray-700">{o.product_count}</td>
-                    <td className="px-4 py-3 font-medium text-gray-800">
+                    <td className="px-4 py-3 font-semibold text-green-700">
                       {formatCurrency(o.total_price)}
                     </td>
                     <td className="px-4 py-3">

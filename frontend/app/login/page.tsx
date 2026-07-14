@@ -37,27 +37,27 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center relative z-10">
-      <div className="backdrop-blur-md bg-white/70 border border-white/40 rounded-2xl shadow-2xl p-8 w-full max-w-sm" dir="rtl">
+    <main className="min-h-screen flex items-center justify-center bg-gray-100">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm" dir="rtl">
         <div className="text-center mb-6">
-          <div className="text-4xl mb-2">🥦🍅🧅</div>
-          <h1 className="text-2xl font-bold text-gray-800">כניסה למערכת</h1>
-          <p className="text-sm text-gray-500 mt-1">Smart Orders</p>
+          <div className="text-4xl mb-3">🥦🍅🧅</div>
+          <h1 className="text-2xl font-bold text-green-900">כניסה למערכת</h1>
+          <p className="text-sm text-green-600 mt-1 font-medium">Smart Orders</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">אימייל</label>
+            <label className="block text-sm font-semibold text-green-800 mb-1">אימייל</label>
             <input
               type="email"
               value={email}
               onChange={(e) => { setEmail(e.target.value); setError(""); }}
               required
               autoComplete="email"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border-2 border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-green-500"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">סיסמה</label>
+            <label className="block text-sm font-semibold text-green-800 mb-1">סיסמה</label>
             <div className="relative">
               <input
                 type={showPassword ? "text" : "password"}
@@ -65,7 +65,7 @@ export default function LoginPage() {
                 onChange={(e) => { setPassword(e.target.value); setError(""); }}
                 required
                 autoComplete="current-password"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 pl-10"
+                className="w-full border-2 border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-green-500 pl-10"
               />
               <button
                 type="button"
@@ -91,7 +91,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            className="w-full bg-green-700 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-green-800 disabled:opacity-50 transition"
           >
             {loading ? "מתחבר..." : "כניסה"}
           </button>
