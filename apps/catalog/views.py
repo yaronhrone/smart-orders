@@ -38,6 +38,36 @@ class ProductDestroyView(generics.DestroyAPIView):
     queryset = Product.objects.all()
 
 
+class ProductBulkCreateView(APIView):
+    """
+    POST /api/catalog/products/bulk/  — admin only
+    Body: {"products": [{"name": "עגבנייה", "unit": "kg"}, ...]}
+    Skips duplicates silently and reports results.
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        items = request.data.get("products", [])
+        if not isinstance(items, list):
+            return Response({"error": "שדה 'products' חייב להיות רשימה"}, status=status.HTTP_400_BAD_REQUEST)
+
+        created, skipped = [], []
+        for item in items:
+            name = str(item.get("name", "")).strip()
+            unit = str(item.get("unit", "kg")).strip()
+            if not name:
+                continue
+            _, was_created = Product.objects.get_or_create(name=name, defaults={"unit": unit})
+            (created if was_created else skipped).append(name)
+
+        return Response({
+            "created": len(created),
+            "skipped_duplicates": len(skipped),
+            "created_names": created,
+            "skipped_names": skipped,
+        }, status=status.HTTP_201_CREATED)
+
+
 class SupplierUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     """
     GET    /api/catalog/suppliers/{id}/  — retrieve supplier (authenticated)

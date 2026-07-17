@@ -441,3 +441,15 @@ export async function updateProfile(data: ProfilePayload): Promise<ProfilePayloa
 export async function deleteProduct(id: number): Promise<void> {
   return request<void>(`/api/catalog/products/${id}/`, { method: "DELETE" });
 }
+
+export interface CreateProductPayload {
+  name: string;
+  unit: string;
+}
+
+export async function createProduct(data: CreateProductPayload): Promise<Product> {
+  return request<Product>("/api/catalog/products/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
