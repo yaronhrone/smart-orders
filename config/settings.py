@@ -198,10 +198,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.catalog.tasks.fetch_market_prices_task",
         "schedule": crontab(hour=10, minute=30),
     },
-    "send-daily-supplier-orders": {
-        "task": "apps.orders.tasks.send_daily_supplier_orders_task",
-        "schedule": crontab(hour=11, minute=0),  # אחרי עדכון מחירי שוק
-    },
 }
 
 # כתובת עמוד מחירון הירקות של מועצת הצמחים

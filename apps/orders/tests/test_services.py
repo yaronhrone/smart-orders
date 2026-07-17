@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import OrderRequest, OrderRequestProduct
+from apps.orders.models import OrderRequest
 from apps.orders.services import build_order, suggest_order
 
 User = get_user_model()
