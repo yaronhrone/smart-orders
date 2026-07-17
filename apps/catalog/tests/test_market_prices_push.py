@@ -56,6 +56,12 @@ class MarketPricesPushAuthTests(TestCase):
 class MarketPricesPushCoreTests(TestCase):
     """Core upsert logic."""
 
+    def setUp(self):
+        # All products must exist in the catalog before prices can be pushed.
+        for name in ["עגבניה", "מלפפון", "גזר", "פלפל", "בצל", "שום", "תפוח אדמה",
+                     "חסה", "תות שדה", "אוכמניות", "ענבים"]:
+            Product.objects.get_or_create(name=name)
+
     @override_settings(MARKET_AGENT_SECRET=SECRET)
     def test_valid_push_returns_200(self):
         payload = {
@@ -72,14 +78,18 @@ class MarketPricesPushCoreTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
     @override_settings(MARKET_AGENT_SECRET=SECRET)
-    def test_new_product_is_auto_created(self):
+    def test_unknown_product_is_skipped(self):
+        """A product name not in the catalog must not create a new Product row."""
         payload = {
             "prices": [
                 {"product_name": "כרוב", "price_grade_a": "2.00", "market_date": "2026-05-28"}
             ]
         }
-        _post(self.client, payload)
-        self.assertTrue(Product.objects.filter(name="כרוב").exists())
+        resp = _post(self.client, payload)
+        data = resp.json()
+        self.assertFalse(Product.objects.filter(name="כרוב").exists())
+        self.assertEqual(len(data["skipped"]), 1)
+        self.assertEqual(data["skipped"][0]["product_name"], "כרוב")
 
     @override_settings(MARKET_AGENT_SECRET=SECRET)
     def test_market_price_record_created(self):
@@ -100,7 +110,7 @@ class MarketPricesPushCoreTests(TestCase):
         self.assertEqual(data["total_received"], 1)
 
         mp = MarketPrice.objects.get(product__name="מלפפון")
-        self.assertEqual(str(mp.price_per_unit), "1.80")   # grade_a takes precedence
+        self.assertEqual(str(mp.price_per_unit), "1.80")
         self.assertEqual(str(mp.price_grade_a), "1.80")
         self.assertEqual(str(mp.price_premium), "2.10")
         self.assertEqual(mp.market_date, date(2026, 5, 28))
@@ -128,7 +138,7 @@ class MarketPricesPushCoreTests(TestCase):
 
     @override_settings(MARKET_AGENT_SECRET=SECRET)
     def test_second_push_updates_existing_record(self):
-        product = Product.objects.create(name="בצל")
+        product = Product.objects.get(name="בצל")
         MarketPrice.objects.create(
             product=product,
             price_per_unit="2.00",

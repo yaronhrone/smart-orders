@@ -22,7 +22,7 @@ def make_product(name):
 _supplier_counter = 0
 
 
-def make_supplier(name, minimum_order=0, region=Region.CENTER, owner=None):
+def make_supplier(name, minimum_order=0, region=Region.CENTER):
     global _supplier_counter
     _supplier_counter += 1
     phone = f"05{_supplier_counter:08d}"
@@ -32,7 +32,6 @@ def make_supplier(name, minimum_order=0, region=Region.CENTER, owner=None):
         whatsapp_number=phone,
         region=region,
         minimum_order=minimum_order,
-        owner=owner,
     )
 
 
@@ -162,28 +161,6 @@ class BuildOrderServiceTests(TestCase):
 
     def test_raises_error_when_no_supplier_for_product(self):
         """Raises ValueError if no supplier carries the product"""
-        with self.assertRaises(ValueError):
-            build_order(self.user, Region.CENTER, [
-                {"product": self.tomato, "quantity": Decimal("5")},
-            ])
-
-    def test_private_supplier_visible_to_owner(self):
-        """User's private supplier is included in search"""
-        private = make_supplier("פרטי", owner=self.user, region=Region.NORTH)
-        set_price(private, self.tomato, "2.00")
-
-        order, _ = build_order(self.user, Region.NORTH, [
-            {"product": self.tomato, "quantity": Decimal("5")},
-        ])
-
-        self.assertEqual(order.products.first().supplier, private)
-
-    def test_private_supplier_not_visible_to_other_user(self):
-        """Another user cannot see someone else's private supplier"""
-        other_user = make_user("other@test.com")
-        private = make_supplier("private", owner=other_user)
-        set_price(private, self.tomato, "2.00")
-
         with self.assertRaises(ValueError):
             build_order(self.user, Region.CENTER, [
                 {"product": self.tomato, "quantity": Decimal("5")},

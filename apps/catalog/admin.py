@@ -15,8 +15,8 @@ class SupplierProductInline(admin.TabularInline):
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "region", "minimum_order", "owner", "is_global")
-    list_filter = ("region", "owner")
+    list_display = ("id", "name", "region", "minimum_order")
+    list_filter = ("region",)
     search_fields = ("name",)
     inlines = [SupplierProductInline]
 

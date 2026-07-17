@@ -14,7 +14,7 @@ class HebrewLoginView(TokenObtainPairView):
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAdminUser]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)

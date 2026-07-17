@@ -1,6 +1,5 @@
 from decimal import Decimal
 
-from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
 
@@ -33,8 +32,8 @@ class Product(models.Model):
 
 class Supplier(models.Model):
     name = models.CharField(max_length=255)
-    phone = models.CharField(max_length=20 ,  unique=True)
-    whatsapp_number = models.CharField(max_length=20 , unique=True)
+    phone = models.CharField(max_length=20, unique=True)
+    whatsapp_number = models.CharField(max_length=20, unique=True)
     region = models.CharField(max_length=50, choices=Region.choices)
     minimum_order = models.DecimalField(
         max_digits=10,
@@ -43,21 +42,8 @@ class Supplier(models.Model):
         validators=[MinValueValidator(Decimal("0"))],
     )
 
-    # None = global (admin), set = private supplier of a user
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="private_suppliers",
-    )
-
     def __str__(self):
         return self.name
-
-    @property
-    def is_global(self):
-        return self.owner is None
 
 
 class SupplierProduct(models.Model):

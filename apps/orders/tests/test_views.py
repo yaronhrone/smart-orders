@@ -21,13 +21,13 @@ def make_product(name):
 _supplier_counter = 0
 
 
-def make_supplier(name, region=Region.CENTER, owner=None):
+def make_supplier(name, region=Region.CENTER):
     global _supplier_counter
     _supplier_counter += 1
     phone = f"05{_supplier_counter:08d}"
     return Supplier.objects.create(
         name=name, phone=phone, whatsapp_number=phone,
-        region=region, minimum_order=0, owner=owner,
+        region=region, minimum_order=0,
     )
 
 

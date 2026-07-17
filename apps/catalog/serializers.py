@@ -76,25 +76,18 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
         supplier = Supplier.objects.create(**validated_data)
 
         for item in prices:
-            product_name = item["product_name"].lower().strip()
-
-            unit = item["unit"]
-
-            product, created = Product.objects.get_or_create(
-                name=product_name,
-                defaults={"unit": unit}
-            )
-
-            if not created and product.unit != unit:
-                product.unit = unit
-                product.save()
+            product_name = item["product_name"].strip()
+            try:
+                product = Product.objects.get(name__iexact=product_name)
+            except Product.DoesNotExist:
+                raise serializers.ValidationError(
+                    {"prices": f"המוצר '{product_name}' לא קיים בקטלוג. הוסף אותו קודם."}
+                )
 
             SupplierProduct.objects.update_or_create(
                 supplier=supplier,
                 product=product,
-                defaults={
-                    "price_per_unit": item["price_per_unit"]
-                }
+                defaults={"price_per_unit": item["price_per_unit"]},
             )
 
         return supplier

@@ -2,8 +2,9 @@
 Parses a free-text price message from a supplier using OpenAI,
 then updates SupplierProduct prices in the DB.
 
-Example message:
-    "עגבנייה 3.50, מלפפון 2.00, גזר 1.80 לקילו"
+The catalog is the single source of truth for product names.
+The AI tries to match supplier text to EXISTING catalog names only.
+Unrecognized products are collected and reported to the admin via WhatsApp.
 """
 import json
 import logging
@@ -40,23 +41,39 @@ def _normalize_unit(raw: str) -> str:
     return _UNIT_MAP.get(raw.strip().lower(), "kg")
 
 
-def _parse_with_ai(message: str, product_names: list[str]) -> list[dict]:
+def _parse_with_ai(message: str, product_names: list[str]) -> dict:
     """
-    Calls OpenAI to extract product names, prices, and units from a free-text message.
-    Returns a list of {"product_name", "price", "unit", "is_new"} dicts.
+    Calls OpenAI to extract prices and match them to catalog products.
+
+    Returns:
+        {
+            "items": [{"product_name": "<exact canonical name>", "price": "3.50", "unit": "קג"}],
+            "unmatched": [{"original": "<supplier text>", "price": "X.XX"}]
+        }
     """
-    known = ", ".join(product_names) if product_names else "—"
+    known = "\n".join(f"- {n}" for n in product_names) if product_names else "— (קטלוג ריק) —"
+
     prompt = (
-        "You are a price-list parser for a vegetable/fruit supplier system in Israel.\n"
-        "Extract ALL products with prices from the message below.\n"
-        f"Known products in the system: {known}\n"
-        "Rules:\n"
-        "1. If the product matches a known product (fuzzy/phonetic Hebrew matching) — use the exact known name and set is_new=false.\n"
-        "2. If the product is NEW (not in the known list) — use the name as written in Hebrew and set is_new=true.\n"
-        "3. For unit, pick ONE of: קג, גרם, יחידה, ארגז, ליטר, מטר. Default to קג if not specified.\n"
-        "Return ONLY a JSON object with key 'items' containing an array.\n"
-        'Each element: {"product_name": "...", "price": "3.50", "unit": "קג", "is_new": false}\n'
-        f"Message: {message}"
+        "אתה מנתח מחירון של ספק ירקות/פירות בישראל.\n"
+        "תפקידך: לחלץ מחירים מהודעת הספק ולהתאים כל מוצר לשמו הקנוני במערכת.\n\n"
+        "שמות המוצרים הקנוניים במערכת (אלה השמות היחידים המותרים):\n"
+        f"{known}\n\n"
+        "חוקים:\n"
+        "1. לכל מוצר בהודעה — נסה להתאים אותו לשם קנוני מהרשימה לעיל.\n"
+        "   דוגמאות להתאמה:\n"
+        "   • 'מלפפונים' → 'מלפפון'\n"
+        "   • 'עגבניות' → 'עגבנייה'\n"
+        "   • 'תפוחי אדמה' → 'תפוח אדמה'\n"
+        "   • 'בצל יבש' → 'בצל' (אם 'בצל' קיים בקטלוג)\n"
+        "   השתמש רק בשם הקנוני המדויק כפי שהוא מופיע ברשימה לעיל.\n"
+        "2. אם אינך בטוח לגבי מוצר מסוים — הכנס אותו ב-'unmatched' עם הטקסט המקורי.\n"
+        "3. עבור יחידה בחר אחת מ: קג, גרם, יחידה, ארגז, ליטר, מטר. ברירת מחדל: קג.\n\n"
+        "החזר JSON בדיוק בפורמט:\n"
+        "{\n"
+        '  "items": [{"product_name": "<שם קנוני מדויק>", "price": "3.50", "unit": "קג"}],\n'
+        '  "unmatched": [{"original": "<טקסט מהספק>", "price": "X.XX"}]\n'
+        "}\n\n"
+        f"הודעת הספק: {message}"
     )
 
     response = _get_client().chat.completions.create(
@@ -69,19 +86,58 @@ def _parse_with_ai(message: str, product_names: list[str]) -> list[dict]:
     raw = response.choices[0].message.content
     data = json.loads(raw)
 
-    if isinstance(data, dict):
-        data = data.get("items", next(iter(data.values()), []))
+    return {
+        "items": data.get("items", []) if isinstance(data, dict) else [],
+        "unmatched": data.get("unmatched", []) if isinstance(data, dict) else [],
+    }
 
-    return data if isinstance(data, list) else []
+
+def _notify_admin_unmatched(supplier, unmatched: list, original_message: str) -> None:
+    """Send a WhatsApp alert to the admin about products not found in the catalog."""
+    from django.conf import settings
+    admin_number = getattr(settings, "ADMIN_WHATSAPP_NUMBER", "")
+    if not admin_number:
+        logger.warning(
+            "ADMIN_WHATSAPP_NUMBER לא מוגדר — לא נשלחה התראה על מוצרים לא מוכרים"
+        )
+        return
+
+    try:
+        from apps.orders.whatsapp import send_whatsapp_message
+
+        lines = [f"⚠️ *מוצרים לא מזוהים מספק {supplier.name}*"]
+        lines.append(f"📞 טלפון: {supplier.phone}")
+        lines.append("")
+        lines.append("המוצרים הבאים לא נמצאו בקטלוג:")
+        for u in unmatched:
+            original = u.get("original", "")
+            price = u.get("price", "")
+            suffix = f" — ₪{price}" if price else ""
+            lines.append(f"• {original}{suffix}")
+        lines.append("")
+        lines.append("*ההודעה המקורית של הספק:*")
+        lines.append(original_message)
+        lines.append("")
+        lines.append("כדי להוסיף מוצר חדש לקטלוג, היכנס לפאנל הניהול.")
+
+        send_whatsapp_message(admin_number, "\n".join(lines))
+        logger.info(
+            "נשלחה התראה לאדמין על %d מוצרים לא מוכרים מספק %s",
+            len(unmatched),
+            supplier.name,
+        )
+    except Exception as exc:
+        logger.error("שגיאה בשליחת התראה לאדמין: %s", exc)
 
 
 def update_prices_from_message(supplier, message: str) -> dict:
     """
-    Parses `message`, matches products, updates SupplierProduct rows.
+    Parses `message`, matches products to the catalog, updates SupplierProduct rows.
+    Unmatched products are skipped and the admin is notified via WhatsApp.
 
     Returns:
     {
-        "updated": [{"product_name": str, "price": str}],
+        "updated": [{"product_name": str, "price": str, "unit": str}],
         "skipped": [{"product_name": str, "reason": str}],
     }
     """
@@ -91,16 +147,15 @@ def update_prices_from_message(supplier, message: str) -> dict:
         parsed = _parse_with_ai(message, list(all_products.keys()))
     except Exception as exc:
         logger.error("OpenAI price parsing failed: %s", exc)
-        raise ValueError(f"AI parsing failed: {exc}")
+        raise ValueError(f"שגיאה בעיבוד ההודעה עם AI: {exc}")
 
     updated = []
     skipped = []
+    unmatched_for_admin = list(parsed.get("unmatched", []))
 
-    for entry in parsed:
+    for entry in parsed.get("items", []):
         name = entry.get("product_name", "").strip()
         price_raw = str(entry.get("price", "")).strip()
-        unit_raw = str(entry.get("unit", "קג")).strip()
-        is_new = entry.get("is_new", False)
 
         if not name:
             continue
@@ -110,19 +165,18 @@ def update_prices_from_message(supplier, message: str) -> dict:
             if price <= 0:
                 raise InvalidOperation
         except (InvalidOperation, ValueError):
-            skipped.append({"product_name": name, "reason": f"מחיר לא תקין: {price_raw}"})
+            skipped.append({
+                "product_name": name,
+                "reason": f"מחיר לא תקין: {price_raw}",
+            })
             continue
 
-        # Get existing or create new product
         product = all_products.get(name)
-        created_product = False
         if not product:
-            unit_code = _normalize_unit(unit_raw)
-            product, created_product = Product.objects.get_or_create(
-                name=name,
-                defaults={"unit": unit_code},
-            )
-            all_products[name] = product
+            # AI returned a name that is not in the catalog (hallucination or mismatch).
+            # Treat as unmatched and alert the admin.
+            unmatched_for_admin.append({"original": name, "price": price_raw})
+            continue
 
         SupplierProduct.objects.update_or_create(
             supplier=supplier,
@@ -133,7 +187,18 @@ def update_prices_from_message(supplier, message: str) -> dict:
             "product_name": name,
             "price": str(price),
             "unit": product.get_unit_display(),
-            "is_new": created_product,
         })
+
+    # Collect unmatched into skipped for the API response
+    for u in unmatched_for_admin:
+        original = u.get("original", "")
+        skipped.append({
+            "product_name": original,
+            "reason": f"המוצר '{original}' לא קיים בקטלוג — האדמין קיבל התראה",
+        })
+
+    # Alert admin once for all unmatched items in this message
+    if unmatched_for_admin:
+        _notify_admin_unmatched(supplier, unmatched_for_admin, message)
 
     return {"updated": updated, "skipped": skipped}

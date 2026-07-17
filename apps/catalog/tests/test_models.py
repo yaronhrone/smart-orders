@@ -36,8 +36,8 @@ class SupplierModelTests(TestCase):
         self.admin = User.objects.create_superuser(email="admin@test.com", password="admin123")
         self.user = User.objects.create_user(email="user@test.com", password="pass123")
 
-    def test_create_global_supplier(self):
-        """Global supplier has no owner"""
+    def test_create_supplier(self):
+        """Supplier is created with correct fields"""
         supplier = Supplier.objects.create(
             name="ירקות הצפון",
             phone="0501234567",
@@ -45,21 +45,8 @@ class SupplierModelTests(TestCase):
             region=Region.NORTH,
             minimum_order=200,
         )
-        self.assertIsNone(supplier.owner)
-        self.assertTrue(supplier.is_global)
-
-    def test_create_private_supplier(self):
-        """Private supplier belongs to a user"""
-        supplier = Supplier.objects.create(
-            name="ספק פרטי",
-            phone="0509999999",
-            whatsapp_number="0509999999",
-            region=Region.CENTER,
-            minimum_order=0,
-            owner=self.user,
-        )
-        self.assertEqual(supplier.owner, self.user)
-        self.assertFalse(supplier.is_global)
+        self.assertEqual(supplier.name, "ירקות הצפון")
+        self.assertEqual(supplier.region, Region.NORTH)
 
     def test_supplier_str(self):
         """__str__ returns supplier name"""

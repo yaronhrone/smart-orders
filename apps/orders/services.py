@@ -87,10 +87,7 @@ def _validate_all_products_present(assignments, products):
 
 
 def _get_available_suppliers(user, region):
-    from django.db.models import Q
-    return Supplier.objects.filter(region=region).filter(
-        Q(owner__isnull=True) | Q(owner=user)
-    )
+    return Supplier.objects.filter(region=region)
 
 
 def _prices_for_product(product, suppliers):

@@ -19,8 +19,12 @@ from .serializers import (
 class ProductListCreateView(generics.ListCreateAPIView):
     """
     GET  /api/catalog/products/        — list all products
-    POST /api/catalog/products/        — create a new product
+    POST /api/catalog/products/        — create a new product only by admin
     """
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated()]
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = ProductSerializer
     queryset = Product.objects.all().order_by("name")
@@ -36,17 +40,17 @@ class ProductDestroyView(generics.DestroyAPIView):
 
 class SupplierUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     """
-    PATCH  /api/catalog/suppliers/{id}/  — update supplier fields
-    DELETE /api/catalog/suppliers/{id}/  — delete supplier + all prices (cascade)
-    Admin can act on any supplier; owner can act on their own private supplier.
+    GET    /api/catalog/suppliers/{id}/  — retrieve supplier (authenticated)
+    PATCH  /api/catalog/suppliers/{id}/  — update supplier fields (admin only)
+    DELETE /api/catalog/suppliers/{id}/  — delete supplier + all prices (admin only)
     """
-    permission_classes = [permissions.IsAuthenticated]
     serializer_class = SupplierSerializer
+    queryset = Supplier.objects.all()
 
-    def get_queryset(self):
-        if self.request.user.is_staff:
-            return Supplier.objects.all()
-        return Supplier.objects.filter(owner=self.request.user)
+    def get_permissions(self):
+        if self.request.method in ("PATCH", "PUT", "DELETE"):
+            return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated()]
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -55,10 +59,13 @@ class SupplierUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
 class SupplierListCreateView(generics.ListCreateAPIView):
     """
-    GET  /api/catalog/suppliers/?region=center  — list available suppliers
-    POST /api/catalog/suppliers/                — create a private supplier (+ optional prices)
+    GET  /api/catalog/suppliers/?region=center  — list all suppliers (authenticated)
+    POST /api/catalog/suppliers/                — create a supplier (admin only)
     """
-    permission_classes = [permissions.IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated()]
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -69,13 +76,8 @@ class SupplierListCreateView(generics.ListCreateAPIView):
         region = self.request.query_params.get("region")
         qs = Supplier.objects.prefetch_related("products__product")
         if region:
-            return qs.filter(region=region, owner__isnull=True) | qs.filter(owner=self.request.user)
-        return qs.filter(owner__isnull=True) | qs.filter(owner=self.request.user)
-
-    def perform_create(self, serializer):
-        # Admin-created suppliers are global (owner=None); regular users own their own
-        owner = None if self.request.user.is_staff else self.request.user
-        serializer.save(owner=owner)
+            return qs.filter(region=region)
+        return qs.all()
 
 
 # class SupplierUpdatePricesView(APIView):
@@ -130,9 +132,13 @@ class SupplierPriceMessageView(APIView):
         return Response(PriceUpdateResultSerializer(result).data)
 
 
-    #  update supplier prices for POC
 class SupplierPriceUpdateView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    """
+    POST /api/catalog/suppliers/prices/
+    Admin-only: manually update a supplier's prices for existing catalog products.
+    """
+    permission_classes = [permissions.IsAdminUser]
+
     @extend_schema(
         request=SupplierPriceUpdateSerializer,
         responses={200: dict},
@@ -140,17 +146,6 @@ class SupplierPriceUpdateView(APIView):
     def post(self, request):
         serializer = SupplierPriceUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if not serializer.is_valid():
-            print("ERRORS:", serializer.errors)
-            return Response(serializer.errors, status=400)
-
-        # 🔥 זה הדיבאג השני
-        print("VALIDATED DATA:", serializer.validated_data)
-
-        prices = serializer.validated_data.get("prices", [])
-
-        # 🔥 זה הכי חשוב
-        print("PRICES:", prices)
 
         prices = serializer.validated_data["prices"]
         phone = request.data.get("phone")
@@ -159,49 +154,35 @@ class SupplierPriceUpdateView(APIView):
         try:
             supplier = Supplier.objects.get(phone=clean_phone)
         except Supplier.DoesNotExist:
-            return Response(
-                {"error": "הספק לא נמצא"},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        # 🔥 optional security check
-        if supplier.owner and supplier.owner != request.user:
-            return Response(
-                {"error": "אין הרשאה לפעולה זו"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({"error": "הספק לא נמצא"}, status=status.HTTP_404_NOT_FOUND)
 
         updated_items = []
+        not_found = []
 
         for item in prices:
-            product_name = item["product_name"].lower().strip()
-            unit = item["unit"]
+            product_name = item["product_name"].strip()
 
-            product, _ = Product.objects.get_or_create(
-                name=product_name,
-                defaults={"unit": unit}
-            )
-
-            if product.unit != unit:
-                product.unit = unit
-                product.save()
+            try:
+                product = Product.objects.get(name__iexact=product_name)
+            except Product.DoesNotExist:
+                not_found.append(product_name)
+                continue
 
             sp, created = SupplierProduct.objects.update_or_create(
                 supplier=supplier,
                 product=product,
-                defaults={"price_per_unit": item["price_per_unit"]}
+                defaults={"price_per_unit": item["price_per_unit"]},
             )
-
             updated_items.append({
                 "product_name": product.name,
                 "price_per_unit": str(sp.price_per_unit),
-                "created": created
+                "created": created,
             })
 
-        return Response({
-            "message": "Prices updated successfully",
-            "items": updated_items
-        })
+        response = {"message": "Prices updated", "items": updated_items}
+        if not_found:
+            response["not_found"] = not_found
+        return Response(response)
 
 class SupplierPricesListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -327,7 +308,11 @@ class MarketPricesPushView(APIView):
                 skipped.append({"product_name": product_name, "reason": "no price provided"})
                 continue
 
-            product, _ = Product.objects.get_or_create(name=product_name)
+            try:
+                product = Product.objects.get(name__iexact=product_name)
+            except Product.DoesNotExist:
+                skipped.append({"product_name": product_name, "reason": "product not in catalog"})
+                continue
 
             _, created = MarketPrice.objects.update_or_create(
                 product=product,

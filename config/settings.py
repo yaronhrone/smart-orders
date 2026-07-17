@@ -223,5 +223,10 @@ TWILIO_SKIP_SIGNATURE_VALIDATION = (
 # Set MARKET_AGENT_SECRET in .env.  If empty, the push endpoint is disabled.
 MARKET_AGENT_SECRET = os.environ.get("MARKET_AGENT_SECRET", "")
 
+# WhatsApp number of the system admin (e.g. "+972501234567").
+# When set, the system sends a WhatsApp alert whenever a supplier mentions
+# a product that is not in the catalog.
+ADMIN_WHATSAPP_NUMBER = os.environ.get("ADMIN_WHATSAPP_NUMBER", "")
+
 _extra_cors = [o for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o]
 CORS_ALLOWED_ORIGINS = ["http://localhost:3000"] + _extra_cors
