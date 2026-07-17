@@ -25,8 +25,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("DJANGO_SECRET_KEY is required")
 
-DEBUG = bool(int(os.environ.get("DEBUG", 1)))
+DEBUG = bool(int(os.environ.get("DEBUG", "0" )))
 
 _extra_hosts = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", ".ngrok-free.app", ".ngrok-free.dev"] + _extra_hosts
@@ -89,7 +91,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-def _get_required_env(key: str, default: str | None = None) -> str:
+def _get_required_env(key: str | None = None) -> str:
     value = os.environ.get(key)
     if not value:
         raise ValueError(f"Missing required environment variable: {key}, is not set")
@@ -213,6 +215,9 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
 WHATSAPP_OVERRIDE_NUMBER = os.environ.get("WHATSAPP_OVERRIDE_NUMBER")
+TWILIO_SKIP_SIGNATURE_VALIDATION = (
+    os.environ.get("TWILIO_SKIP_SIGNATURE_VALIDATION", "0") == "1"
+)
 
 # Shared secret for the local Market Agent → server push.
 # Set MARKET_AGENT_SECRET in .env.  If empty, the push endpoint is disabled.

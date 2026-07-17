@@ -34,7 +34,7 @@ def _normalize_phone(phone: str) -> str:
 
 def _validate_twilio_signature(request) -> bool:
     """Return True if the request came from Twilio (or DEBUG is on)."""
-    if settings.DEBUG:
+    if settings.TWILIO_SKIP_SIGNATURE_VALIDATION:
         return True
     try:
         from twilio.request_validator import RequestValidator
