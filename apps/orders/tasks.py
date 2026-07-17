@@ -17,7 +17,7 @@ def handle_fallback_timeout(phone: str, order_request_id: int):
     """
     from django.core.cache import cache
     from apps.orders.models import OrderRequestProduct
-    from apps.orders.whatsapp_webhook import _recalculate_order_total, DecimalEncoder, FALLBACK_TTL
+    from apps.orders.whatsapp import _recalculate_order_total, DecimalEncoder, FALLBACK_TTL
 
     raw = cache.get(f"whatsapp_fallback:{phone}")
     if not raw:

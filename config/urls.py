@@ -20,7 +20,7 @@ from django.urls import path
 from django.urls import include
 from core.views import health_check
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
-from apps.orders.whatsapp_webhook import whatsapp_webhook
+from apps.orders.whatsapp import whatsapp_webhook
 urlpatterns = [
     path("django-admin/", admin.site.urls),
     path("health/", health_check, name="health_check"),

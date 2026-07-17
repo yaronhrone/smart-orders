@@ -132,13 +132,13 @@ class Command(BaseCommand):
         return order
 
     def _call_supplier_webhook(self, phone, supplier, body):
-        from apps.orders.whatsapp_webhook import _handle_supplier_flow
+        from apps.orders.whatsapp import _handle_supplier_flow
         _handle_supplier_flow(phone=phone, supplier=supplier, body=body)
 
     # ── Step 2: customer approves fallback ───────────────────────────
 
     def _step2_customer_approval(self, customer_reply: str):
-        from apps.orders.whatsapp_webhook import _handle_user_flow
+        from apps.orders.whatsapp import _handle_user_flow
 
         self.stdout.write(self.style.SUCCESS("\n══ שלב 2: לקוח עונה על הצעת הספק החלופי ══\n"))
 
@@ -163,7 +163,7 @@ class Command(BaseCommand):
             messages.append({"to": to, "body": body})
             return "mock_sid"
 
-        with patch("apps.orders.whatsapp_webhook.send_whatsapp_message", side_effect=capture):
+        with patch("apps.orders.whatsapp.send_whatsapp_message", side_effect=capture):
             try:
                 fn()
             except Exception as exc:
@@ -311,7 +311,7 @@ class Command(BaseCommand):
         order.delete()
 
     def _call_user_webhook(self, phone, body):
-        from apps.orders.whatsapp_webhook import _handle_user_flow
+        from apps.orders.whatsapp import _handle_user_flow
         _handle_user_flow(phone=phone, body=body)
 
     def _show_cache(self):

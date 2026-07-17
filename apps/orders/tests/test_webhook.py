@@ -18,11 +18,11 @@ from django.contrib.auth import get_user_model
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
-from apps.orders.whatsapp_webhook import (
+from apps.orders.whatsapp import (
     _parse_supplier_reply,
     save_pending_order,
+    save_supplier_pending_order,
 )
-from apps.orders.whatsapp import save_supplier_pending_order
 from apps.users.models import Profile
 
 User = get_user_model()
@@ -116,8 +116,8 @@ class WebhookRoutingTests(TestCase):
         res = self.client.get("/whatsapp/webhook/")
         self.assertEqual(res.status_code, 405)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
-    @patch("apps.orders.whatsapp_webhook._handle_supplier_flow")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.whatsapp._handle_supplier_flow")
     def test_known_supplier_phone_routes_to_supplier_flow(self, mock_supplier, mock_send):
         mock_supplier.return_value = __import__("django.http", fromlist=["HttpResponse"]).HttpResponse(status=200)
         supplier = make_supplier("ספק א")
@@ -127,8 +127,8 @@ class WebhookRoutingTests(TestCase):
         })
         mock_supplier.assert_called_once()
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
-    @patch("apps.orders.whatsapp_webhook._handle_user_flow")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.whatsapp._handle_user_flow")
     def test_unknown_phone_routes_to_user_flow(self, mock_user, mock_send):
         mock_user.return_value = __import__("django.http", fromlist=["HttpResponse"]).HttpResponse(status=200)
         self.client.post("/whatsapp/webhook/", {
@@ -157,14 +157,14 @@ class UserNewOrderFlowTests(TestCase):
             "Body": body,
         })
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_unknown_phone_sends_not_registered_message(self, mock_send):
         """Phone not in any Profile → 'not registered' message."""
         self._post("+972500000001", "5 עגבניות")
         mock_send.assert_called_once()
         self.assertIn("לא רשום", mock_send.call_args[0][1])
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     def test_valid_order_sends_options_and_caches(self, mock_parse, mock_send):
         """Registered user sends valid order → receives both options, cache updated."""
@@ -190,7 +190,7 @@ class UserNewOrderFlowTests(TestCase):
         self.assertIn("user_id", data)
         self.assertEqual(data["user_id"], user.id)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     def test_ai_parse_failure_sends_help_message(self, mock_parse, mock_send):
         """AI error → user gets a 'couldn't understand' message."""
@@ -202,7 +202,7 @@ class UserNewOrderFlowTests(TestCase):
         mock_send.assert_called_once()
         self.assertIn("לא הצלחתי", mock_send.call_args[0][1])
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     def test_all_products_unrecognized_sends_warning(self, mock_parse, mock_send):
         """All parsed products not in catalog → 'no known products' message."""
@@ -216,7 +216,7 @@ class UserNewOrderFlowTests(TestCase):
         mock_send.assert_called_once()
         self.assertIn("לא זיהיתי", mock_send.call_args[0][1])
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     def test_partial_unrecognized_adds_warning_to_options(self, mock_parse, mock_send):
         """Some recognized, some not → options shown + warning about unrecognized."""
@@ -234,7 +234,7 @@ class UserNewOrderFlowTests(TestCase):
         self.assertIn("⚠️", msg)
         self.assertIn("מוצר_לא_קיים", msg)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     def test_phone_with_local_format_resolved(self, mock_parse, mock_send):
         """Profile with 0XXXXXXXXX format is found even if WhatsApp sends +972XXXXXXXXX."""
@@ -299,7 +299,7 @@ class UserConfirmationFlowTests(TestCase):
         })
 
     @patch("apps.orders.whatsapp.send_whatsapp_message")
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_reply_aleph_builds_cheapest_order(self, mock_send_webhook, mock_send_whatsapp):
         """Replying 'א' selects cheapest scenario and builds DB order."""
         self._seed_cache("+972505555555")
@@ -310,7 +310,7 @@ class UserConfirmationFlowTests(TestCase):
         self.assertIsNotNone(order)
         self.assertEqual(order.status, OrderRequest.Status.SENT)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_reply_bet_builds_fewest_suppliers_order(self, mock_send):
         """Replying 'ב' selects fewest_suppliers scenario."""
         self._seed_cache("+972505555555")
@@ -320,7 +320,7 @@ class UserConfirmationFlowTests(TestCase):
         order = OrderRequest.objects.filter(user=self.user).first()
         self.assertIsNotNone(order)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_invalid_reply_sends_choose_message(self, mock_send):
         """Invalid reply keeps cache intact and asks user to choose."""
         self._seed_cache("+972505555555")
@@ -333,7 +333,7 @@ class UserConfirmationFlowTests(TestCase):
         # Cache should still exist
         self.assertIsNotNone(cache.get("whatsapp_order:+972505555555"))
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_same_scenarios_any_reply_confirms(self, mock_send):
         """When cheapest == fewest any reply confirms (including 'שלום')."""
         self._seed_cache("+972505555555", same=True)
@@ -345,7 +345,7 @@ class UserConfirmationFlowTests(TestCase):
         order = OrderRequest.objects.filter(user=self.user).first()
         self.assertIsNotNone(order)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_confirmation_clears_cache(self, mock_send):
         """After confirming, pending order is removed from cache."""
         self._seed_cache("+972505555555")
@@ -355,7 +355,7 @@ class UserConfirmationFlowTests(TestCase):
         self.assertIsNone(cache.get("whatsapp_order:+972505555555"))
 
     @patch("apps.orders.whatsapp.send_whatsapp_message")
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_confirmation_sends_supplier_whatsapp(self, mock_send_webhook, mock_send_whatsapp):
         """Supplier receives a WhatsApp message when user confirms."""
         self._seed_cache("+972505555555")
@@ -369,7 +369,7 @@ class UserConfirmationFlowTests(TestCase):
         self.assertIn("להזמין", all_calls_text)
 
     @patch("apps.orders.whatsapp.send_whatsapp_message")
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_confirmation_saves_supplier_pending_in_cache(self, mock_send_webhook, mock_send_whatsapp):
         """After confirmation, supplier's pending order is cached for their reply."""
         self._seed_cache("+972505555555")
@@ -415,21 +415,21 @@ class SupplierConfirmationFlowTests(TestCase):
             "Body": body,
         })
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_full_confirmation_word_creates_supplier_confirmations(self, mock_send):
         """'אישור' creates SupplierConfirmation for all products."""
         self._post_supplier("אישור")
 
         self.assertEqual(SupplierConfirmation.objects.filter(order_request_product__order_request=self.order).count(), 2)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_full_confirmation_clears_cache(self, mock_send):
         """After full confirmation, supplier pending cache is cleared."""
         self._post_supplier("אישור")
 
         self.assertIsNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_partial_confirmation_by_name(self, mock_send):
         """Partial reply (name: quantity) creates SupplierConfirmation only for matched products."""
         self._post_supplier("עגבניה: 18")
@@ -439,7 +439,7 @@ class SupplierConfirmationFlowTests(TestCase):
         self.assertEqual(confirmations.first().confirmed_quantity, Decimal("18"))
         self.assertEqual(confirmations.first().order_request_product, self.orp1)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_unrecognized_reply_sends_help_message(self, mock_send):
         """Gibberish reply → supplier gets 'couldn't understand' message."""
         self._post_supplier("xxxxxxxxx")
@@ -449,7 +449,7 @@ class SupplierConfirmationFlowTests(TestCase):
         # Cache should remain
         self.assertIsNotNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_sends_confirmation_summary_back_to_supplier(self, mock_send):
         """After confirming, supplier receives a summary of the confirmed quantities."""
         self._post_supplier("כן")
@@ -476,7 +476,7 @@ class SupplierPriceUpdateFlowTests(TestCase):
             "Body": body,
         })
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.catalog.price_parser.update_prices_from_message")
     def test_no_pending_order_routes_to_price_update(self, mock_update, mock_send):
         """Supplier with no pending order gets price-update flow."""
@@ -491,7 +491,7 @@ class SupplierPriceUpdateFlowTests(TestCase):
         mock_send.assert_called_once()
         self.assertIn("עודכנו", mock_send.call_args[0][1])
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.catalog.price_parser.update_prices_from_message")
     def test_price_update_sends_new_products_section(self, mock_update, mock_send):
         """New products are highlighted in the response."""
@@ -505,7 +505,7 @@ class SupplierPriceUpdateFlowTests(TestCase):
         msg = mock_send.call_args[0][1]
         self.assertIn("🆕", msg)
 
-    @patch("apps.orders.whatsapp_webhook.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.catalog.price_parser.update_prices_from_message")
     def test_unrecognized_price_message_sends_help(self, mock_update, mock_send):
         """Empty update result → help message."""

@@ -9,7 +9,7 @@ from .cache import (
     _get_fallback_state, _save_fallback_state, _clear_fallback_state,
     save_supplier_pending_order,
 )
-from .validators import send_whatsapp_message
+from . import validators
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
     elif not lines[1:]:
         pass  # Only auto-removed items with no fallback — nothing to confirm
 
-    send_whatsapp_message(customer_phone, "\n".join(lines))
+    validators.send_whatsapp_message(customer_phone, "\n".join(lines))
 
 
 def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
@@ -209,7 +209,7 @@ def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
         return _remove_missing_items(phone, state)
     else:
         supplier_name = state.get("original_supplier_name", "הספק")
-        send_whatsapp_message(
+        validators.send_whatsapp_message(
             phone,
             f"⏳ ממתין לתשובתך: *{supplier_name}* דיווח על פריטים חסרים.\n"
             "ענה *כן* להעברה לספק חלופי, *לא* לביטול.",
@@ -283,7 +283,7 @@ def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
             lines=lines,
         )
 
-    send_whatsapp_message(phone, "\n".join(lines))
+    validators.send_whatsapp_message(phone, "\n".join(lines))
     return HttpResponse(status=200)
 
 
@@ -343,7 +343,7 @@ def _auto_transfer_remaining(phone: str, order_request_id: int, failing_supplier
         msg_lines.append(f"📞 {company_phone_str}")
     msg_lines.append("\nאנא ענה *אישור* לאישור.")
 
-    send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
+    validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
     save_supplier_pending_order(
         supplier_phone=new_supplier.whatsapp_number,
         order_request_id=order_request_id,
@@ -457,7 +457,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
             msg_lines.append(f"📞 {company_phone_str}")
         msg_lines.append("\nאנא ענה *אישור* לאישור.")
 
-        send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
+        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
         save_supplier_pending_order(
             supplier_phone=supplier.whatsapp_number,
             order_request_id=order_request_id,
@@ -478,5 +478,5 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     reply = "\n".join(success_lines)
     if below_minimum_msgs:
         reply += "\n\n" + "\n".join(below_minimum_msgs)
-    send_whatsapp_message(phone, reply)
+    validators.send_whatsapp_message(phone, reply)
     return HttpResponse(status=200)

@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from apps.catalog.models import Product
 from apps.orders.services import suggest_order
 from apps.orders.whatsapp import send_whatsapp_message
-from apps.orders.whatsapp_webhook import save_pending_order
+from apps.orders.whatsapp import save_pending_order
 from django.contrib.auth import get_user_model
 
 

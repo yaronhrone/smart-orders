@@ -5,7 +5,7 @@ import re
 from django.http import HttpResponse
 
 from .cache import _get_delivery_state, _save_delivery_state, _clear_delivery_state
-from .validators import send_whatsapp_message
+from . import validators
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
             .first()
         )
         if not order:
-            send_whatsapp_message(phone, "לא נמצאה הזמנה פתוחה שממתינה לאישור מסירה.")
+            validators.send_whatsapp_message(phone, "לא נמצאה הזמנה פתוחה שממתינה לאישור מסירה.")
             return HttpResponse(status=200)
 
         suppliers = list(
@@ -57,7 +57,7 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
         if len(supplier_list) == 1:
             order.status = OrderRequest.Status.DELIVERED
             order.save(update_fields=["status"])
-            send_whatsapp_message(
+            validators.send_whatsapp_message(
                 phone,
                 f"✅ הזמנה #{order.id} מ-{supplier_list[0]['name']} אושרה כנמסרה. תודה!"
             )
@@ -68,7 +68,7 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
         for i, s in enumerate(supplier_list, 1):
             lines.append(f"{i}. {s['name']}")
         lines.append('\nאו ענה *הכל* אם כל הספקים הגיעו.')
-        send_whatsapp_message(phone, "\n".join(lines))
+        validators.send_whatsapp_message(phone, "\n".join(lines))
         return HttpResponse(status=200)
 
     # Continue delivery flow
@@ -93,7 +93,7 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
                 status = "✅" if s["delivered"] else "⏳"
                 lines.append(f"{i}. {s['name']} {status}")
             lines.append('\nאו ענה *הכל* לאישור כולם.')
-            send_whatsapp_message(phone, "\n".join(lines))
+            validators.send_whatsapp_message(phone, "\n".join(lines))
             return HttpResponse(status=200)
 
     pending = [s for s in suppliers if not s["delivered"]]
@@ -120,5 +120,5 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
             pass
         reply_lines.append(f"\n✅ כל הזמנה #{order_id} אושרה כנמסרה. תודה!")
 
-    send_whatsapp_message(phone, "\n".join(reply_lines))
+    validators.send_whatsapp_message(phone, "\n".join(reply_lines))
     return HttpResponse(status=200)

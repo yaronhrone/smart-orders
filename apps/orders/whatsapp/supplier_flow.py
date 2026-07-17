@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from .cache import save_supplier_pending_order, CUTOFF_TTL
 from .fallback_flow import _handle_missing_items, _recalculate_order_total
-from .validators import send_whatsapp_message
+from . import validators
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def notify_suppliers_for_order(order) -> None:
         if company_phone:
             lines.append(f"📞 {company_phone}")
         lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-        send_whatsapp_message(phone, "\n".join(lines))
+        validators.send_whatsapp_message(phone, "\n".join(lines))
 
         save_supplier_pending_order(
             supplier_phone=phone,
@@ -72,7 +72,7 @@ def send_order_to_supplier(supplier, assignments: list) -> str:
         )
     lines.append("תודה!")
     body = "\n".join(lines)
-    return send_whatsapp_message(supplier.whatsapp_number, body)
+    return validators.send_whatsapp_message(supplier.whatsapp_number, body)
 
 
 def _parse_supplier_cutoff(body: str):
@@ -166,14 +166,14 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
     try:
         result = update_prices_from_message(supplier, body)
     except ValueError as exc:
-        send_whatsapp_message(phone, f"שגיאה בעיבוד המחירים: {exc}")
+        validators.send_whatsapp_message(phone, f"שגיאה בעיבוד המחירים: {exc}")
         return HttpResponse(status=200)
 
     updated = result["updated"]
     skipped = result["skipped"]
 
     if not updated and not skipped:
-        send_whatsapp_message(phone, "לא זיהיתי מחירים בהודעה. נסה לשלוח כגון:\nעגבניות 3.50, מלפפון 2.00")
+        validators.send_whatsapp_message(phone, "לא זיהיתי מחירים בהודעה. נסה לשלוח כגון:\nעגבניות 3.50, מלפפון 2.00")
         return HttpResponse(status=200)
 
     existing = [u for u in updated if not u.get("is_new")]
@@ -207,7 +207,7 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
         parts.append(f"{len(skipped)} לא זוהו")
     lines.append(f"\nסה\"כ: {', '.join(parts)} ({total} מוצרים)")
 
-    send_whatsapp_message(phone, "\n".join(lines))
+    validators.send_whatsapp_message(phone, "\n".join(lines))
     return HttpResponse(status=200)
 
 
@@ -241,7 +241,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
     CANCEL_KEYWORDS = ["ביטול", "לא מאשר", "מבטל", "cancel", "לא רוצה"]
     if any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS):
         cache.delete(key)
-        send_whatsapp_message(phone, "✅ ביטול ההזמנה התקבל.")
+        validators.send_whatsapp_message(phone, "✅ ביטול ההזמנה התקבל.")
 
         try:
             from apps.orders.models import OrderRequest, OrderRequestProduct
@@ -288,7 +288,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 if cp:
                     msg_lines.append(f"📞 {cp}")
                 msg_lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-                send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
+                validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
 
                 save_supplier_pending_order(
                     supplier_phone=new_supplier.whatsapp_number,
@@ -316,12 +316,12 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                     lines.append(f'\nסה"כ חדש: {fallback["redirect_total"]:.2f}₪')
                     if not fallback["minimum_met"]:
                         lines.append(f"⚠️ חסר {fallback['missing_amount']:.2f}₪ למינימום {new_supplier.name}")
-                    send_whatsapp_message(customer_phone, "\n".join(lines))
+                    validators.send_whatsapp_message(customer_phone, "\n".join(lines))
             else:
                 # No fallback — cancel the order
                 OrderRequest.objects.filter(id=order_request_id).update(status=OrderRequest.Status.CANCELLED)
                 if customer_phone:
-                    send_whatsapp_message(
+                    validators.send_whatsapp_message(
                         customer_phone,
                         f"❌ *{supplier.name}* ביטל את הזמנה #{order_request_id}.\n"
                         "לא נמצא ספק חלופי. ניתן ליצור הזמנה חדשה דרך המערכת.",
@@ -332,7 +332,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         return HttpResponse(status=200)
 
     if not confirmed and not missing:
-        send_whatsapp_message(
+        validators.send_whatsapp_message(
             phone,
             "לא הצלחתי להבין.\nשלח *אישור* לאישור הכל, כמויות כגון:\nעגבניות 40, מלפפונים 25\nאו *חסר עגבניות* לדיווח על מוצר חסר.",
         )
@@ -410,7 +410,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             ack_lines.append(f"  ❌ {p['product_name']} — חסר")
     if cutoff_time:
         ack_lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
-    send_whatsapp_message(phone, "\n".join(ack_lines))
+    validators.send_whatsapp_message(phone, "\n".join(ack_lines))
 
     # Notify customer about confirmed items
     try:
@@ -433,7 +433,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                         else:
                             customer_lines.append(f"  • {p['product_name']} x{c_qty} {p['unit']}")
                 customer_lines.append(f"\nמספר הזמנה: #{order_request_id}")
-                send_whatsapp_message(customer_phone, "\n".join(customer_lines))
+                validators.send_whatsapp_message(customer_phone, "\n".join(customer_lines))
     except Exception as exc:
         logger.error("Failed to notify customer after supplier confirmation: %s", exc)
 
