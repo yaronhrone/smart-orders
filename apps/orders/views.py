@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 
@@ -87,7 +88,7 @@ class OrderListView(APIView):
             OrderRequest.objects
             .filter(user=request.user)
             .exclude(status=OrderRequest.Status.PENDING)
-            .prefetch_related("products")
+            .annotate(product_count=Count("products"))
             .order_by("-created_at")
         )
         data = [
@@ -96,7 +97,7 @@ class OrderListView(APIView):
                 "status": o.status,
                 "total_price": o.total_price,
                 "created_at": o.created_at,
-                "product_count": o.products.count(),
+                "product_count": o.product_count,
             }
             for o in orders
         ]
