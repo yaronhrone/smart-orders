@@ -95,7 +95,5 @@ def fetch_vegetable_prices(url: str = MOONSITE_URL) -> list[dict]:
             "price_grade_a": _parse_price(grade_a_str),
             "price_premium": _parse_price(premium_str),
         })
-    print(results)
-
     logger.info("נאחזו %d שורות מחירים מ-%s", len(results), url)
     return results
