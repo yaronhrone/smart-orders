@@ -5,6 +5,7 @@ from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 
+from core.pagination import paginate, paginated_response_serializer
 from .models import OrderRequest
 from .serializers import (
     SuggestOrderInputSerializer,
@@ -82,7 +83,7 @@ class PlaceOrderView(APIView):
         )
 class OrderListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    @extend_schema(responses=OrderListSerializer(many=True))
+    @extend_schema(responses=paginated_response_serializer(OrderListSerializer))
     def get(self, request):
         orders = (
             OrderRequest.objects
@@ -91,6 +92,7 @@ class OrderListView(APIView):
             .annotate(product_count=Count("products"))
             .order_by("-created_at")
         )
+        page, has_more = paginate(request, orders, default_limit=10)
         data = [
             {
                 "id": o.id,
@@ -99,9 +101,12 @@ class OrderListView(APIView):
                 "created_at": o.created_at,
                 "product_count": o.product_count,
             }
-            for o in orders
+            for o in page
         ]
-        return Response(OrderListSerializer(data, many=True).data)
+        return Response({
+            "results": OrderListSerializer(data, many=True).data,
+            "has_more": has_more,
+        })
 class OrderDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 

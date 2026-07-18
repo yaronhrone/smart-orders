@@ -57,7 +57,8 @@ class OrderListViewTests(APITestCase):
         res = self.client.get(reverse("orders-list"))
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 1)
+        self.assertEqual(len(res.data["results"]), 1)
+        self.assertFalse(res.data["has_more"])
 
     def test_returns_correct_fields(self):
         """Response includes id, status, total_price, created_at, item_count."""
@@ -69,7 +70,7 @@ class OrderListViewTests(APITestCase):
         res = self.client.get(reverse("orders-list"))
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        data = res.data[0]
+        data = res.data["results"][0]
         self.assertEqual(data["id"], order.id)
         self.assertEqual(float(data["total_price"]), 50.0)
         self.assertEqual(data["product_count"], 1)
@@ -82,7 +83,8 @@ class OrderListViewTests(APITestCase):
     def test_empty_list_when_no_orders(self):
         res = self.client.get(reverse("orders-list"))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data, [])
+        self.assertEqual(res.data["results"], [])
+        self.assertFalse(res.data["has_more"])
 
     def test_ordered_newest_first(self):
         """Orders are returned newest first."""
@@ -91,8 +93,32 @@ class OrderListViewTests(APITestCase):
 
         res = self.client.get(reverse("orders-list"))
 
-        ids = [d["id"] for d in res.data]
+        ids = [d["id"] for d in res.data["results"]]
         self.assertEqual(ids, [o2.id, o1.id])
+
+    def test_pagination_has_more_and_limit(self):
+        """With more orders than the limit, has_more is True and results are capped."""
+        for i in range(3):
+            make_order(self.user, total="10.00", status_val=OrderRequest.Status.SENT)
+
+        res = self.client.get(reverse("orders-list"), {"limit": 2})
+
+        self.assertEqual(len(res.data["results"]), 2)
+        self.assertTrue(res.data["has_more"])
+
+    def test_pagination_offset(self):
+        """offset skips the first N results."""
+        orders = [
+            make_order(self.user, total="10.00", status_val=OrderRequest.Status.SENT)
+            for _ in range(3)
+        ]
+        newest_first_ids = [o.id for o in reversed(orders)]
+
+        res = self.client.get(reverse("orders-list"), {"limit": 2, "offset": 2})
+
+        ids = [d["id"] for d in res.data["results"]]
+        self.assertEqual(ids, newest_first_ids[2:])
+        self.assertFalse(res.data["has_more"])
 
 
 class OrderDetailViewTests(APITestCase):

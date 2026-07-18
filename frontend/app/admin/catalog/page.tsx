@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { fetchProducts, deleteProduct, createProduct, Product } from "../../lib/api";
 import { useAutoError } from "../../lib/useAutoError";
 
@@ -14,11 +14,15 @@ const UNITS = [
 ];
 
 const EMPTY_FORM = { name: "", unit: "kg" };
+const PRODUCTS_PAGE_SIZE = 20;
 
 export default function AdminCatalogPage() {
   const [products, setProducts] = useState<Product[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const [showModal, setShowModal] = useState(false);
@@ -26,14 +30,38 @@ export default function AdminCatalogPage() {
   const [formError, setFormError] = useAutoError(6000);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
-      const data = await fetchProducts();
-      setProducts(data);
+      const res = await fetchProducts({ limit: PRODUCTS_PAGE_SIZE, search: debouncedSearch || undefined });
+      setProducts(res.results);
+      setHasMore(res.has_more);
     } catch {
       setError("שגיאה בטעינת המוצרים.");
+    }
+  }, [debouncedSearch]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function loadMore() {
+    if (!products) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetchProducts({
+        limit: PRODUCTS_PAGE_SIZE,
+        offset: products.length,
+        search: debouncedSearch || undefined,
+      });
+      setProducts((prev) => [...(prev ?? []), ...res.results]);
+      setHasMore(res.has_more);
+    } catch {
+      alert("שגיאה בטעינת מוצרים נוספים");
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -65,10 +93,6 @@ export default function AdminCatalogPage() {
       setDeletingId(null);
     }
   }
-
-  const filtered = products?.filter((p) =>
-    p.name.toLowerCase().includes(search.toLowerCase())
-  );
 
   if (error) {
     return (
@@ -107,10 +131,10 @@ export default function AdminCatalogPage() {
           className="w-full max-w-sm border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           dir="rtl"
         />
-        <span className="text-sm text-gray-400 whitespace-nowrap">{products.length} מוצרים</span>
+        <span className="text-sm text-gray-400 whitespace-nowrap">מוצגים {products.length} מוצרים</span>
       </div>
 
-      {filtered?.length === 0 ? (
+      {products.length === 0 ? (
         <p className="text-gray-500 text-sm">לא נמצאו מוצרים.</p>
       ) : (
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -123,7 +147,7 @@ export default function AdminCatalogPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered?.map((p) => (
+              {products.map((p) => (
                 <tr key={p.id} className="hover:bg-gray-50 transition">
                   <td className="px-4 py-3 font-medium text-gray-800">{p.name}</td>
                   <td className="px-4 py-3 text-gray-500">{p.unit_display}</td>
@@ -141,6 +165,16 @@ export default function AdminCatalogPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {hasMore && (
+        <button
+          onClick={loadMore}
+          disabled={loadingMore}
+          className="mt-3 w-full border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition"
+        >
+          {loadingMore ? "טוען..." : "טען עוד"}
+        </button>
       )}
 
       {showModal && (

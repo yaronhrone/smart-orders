@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .price_parser import update_prices_from_message
 from .market_scraper import fetch_vegetable_prices
+from core.pagination import paginate, LoadMorePagination
 from drf_spectacular.utils import extend_schema
 from .models import Product, Supplier, SupplierProduct, MarketPrice
 from .serializers import (
@@ -26,6 +27,14 @@ class ProductListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = ProductSerializer
     queryset = Product.objects.all().order_by("name")
+    pagination_class = LoadMorePagination
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        search = self.request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        return queryset
 
 
 class ProductDestroyView(generics.DestroyAPIView):
@@ -214,8 +223,10 @@ class ProductCatalogView(APIView):
         if search:
             products = products.filter(name__icontains=search)
 
+        page, has_more = paginate(request, products, default_limit=20)
+
         result = []
-        for product in products:
+        for product in page:
             prices = sorted(
                 product.supplier_prices.all(),
                 key=lambda sp: sp.price_per_unit,
@@ -248,7 +259,7 @@ class ProductCatalogView(APIView):
                 ],
             })
 
-        return Response(result)
+        return Response({"results": result, "has_more": has_more})
 
 
 class MarketPriceListView(generics.ListAPIView):

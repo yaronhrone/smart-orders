@@ -4,6 +4,7 @@ from django.shortcuts import get_object_or_404
 from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer, HebrewTokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
+from core.pagination import LoadMorePagination10
 
 User = get_user_model()
 
@@ -37,6 +38,7 @@ class AdminUserListView(generics.ListAPIView):
     queryset = User.objects.select_related("profile").all().order_by("-date_joined")
     serializer_class = UserWithProfileSerializer
     permission_classes = [permissions.IsAdminUser]
+    pagination_class = LoadMorePagination10
 
 
 class AdminUserDetailView(generics.RetrieveDestroyAPIView):

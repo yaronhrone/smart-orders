@@ -53,8 +53,12 @@ function PriceCell({ suppliers }: { suppliers: CatalogProduct["suppliers"] }) {
   );
 }
 
+const CATALOG_PAGE_SIZE = 20;
+
 export default function CatalogPage() {
   const [products, setProducts] = useState<CatalogProduct[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [error, setError] = useState("");
@@ -65,14 +69,34 @@ export default function CatalogPage() {
   }, [search]);
 
   const load = useCallback(() => {
-    fetchProductCatalog(debouncedSearch || undefined)
-      .then(setProducts)
+    fetchProductCatalog(debouncedSearch || undefined, { limit: CATALOG_PAGE_SIZE })
+      .then((res) => {
+        setProducts(res.results);
+        setHasMore(res.has_more);
+      })
       .catch(() => setError("שגיאה בטעינת הקטלוג"));
   }, [debouncedSearch]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  async function loadMore() {
+    if (!products) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetchProductCatalog(debouncedSearch || undefined, {
+        limit: CATALOG_PAGE_SIZE,
+        offset: products.length,
+      });
+      setProducts((prev) => [...(prev ?? []), ...res.results]);
+      setHasMore(res.has_more);
+    } catch {
+      setError("שגיאה בטעינת מוצרים נוספים");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   return (
     <div className="px-6 py-6">
@@ -141,6 +165,16 @@ export default function CatalogPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {hasMore && (
+        <button
+          onClick={loadMore}
+          disabled={loadingMore}
+          className="mt-3 w-full border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition"
+        >
+          {loadingMore ? "טוען..." : "טען עוד"}
+        </button>
       )}
     </div>
   );

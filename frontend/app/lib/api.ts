@@ -10,6 +10,24 @@ function _flattenErrors(obj: unknown): string {
   return "";
 }
 
+export interface Paginated<T> {
+  results: T[];
+  has_more: boolean;
+}
+
+export interface PageParams {
+  limit?: number;
+  offset?: number;
+}
+
+function toQueryString(params: object): string {
+  const entries = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== ""
+  ) as [string, string | number | boolean][];
+  if (entries.length === 0) return "";
+  return "?" + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&");
+}
+
 function _parseErrorBody(body: string): string {
   try {
     const parsed = JSON.parse(body);
@@ -125,8 +143,8 @@ export interface CreateUserPayload {
   region: string;
 }
 
-export async function fetchAdminUsers(): Promise<AdminUser[]> {
-  return request<AdminUser[]>("/api/users/admin/users/");
+export async function fetchAdminUsers(params: PageParams = {}): Promise<Paginated<AdminUser>> {
+  return request<Paginated<AdminUser>>(`/api/users/admin/users/${toQueryString(params)}`);
 }
 
 export async function createUser(data: CreateUserPayload): Promise<AdminUser> {
@@ -157,8 +175,8 @@ export interface OrderSummary {
   product_count: number;
 }
 
-export async function fetchOrders(): Promise<OrderSummary[]> {
-  return request<OrderSummary[]>("/api/orders/");
+export async function fetchOrders(params: PageParams = {}): Promise<Paginated<OrderSummary>> {
+  return request<Paginated<OrderSummary>>(`/api/orders/${toQueryString(params)}`);
 }
 
 export interface SupplierSpending {
@@ -299,8 +317,10 @@ export interface Product {
   unit_display: string;
 }
 
-export async function fetchProducts(): Promise<Product[]> {
-  return request<Product[]>("/api/catalog/products/");
+export async function fetchProducts(
+  params: PageParams & { all?: boolean; search?: string } = {}
+): Promise<Paginated<Product>> {
+  return request<Paginated<Product>>(`/api/catalog/products/${toQueryString(params)}`);
 }
 
 export interface CatalogSupplierPrice {
@@ -326,9 +346,13 @@ export interface CatalogProduct {
   suppliers: CatalogSupplierPrice[];
 }
 
-export async function fetchProductCatalog(search?: string): Promise<CatalogProduct[]> {
-  const qs = search ? `?search=${encodeURIComponent(search)}` : "";
-  return request<CatalogProduct[]>(`/api/catalog/product-prices/${qs}`);
+export async function fetchProductCatalog(
+  search?: string,
+  params: PageParams = {}
+): Promise<Paginated<CatalogProduct>> {
+  return request<Paginated<CatalogProduct>>(
+    `/api/catalog/product-prices/${toQueryString({ search, ...params })}`
+  );
 }
 
 // ─────────────── Suppliers ───────────────

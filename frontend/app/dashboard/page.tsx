@@ -36,20 +36,39 @@ function formatCurrency(n: string | number) {
   })}`;
 }
 
+const ORDERS_PAGE_SIZE = 10;
+
 export default function DashboardPage() {
   const router = useRouter();
   const [orders, setOrders] = useState<OrderSummary[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [stats, setStats] = useState<OrderStats | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([fetchOrders(), fetchStats()])
+    Promise.all([fetchOrders({ limit: ORDERS_PAGE_SIZE }), fetchStats()])
       .then(([o, s]) => {
-        setOrders(o);
+        setOrders(o.results);
+        setHasMore(o.has_more);
         setStats(s);
       })
       .catch(() => setError("שגיאה בטעינת הנתונים"));
   }, []);
+
+  async function loadMore() {
+    if (!orders) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetchOrders({ limit: ORDERS_PAGE_SIZE, offset: orders.length });
+      setOrders((prev) => [...(prev ?? []), ...res.results]);
+      setHasMore(res.has_more);
+    } catch {
+      setError("שגיאה בטעינת הזמנות נוספות");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   if (error) {
     return (
@@ -156,6 +175,15 @@ export default function DashboardPage() {
               </tbody>
             </table>
           </div>
+        )}
+        {hasMore && (
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="mt-3 w-full border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition"
+          >
+            {loadingMore ? "טוען..." : "טען עוד"}
+          </button>
         )}
       </section>
     </div>

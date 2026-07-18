@@ -48,8 +48,12 @@ const EMPTY_PROFILE: UserProfile = {
   region: "center",
 };
 
+const CUSTOMERS_PAGE_SIZE = 10;
+
 export default function AdminPage() {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
 
@@ -76,9 +80,25 @@ export default function AdminPage() {
 
   async function load() {
     try {
-      setUsers(await fetchAdminUsers());
+      const res = await fetchAdminUsers({ limit: CUSTOMERS_PAGE_SIZE });
+      setUsers(res.results);
+      setHasMore(res.has_more);
     } catch {
       setError("שגיאה בטעינת הלקוחות. ודא שהמשתמש שלך הוא admin.");
+    }
+  }
+
+  async function loadMore() {
+    if (!users) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetchAdminUsers({ limit: CUSTOMERS_PAGE_SIZE, offset: users.length });
+      setUsers((prev) => [...(prev ?? []), ...res.results]);
+      setHasMore(res.has_more);
+    } catch {
+      alert("שגיאה בטעינת לקוחות נוספים");
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -167,7 +187,7 @@ export default function AdminPage() {
         </button>
       </div>
 
-      <p className="text-sm text-gray-500 mb-4">{users.length} לקוחות רשומים</p>
+      <p className="text-sm text-gray-500 mb-4">מוצגים {users.length} לקוחות</p>
 
       {users.length === 0 ? (
         <p className="text-gray-500 text-sm">אין לקוחות עדיין.</p>
@@ -220,6 +240,16 @@ export default function AdminPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {hasMore && (
+        <button
+          onClick={loadMore}
+          disabled={loadingMore}
+          className="mt-3 w-full border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition"
+        >
+          {loadingMore ? "טוען..." : "טען עוד"}
+        </button>
       )}
 
       {/* WhatsApp onboarding link popup */}

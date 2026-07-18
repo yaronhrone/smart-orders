@@ -55,7 +55,7 @@ export default function NewOrderPage() {
   const [placeError, setPlaceError] = useState("");
 
   useEffect(() => {
-    fetchProducts().then(setCatalog).catch(() => {});
+    fetchProducts({ all: true }).then((res) => setCatalog(res.results)).catch(() => {});
     try {
       const saved = localStorage.getItem("new-order-items");
       if (saved) setItems(JSON.parse(saved));
