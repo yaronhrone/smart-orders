@@ -110,29 +110,6 @@ class SupplierListCreateView(generics.ListCreateAPIView):
         return qs.all()
 
 
-# class SupplierUpdatePricesView(APIView):
-#     """
-#     POST /api/catalog/suppliers/{id}/update-prices/
-
-#     Accepts a free-text price message, uses AI to parse it,
-#     and updates the supplier's product prices in the DB.
-#     """
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     @extend_schema(request=PriceMessageSerializer, responses={200: PriceUpdateResultSerializer})
-#     def post(self, request, pk):
-#         supplier = get_object_or_404(Supplier, pk=pk)
-
-#         serializer = PriceMessageSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         from .tasks import update_supplier_prices_task
-#         task = update_supplier_prices_task.delay(supplier.id, serializer.validated_data["message"])
-
-#         return Response(
-#             {"detail": "Price update queued.", "task_id": task.id},
-#             status=status.HTTP_202_ACCEPTED,
-#         )
 class SupplierPriceMessageView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 

@@ -19,7 +19,25 @@ function _parseErrorBody(body: string): string {
   }
 }
 
-export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function tryRefresh(): Promise<boolean> {
+  const refresh = typeof window !== "undefined" ? localStorage.getItem("refresh") : null;
+  if (!refresh) return false;
+  try {
+    const res = await fetch("/api/users/token/refresh/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    localStorage.setItem("token", data.access);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function request<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
   const res = await fetch(path, {
     ...options,
@@ -30,7 +48,12 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     },
   });
   if (res.status === 401) {
+    if (!_retried) {
+      const refreshed = await tryRefresh();
+      if (refreshed) return request<T>(path, options, true);
+    }
     localStorage.removeItem("token");
+    localStorage.removeItem("refresh");
     window.location.href = "/login";
     throw new Error("פג תוקף ההתחברות, מועבר לדף הכניסה");
   }
