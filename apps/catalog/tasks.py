@@ -24,11 +24,13 @@ def fetch_market_prices_task(self):
         raise self.retry(exc=exc)
 
     updated = skipped = 0
+    unmatched_names = []
     for row in rows:
         try:
             product = Product.objects.get(name=row["name"])
         except Product.DoesNotExist:
             logger.debug("מוצר לא קיים בקטלוג, דילוג: %s", row["name"])
+            unmatched_names.append(row["name"])
             skipped += 1
             continue
 
@@ -53,8 +55,34 @@ def fetch_market_prices_task(self):
         )
         updated += 1
 
+    if unmatched_names:
+        _notify_admin_new_market_items(unmatched_names)
+
     logger.info("עדכון מחירי שוק הסתיים: %d עודכנו, %d דולגו", updated, skipped)
     return {"updated": updated, "skipped": skipped}
+
+
+def _notify_admin_new_market_items(names: list[str]) -> None:
+    """Send a WhatsApp alert to the admin about market items not yet in the catalog."""
+    from django.conf import settings
+
+    admin_number = getattr(settings, "ADMIN_WHATSAPP_NUMBER", "")
+    if not admin_number:
+        logger.warning("ADMIN_WHATSAPP_NUMBER לא מוגדר — לא נשלחה התראה על מוצרי שוק חדשים")
+        return
+
+    try:
+        from apps.orders.whatsapp import send_whatsapp_message
+
+        lines = ["🌱 *מוצרים חדשים במחירון מועצת הצמחים*", "", "המוצרים הבאים מופיעים באתר אך אינם בקטלוג:"]
+        lines += [f"• {name}" for name in names]
+        lines.append("")
+        lines.append("כדי לקבל עבורם מחיר שוק, הוסף אותם לקטלוג.")
+
+        send_whatsapp_message(admin_number, "\n".join(lines))
+        logger.info("נשלחה התראה לאדמין על %d מוצרי שוק חדשים", len(names))
+    except Exception as exc:
+        logger.error("שגיאה בשליחת התראה לאדמין על מוצרי שוק: %s", exc)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)

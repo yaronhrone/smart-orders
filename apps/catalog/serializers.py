@@ -126,22 +126,3 @@ class SupplierWithProductsSerializer(serializers.ModelSerializer):
             "minimum_order",
             "products",
         )
-
-
-# ─────────────────────────── Market Agent push ───────────────────────────────
-
-class MarketPriceItemSerializer(serializers.Serializer):
-    """Single product entry in a market-agent bulk push."""
-    product_name = serializers.CharField(max_length=100)
-    price_grade_a = serializers.DecimalField(
-        max_digits=10, decimal_places=2, allow_null=True, required=False
-    )
-    price_premium = serializers.DecimalField(
-        max_digits=10, decimal_places=2, allow_null=True, required=False
-    )
-    market_date = serializers.DateField(allow_null=True, required=False)
-
-
-class MarketPricesPushSerializer(serializers.Serializer):
-    """Top-level payload for POST /api/catalog/market-prices/push/."""
-    prices = MarketPriceItemSerializer(many=True)

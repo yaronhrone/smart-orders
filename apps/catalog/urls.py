@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     ProductListCreateView, ProductDestroyView, ProductBulkCreateView,
     SupplierListCreateView, SupplierUpdateDestroyView,
-    SupplierPriceUpdateView, SupplierPricesListView, MarketPriceListView, MarketPricesPushView,
+    SupplierPriceUpdateView, SupplierPricesListView, MarketPriceListView, MarketPriceRawScrapeView,
     ProductCatalogView,
 )
 
@@ -15,6 +15,6 @@ urlpatterns = [
     path("suppliers/prices/", SupplierPriceUpdateView.as_view(), name="supplier-prices"),
     path("suppliers/prices/all/", SupplierPricesListView.as_view()),
     path("market-prices/", MarketPriceListView.as_view(), name="market-prices"),
-    path("market-prices/push/", MarketPricesPushView.as_view(), name="market-prices-push"),
+    path("market-prices/raw/", MarketPriceRawScrapeView.as_view(), name="market-prices-raw"),
     path("product-prices/", ProductCatalogView.as_view(), name="product-prices"),
 ]

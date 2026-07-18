@@ -219,10 +219,6 @@ TWILIO_SKIP_SIGNATURE_VALIDATION = (
     os.environ.get("TWILIO_SKIP_SIGNATURE_VALIDATION", "0") == "1"
 )
 
-# Shared secret for the local Market Agent → server push.
-# Set MARKET_AGENT_SECRET in .env.  If empty, the push endpoint is disabled.
-MARKET_AGENT_SECRET = os.environ.get("MARKET_AGENT_SECRET", "")
-
 # WhatsApp number of the system admin (e.g. "+972501234567").
 # When set, the system sends a WhatsApp alert whenever a supplier mentions
 # a product that is not in the catalog.

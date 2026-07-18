@@ -1,18 +1,16 @@
-from datetime import date
-
+from django.conf import settings
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .price_parser import update_prices_from_message
-from .permissions import IsMarketAgent
+from .market_scraper import fetch_vegetable_prices
 from drf_spectacular.utils import extend_schema
 from .models import Product, Supplier, SupplierProduct, MarketPrice
 from .serializers import (
     ProductSerializer, SupplierSerializer, SupplierCreateSerializer,
     PriceMessageSerializer, PriceUpdateResultSerializer, SupplierPriceUpdateSerializer,
     SupplierWithProductsSerializer, MarketPriceSerializer,
-    MarketPricesPushSerializer,
 )
 
 
@@ -265,84 +263,33 @@ class MarketPriceListView(generics.ListAPIView):
         return MarketPrice.objects.select_related("product").order_by("product__name")
 
 
-class MarketPricesPushView(APIView):
+class MarketPriceRawScrapeView(APIView):
     """
-    POST /api/catalog/market-prices/push/
-
-    Authenticated by a pre-shared API key (Authorization: Api-Key <MARKET_AGENT_SECRET>).
-    Accepts a bulk payload from the local Market Agent and upserts MarketPrice records.
-
-    Expected payload:
-        {
-            "prices": [
-                {
-                    "product_name": "עגבניה",
-                    "price_grade_a": "3.50",
-                    "price_premium": "4.20",
-                    "market_date": "2026-05-28"
-                }
-            ]
-        }
-
-    Both price fields are optional; at least one must be present or the item is skipped.
-    market_date defaults to today if omitted.
-    product_name is matched case-insensitively and auto-created if it doesn't exist.
+    GET /api/catalog/market-prices/raw/
+    Admin-only: live scrape of the plant council site, unfiltered by catalog matching.
+    Lets an admin see everything currently listed on the site (including items not
+    yet in the catalog) before entering prices for suppliers manually.
     """
+    permission_classes = [permissions.IsAdminUser]
 
-    authentication_classes = []  # skip JWT — agent uses Api-Key header
-    permission_classes = [IsMarketAgent]
+    def get(self, request):
+        url = getattr(settings, "PLANT_COUNCIL_PRICES_URL", "")
+        if not url:
+            return Response({"error": "PLANT_COUNCIL_PRICES_URL not configured"}, status=status.HTTP_400_BAD_REQUEST)
 
-    def post(self, request):
-        serializer = MarketPricesPushSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            rows = fetch_vegetable_prices(url)
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
-        items = serializer.validated_data["prices"]
-        today = date.today()
-        created_count = 0
-        updated_count = 0
-        skipped = []
-
-        for item in items:
-            product_name = item["product_name"].strip()
-            if not product_name:
-                continue
-
-            grade_a = item.get("price_grade_a")
-            premium = item.get("price_premium")
-            main_price = grade_a if grade_a is not None else premium
-
-            if main_price is None:
-                skipped.append({"product_name": product_name, "reason": "no price provided"})
-                continue
-
-            try:
-                product = Product.objects.get(name__iexact=product_name)
-            except Product.DoesNotExist:
-                skipped.append({"product_name": product_name, "reason": "product not in catalog"})
-                continue
-
-            _, created = MarketPrice.objects.update_or_create(
-                product=product,
-                defaults={
-                    "price_per_unit": main_price,
-                    "price_grade_a": grade_a,
-                    "price_premium": premium,
-                    "market_date": item.get("market_date") or today,
-                    "source": "market-agent",
-                },
-            )
-
-            if created:
-                created_count += 1
-            else:
-                updated_count += 1
-
-        return Response(
+        catalog_names = set(Product.objects.values_list("name", flat=True))
+        return Response([
             {
-                "created": created_count,
-                "updated": updated_count,
-                "skipped": skipped,
-                "total_received": len(items),
-            },
-            status=status.HTTP_200_OK,
-        )
+                "name": row["name"],
+                "in_catalog": row["name"] in catalog_names,
+                "market_date": row["market_date"],
+                "price_grade_a": row["price_grade_a"],
+                "price_premium": row["price_premium"],
+            }
+            for row in rows
+        ])

@@ -52,7 +52,6 @@ jobs:
           TWILIO_AUTH_TOKEN: dummy
           TWILIO_WHATSAPP_NUMBER: "+10000000000"
           OPENAI_API_KEY: dummy
-          MARKET_AGENT_SECRET: dummy
         run: python manage.py test --verbosity=2
 
   # ─── Job 2: Deploy (only on push to main) ───────────────────────
