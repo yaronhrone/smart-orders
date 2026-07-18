@@ -58,7 +58,7 @@ jobs:
   # ─── Job 2: Deploy (only on push to main) ───────────────────────
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/refactor') && github.event_name == 'push'
     runs-on: ubuntu-latest
 
 
@@ -74,3 +74,18 @@ jobs:
             git pull origin main
             docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans
             docker image prune -f
+
+            echo "Waiting for /health/ to report healthy..."
+            for i in $(seq 1 30); do
+              if curl -fs http://localhost/health/ | grep -q '"status": "healthy"'; then
+                echo "Deploy healthy"
+                exit 0
+              fi
+              echo "Not healthy yet ($i/30)..."
+              sleep 5
+            done
+
+            echo "DEPLOY FAILED - app did not become healthy"
+            docker-compose -f docker-compose.prod.yml ps
+            docker-compose -f docker-compose.prod.yml logs --tail=100
+            exit 1
