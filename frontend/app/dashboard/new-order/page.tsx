@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  fetchMe,
   fetchProducts,
   suggestOrder,
   placeOrder,
@@ -37,7 +36,6 @@ export default function NewOrderPage() {
   const router = useRouter();
 
   const [step, setStep] = useState<Step>(1);
-  const [region, setRegion] = useState("center");
   const [catalog, setCatalog] = useState<Product[]>([]);
 
   // Step 1
@@ -57,9 +55,6 @@ export default function NewOrderPage() {
   const [placeError, setPlaceError] = useState("");
 
   useEffect(() => {
-    fetchMe()
-      .then((me) => { if (me.profile?.region) setRegion(me.profile.region); })
-      .catch(() => {});
     fetchProducts().then(setCatalog).catch(() => {});
     try {
       const saved = localStorage.getItem("new-order-items");
@@ -123,8 +118,7 @@ export default function NewOrderPage() {
     try {
       const result = await placeOrder(
         items.map((i) => ({ product_name: i.name, quantity: i.quantity })),
-        scenario,
-        region
+        scenario
       );
       setPlaced(result);
       setStep(3);

@@ -282,75 +282,11 @@ export interface PlaceOrderResponse {
 
 export async function placeOrder(
   products: OrderProductInput[],
-  scenario: "cheapest" | "fewest_suppliers",
-  region: string
+  scenario: "cheapest" | "fewest_suppliers"
 ): Promise<PlaceOrderResponse> {
   return request<PlaceOrderResponse>("/api/orders/place/", {
     method: "POST",
-    body: JSON.stringify({ products, scenario, region }),
-  });
-}
-
-// ─────────────── Shopping Lists ───────────────
-
-export interface ShoppingListItem {
-  id?: number;
-  product_name: string;
-  default_quantity: string;
-}
-
-export interface ShoppingList {
-  id: number;
-  name: string;
-  is_primary: boolean;
-  created_at: string;
-  products: ShoppingListItem[];
-}
-
-export async function fetchShoppingLists(): Promise<ShoppingList[]> {
-  return request<ShoppingList[]>("/api/orders/shopping-lists/");
-}
-
-export async function fetchShoppingList(id: number): Promise<ShoppingList> {
-  return request<ShoppingList>(`/api/orders/shopping-lists/${id}/`);
-}
-
-export async function createShoppingList(data: {
-  name: string;
-  is_primary?: boolean;
-  products: { product_name: string; default_quantity: string }[];
-}): Promise<ShoppingList> {
-  return request<ShoppingList>("/api/orders/shopping-lists/", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updateShoppingList(
-  id: number,
-  data: {
-    name: string;
-    is_primary?: boolean;
-    products: { product_name: string; default_quantity: string }[];
-  }
-): Promise<ShoppingList> {
-  return request<ShoppingList>(`/api/orders/shopping-lists/${id}/`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteShoppingList(id: number): Promise<void> {
-  return request<void>(`/api/orders/shopping-lists/${id}/`, { method: "DELETE" });
-}
-
-export async function suggestFromShoppingList(
-  id: number,
-  region: string
-): Promise<SuggestOrderResponse> {
-  return request<SuggestOrderResponse>(`/api/orders/shopping-lists/${id}/suggest/`, {
-    method: "POST",
-    body: JSON.stringify({ region }),
+    body: JSON.stringify({ products, scenario }),
   });
 }
 

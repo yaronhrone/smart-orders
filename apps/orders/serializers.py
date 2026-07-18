@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
-from apps.catalog.models import Product, Region
+from apps.catalog.models import Product
 from apps.orders.models import OrderRequest
 
 
@@ -36,7 +36,6 @@ class SuggestOrderInputSerializer(serializers.Serializer):
 
     products = OrderItemInputSerializer(many=True, min_length=1)
 class PlaceOrderInputSerializer(serializers.Serializer):
-    region = serializers.ChoiceField(choices=Region.choices)
     scenario = serializers.ChoiceField(
         choices=["cheapest", "fewest_suppliers"],
         default="cheapest",
