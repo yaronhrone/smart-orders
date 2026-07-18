@@ -21,6 +21,23 @@ class OrderRequest(models.Model):
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    ALLOWED_TRANSITIONS = {
+        Status.PENDING:   [Status.APPROVED, Status.CANCELLED],
+        Status.APPROVED:  [Status.SENT,     Status.CANCELLED],
+        Status.SENT:      [Status.DELIVERED, Status.CANCELLED],
+        Status.DELIVERED: [],
+        Status.CANCELLED: [],
+    }
+
+    def transition_to(self, new_status):
+        allowed = self.ALLOWED_TRANSITIONS.get(self.status, [])
+        if new_status not in allowed:
+            current_display = self.get_status_display()
+            new_display = dict(self.Status.choices).get(new_status, new_status)
+            raise ValueError(f"לא ניתן לעבור מ-'{current_display}' ל-'{new_display}'")
+        self.status = new_status
+        self.save(update_fields=["status"])
+
     def __str__(self):
         return f"הזמנה #{self.id} - {self.user.email} ({self.get_status_display()})"
 

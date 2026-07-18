@@ -132,8 +132,11 @@ class OrderStatusUpdateView(APIView):
         serializer = OrderStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        order.status = serializer.validated_data["status"]
-        order.save(update_fields=["status"])
+        new_status = serializer.validated_data["status"]
+        try:
+            order.transition_to(new_status)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({"id": order.id, "status": order.status})
 class OrderStatsView(APIView):
