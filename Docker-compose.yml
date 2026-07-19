@@ -17,11 +17,6 @@ services:
              python manage.py runserver 0.0.0.0:8000"
     env_file:
       - .env
-    environment:
-      - TWILIO_ACCOUNT_SID=AC80a1c5c49e83352af2a5865729a479bd
-      - TWILIO_AUTH_TOKEN=83569eeeb70fe07dd8bf088dc9950fd5
-      - TWILIO_WHATSAPP_NUMBER=+14155238886
-
     depends_on:
       - db
       - redis
