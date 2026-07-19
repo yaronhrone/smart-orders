@@ -76,7 +76,7 @@ jobs:
 
             echo "Waiting for /health/ to report healthy..."
             for i in $(seq 1 30); do
-              if curl -fs http://localhost/health/ | grep -q '"status": "healthy"'; then
+              if curl -fsLk http://localhost/health/ | grep -q '"status": "healthy"'; then
                 echo "Deploy healthy"
                 exit 0
               fi
