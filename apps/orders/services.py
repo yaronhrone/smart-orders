@@ -6,8 +6,10 @@ from apps.orders.models import OrderRequest, OrderRequestProduct
 
 
 def suggest_order(user, region, products):
-    cheapest = _assign_suppliers(products, user, region)
-    fewest = _assign_fewest_suppliers(products, user, region)
+    suppliers = _get_available_suppliers(user, region)
+    price_options = _get_price_options(products, suppliers)
+    cheapest = _assign_suppliers(products, user, region, suppliers, price_options)
+    fewest = _assign_fewest_suppliers(products, user, region, suppliers, price_options)
     return {
         "cheapest": _assignments_to_scenario(cheapest, "cheapest"),
         "fewest_suppliers": _assignments_to_scenario(fewest, "fewest_suppliers"),
@@ -24,9 +26,12 @@ def suggest_order(user, region, products):
     }
 
 
-def _assign_suppliers(products, user, region):
-    suppliers = _get_available_suppliers(user, region)
-    assignments_list = _build_initial_assignments(products, suppliers)
+def _assign_suppliers(products, user, region, suppliers=None, price_options=None):
+    if suppliers is None:
+        suppliers = _get_available_suppliers(user, region)
+    if price_options is None:
+        price_options = _get_price_options(products, suppliers)
+    assignments_list = _build_initial_assignments(products, price_options)
     assignments = _force_minimum_switch(assignments_list)
     _validate_all_products_present(assignments, products)
     return assignments
@@ -58,11 +63,11 @@ def build_order(user, region, products, scenario="cheapest"):
     return order, generate_whatsapp_links(assignments)
 
 
-def _build_initial_assignments(products, suppliers):
+def _build_initial_assignments(products, price_options):
     assignments = []
     missing = []
     for product in products:
-        prices = _prices_for_product(product["product"], suppliers)
+        prices = price_options.get(product["product"].id, [])
         if not prices:
             missing.append(product["product"].name)
             continue
@@ -73,6 +78,7 @@ def _build_initial_assignments(products, suppliers):
             "supplier": supplier,
             "unit_price": price,
             "all_prices": prices,
+            "price_by_supplier": {s.id: p for s, p in prices},
         })
     if missing:
         raise ValueError(f"אין ספק שיכול לספק: {', '.join(missing)}")
@@ -93,38 +99,51 @@ def _get_available_suppliers(user, region):
     )
 
 
-def _prices_for_product(product, suppliers):
-    prices = (
+def _get_price_options(products, suppliers):
+    """
+    Single query for all products (instead of one query per product), grouped
+    into {product_id: [(supplier, price), ...]} sorted ascending by price —
+    same shape/order the old per-product query returned, just batched.
+    """
+    product_ids = [p["product"].id for p in products]
+    rows = (
         SupplierProduct.objects
         .filter(
-            product=product,
+            product_id__in=product_ids,
             supplier__in=suppliers,
             price_per_unit__isnull=False,
         )
         .select_related("supplier")
-        .order_by("price_per_unit")
+        .order_by("product_id", "price_per_unit", "id")
     )
-    return [(sp.supplier, sp.price_per_unit) for sp in prices]
+    options = defaultdict(list)
+    for sp in rows:
+        options[sp.product_id].append((sp.supplier, sp.price_per_unit))
+    return options
 
 
-def _assign_fewest_suppliers(products, user, region):
+def _assign_fewest_suppliers(products, user, region, suppliers=None, price_options=None):
     """
     Greedy set cover: pick the fewest distinct suppliers that cover all products.
     Tie-break by lower total cost on the products covered. Then enforce minimum
     orders by handing off below-minimum supplier groups via _force_minimum_switch.
     """
-    suppliers = _get_available_suppliers(user, region)
+    if suppliers is None:
+        suppliers = _get_available_suppliers(user, region)
+    if price_options is None:
+        price_options = _get_price_options(products, suppliers)
 
-    product_options = {}
-    missing = []
-    for p in products:
-        prices = _prices_for_product(p["product"], suppliers)
-        if not prices:
-            missing.append(p["product"].name)
-        else:
-            product_options[p["product"].id] = prices
+    missing = [p["product"].name for p in products if not price_options.get(p["product"].id)]
     if missing:
         raise ValueError(f"אין ספק שיכול לספק: {', '.join(missing)}")
+
+    product_options = {p["product"].id: price_options[p["product"].id] for p in products}
+
+    # Per-product {supplier_id: price} lookup, built once so the greedy loop
+    # below does O(1) price lookups instead of a linear scan per candidate.
+    price_by_product_supplier = {
+        pid: {s.id: p for s, p in prices} for pid, prices in product_options.items()
+    }
 
     supplier_coverage = defaultdict(set)
     for pid, prices in product_options.items():
@@ -143,7 +162,7 @@ def _assign_fewest_suppliers(products, user, region):
             if not new_covered:
                 continue
             cost = sum(
-                quantities[pid] * _price_from(product_options[pid], sid)
+                quantities[pid] * price_by_product_supplier[pid][sid]
                 for pid in new_covered
             )
             score = (len(new_covered), -cost)
@@ -169,13 +188,10 @@ def _assign_fewest_suppliers(products, user, region):
             "supplier": supplier,
             "unit_price": price,
             "all_prices": product_options[pid],
+            "price_by_supplier": price_by_product_supplier[pid],
         })
 
     return _force_minimum_switch(assignments)
-
-
-def _price_from(prices_list, supplier_id):
-    return next(p for s, p in prices_list if s.id == supplier_id)
 
 
 def generate_whatsapp_links(assignments):
@@ -298,7 +314,7 @@ def _calculate_total_for_supplier(items, supplier_id):
     total = Decimal(0)
 
     for a in items:
-        price = next((p for s, p in a["all_prices"] if s.id == supplier_id), None)
+        price = a["price_by_supplier"].get(supplier_id)
         if price is None:
             return None
 
@@ -348,11 +364,10 @@ def _find_next_valid_supplier(items, current_supplier_id, all_assignments):
 
 def _move_items_to_supplier(items, new_supplier):
     for a in items:
-        for s, p in a["all_prices"]:
-            if s.id == new_supplier.id:
-                a["supplier"] = new_supplier
-                a["unit_price"] = p
-                break
+        price = a["price_by_supplier"].get(new_supplier.id)
+        if price is not None:
+            a["supplier"] = new_supplier
+            a["unit_price"] = price
 
 
 def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int):
