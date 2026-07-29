@@ -18,8 +18,6 @@ class Unit(models.TextChoices):
     GRAM = "gram", "גרם"
     UNIT = "unit", "יחידה"
     BOX = "box", "ארגז"
-    LITER = "liter", "ליטר"
-    METER = "meter", "מטר"
 
 
 class Product(models.Model):

@@ -9,8 +9,6 @@ const UNITS = [
   { value: "gram",  label: "גרם" },
   { value: "unit",  label: "יחידה" },
   { value: "box",   label: "ארגז" },
-  { value: "liter", label: "ליטר" },
-  { value: "meter", label: "מטר" },
 ];
 
 const EMPTY_FORM = { name: "", unit: "kg" };
