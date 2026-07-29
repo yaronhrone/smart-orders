@@ -8,6 +8,19 @@ from apps.orders.whatsapp import send_whatsapp_message
 logger = logging.getLogger(__name__)
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_supplier_order_notification_task(self, phone: str, message: str):
+    """Send a supplier its order-notification WhatsApp message, retrying on failure."""
+    try:
+        send_whatsapp_message(phone, message)
+    except Exception as exc:
+        logger.error(
+            "Failed to notify supplier %s of new order (attempt %s/%s): %s",
+            phone, self.request.retries + 1, self.max_retries, exc,
+        )
+        raise self.retry(exc=exc)
+
+
 @shared_task
 def handle_fallback_timeout(phone: str, order_request_id: int):
     """

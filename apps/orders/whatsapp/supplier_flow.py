@@ -25,6 +25,7 @@ def notify_suppliers_for_order(order) -> None:
     message instead of multiple separate ones.
     """
     from apps.orders.models import OrderRequest
+    from apps.orders.tasks import send_supplier_order_notification_task
 
     profile = getattr(order.user, "profile", None)
     company_name = profile.company_name if profile else ""
@@ -44,7 +45,7 @@ def notify_suppliers_for_order(order) -> None:
         if company_phone:
             lines.append(f"📞 {company_phone}")
         lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-        validators.send_whatsapp_message(phone, "\n".join(lines))
+        send_supplier_order_notification_task.delay(phone, "\n".join(lines))
 
         save_supplier_pending_order(
             supplier_phone=phone,

@@ -298,9 +298,10 @@ class UserConfirmationFlowTests(TestCase):
             "Body": body,
         })
 
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_reply_aleph_builds_cheapest_order(self, mock_send_webhook, mock_send_whatsapp):
+    def test_reply_aleph_builds_cheapest_order(self, mock_send_webhook, mock_send_whatsapp, mock_supplier_task):
         """Replying 'א' selects cheapest scenario and builds DB order."""
         self._seed_cache("+972505555555")
 
@@ -310,8 +311,9 @@ class UserConfirmationFlowTests(TestCase):
         self.assertIsNotNone(order)
         self.assertEqual(order.status, OrderRequest.Status.SENT)
 
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_reply_bet_builds_fewest_suppliers_order(self, mock_send):
+    def test_reply_bet_builds_fewest_suppliers_order(self, mock_send, mock_supplier_task):
         """Replying 'ב' selects fewest_suppliers scenario."""
         self._seed_cache("+972505555555")
 
@@ -333,8 +335,9 @@ class UserConfirmationFlowTests(TestCase):
         # Cache should still exist
         self.assertIsNotNone(cache.get("whatsapp_order:+972505555555"))
 
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_same_scenarios_any_reply_confirms(self, mock_send):
+    def test_same_scenarios_any_reply_confirms(self, mock_send, mock_supplier_task):
         """When cheapest == fewest any reply confirms (including 'שלום')."""
         self._seed_cache("+972505555555", same=True)
 
@@ -345,8 +348,9 @@ class UserConfirmationFlowTests(TestCase):
         order = OrderRequest.objects.filter(user=self.user).first()
         self.assertIsNotNone(order)
 
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_confirmation_clears_cache(self, mock_send):
+    def test_confirmation_clears_cache(self, mock_send, mock_supplier_task):
         """After confirming, pending order is removed from cache."""
         self._seed_cache("+972505555555")
 
@@ -354,23 +358,25 @@ class UserConfirmationFlowTests(TestCase):
 
         self.assertIsNone(cache.get("whatsapp_order:+972505555555"))
 
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_confirmation_sends_supplier_whatsapp(self, mock_send_webhook, mock_send_whatsapp):
-        """Supplier receives a WhatsApp message when user confirms."""
+    def test_confirmation_sends_supplier_whatsapp(self, mock_send_webhook, mock_send_whatsapp, mock_supplier_task):
+        """Supplier receives a WhatsApp order-notification message when user confirms."""
         self._seed_cache("+972505555555")
 
         self._post("+972505555555", "א")
 
-        # Supplier order message goes through whatsapp.py; user confirmation through whatsapp_webhook.py
-        all_calls_text = " ".join(
-            str(c) for c in mock_send_webhook.call_args_list + mock_send_whatsapp.call_args_list
-        )
-        self.assertIn("להזמין", all_calls_text)
+        # Supplier order message is dispatched via the Celery task, not sent inline.
+        mock_supplier_task.delay.assert_called_once()
+        phone, message = mock_supplier_task.delay.call_args[0]
+        self.assertEqual(phone, self.supplier.whatsapp_number)
+        self.assertIn("להזמין", message)
 
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_confirmation_saves_supplier_pending_in_cache(self, mock_send_webhook, mock_send_whatsapp):
+    def test_confirmation_saves_supplier_pending_in_cache(self, mock_send_webhook, mock_send_whatsapp, mock_supplier_task):
         """After confirmation, supplier's pending order is cached for their reply."""
         self._seed_cache("+972505555555")
 
