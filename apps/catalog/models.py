@@ -18,6 +18,8 @@ class Unit(models.TextChoices):
     GRAM = "gram", "גרם"
     UNIT = "unit", "יחידה"
     BOX = "box", "ארגז"
+    BUNDLE = "bundle", "אגודה"
+    PACK = "pack", "חבילה"
 
 
 class Product(models.Model):

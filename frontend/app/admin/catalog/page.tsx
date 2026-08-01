@@ -5,10 +5,12 @@ import { fetchProducts, deleteProduct, createProduct, Product } from "../../lib/
 import { useAutoError } from "../../lib/useAutoError";
 
 const UNITS = [
-  { value: "kg",    label: 'ק"ג' },
-  { value: "gram",  label: "גרם" },
-  { value: "unit",  label: "יחידה" },
-  { value: "box",   label: "ארגז" },
+  { value: "kg",     label: 'ק"ג' },
+  { value: "gram",   label: "גרם" },
+  { value: "unit",   label: "יחידה" },
+  { value: "box",    label: "ארגז" },
+  { value: "bundle", label: "אגודה" },
+  { value: "pack",   label: "חבילה" },
 ];
 
 const EMPTY_FORM = { name: "", unit: "kg" };
