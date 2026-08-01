@@ -210,3 +210,14 @@ ADMIN_WHATSAPP_NUMBER = os.environ.get("ADMIN_WHATSAPP_NUMBER", "")
 
 _extra_cors = [o for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o]
 CORS_ALLOWED_ORIGINS = ["http://localhost:3000"] + _extra_cors
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+    },
+    "loggers": {
+        "apps": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}

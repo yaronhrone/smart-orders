@@ -18,6 +18,8 @@ def send_whatsapp_message(to_number: str, body: str) -> str:
     if override and override != to_number:
         body = f"[בדיקה — מיועד ל: {to_number}]\n\n{body}"
 
+    logger.info("WhatsApp -> %s:\n%s", actual_to, body)
+
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
     from_wa = f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}"
     to_wa = f"whatsapp:{actual_to}"
