@@ -262,12 +262,6 @@ export interface MinimumIssue {
 export interface SuggestOrderResponse {
   cheapest: SuggestScenario;
   fewest_suppliers: SuggestScenario;
-  market_comparison: {
-    products: unknown[];
-    our_total: string;
-    market_total: string | null;
-    total_savings: string | null;
-  };
   minimum_issues: {
     cheapest: MinimumIssue[];
     fewest_suppliers: MinimumIssue[];
@@ -337,10 +331,6 @@ export interface CatalogProduct {
   product_name: string;
   unit: string;
   unit_display: string;
-  market_price: string | null;
-  market_grade_a: string | null;
-  market_premium: string | null;
-  market_date: string | null;
   cheapest_price: string | null;
   cheapest_supplier_name: string | null;
   suppliers: CatalogSupplierPrice[];

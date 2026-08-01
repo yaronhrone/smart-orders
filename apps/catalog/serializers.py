@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Product, Supplier, SupplierProduct, MarketPrice, Unit
+from .models import Product, Supplier, SupplierProduct, Unit
 
 
 
@@ -41,6 +41,11 @@ class SupplierSerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
         return "".join(filter(str.isdigit, value))
 
+    def validate_whatsapp_number(self, value):
+        # Incoming WhatsApp webhooks always carry a leading "+" (E.164), so the
+        # stored number must too, or supplier messages will silently fail to match.
+        return "+" + "".join(filter(str.isdigit, value))
+
 
 class PriceMessageSerializer(serializers.Serializer):
     """Input for updating supplier prices from a free-text message."""
@@ -70,6 +75,8 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
 
     from .models import Product, SupplierProduct
 
+    def validate_whatsapp_number(self, value):
+        return "+" + "".join(filter(str.isdigit, value))
 
     def create(self, validated_data):
         prices = validated_data.pop("prices", [])
@@ -101,16 +108,6 @@ class SupplierPriceUpdateSerializer(serializers.Serializer):
 
     def validate_phone(self, value):
         return "".join(filter(str.isdigit, value))
-
-class MarketPriceSerializer(serializers.ModelSerializer):
-    name = serializers.CharField(source="product.name", read_only=True)
-    unit = serializers.CharField(source="product.unit", read_only=True)
-    unit_display = serializers.CharField(source="product.get_unit_display", read_only=True)
-
-    class Meta:
-        model = MarketPrice
-        fields = ("name", "unit", "unit_display", "price_grade_a", "price_premium", "market_date", "updated_at")
-
 
 class SupplierWithProductsSerializer(serializers.ModelSerializer):
     products = SupplierProductSerializer(many=True, read_only=True)

@@ -32,6 +32,20 @@ def _normalize_phone(phone: str) -> str:
     return phone
 
 
+def _local_to_e164(phone: str) -> str:
+    """
+    Convert a locally-stored Israeli phone ("0XXXXXXXXX", as saved on Profile.phone)
+    into E.164 ("+972XXXXXXXXX") for outbound WhatsApp sends via Twilio, which
+    rejects local-format numbers.
+    """
+    digits = "".join(filter(str.isdigit, phone))
+    if digits.startswith("0"):
+        return "+972" + digits[1:]
+    if digits.startswith("972"):
+        return "+" + digits
+    return phone if phone.startswith("+") else "+" + digits
+
+
 def _validate_twilio_signature(request) -> bool:
     """Return True if the request came from Twilio (or TWILIO_SKIP_SIGNATURE_VALIDATION is on)."""
     if settings.TWILIO_SKIP_SIGNATURE_VALIDATION:

@@ -1,17 +1,15 @@
-from django.conf import settings
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .price_parser import update_prices_from_message
-from .market_scraper import fetch_vegetable_prices
 from core.pagination import paginate, LoadMorePagination
 from drf_spectacular.utils import extend_schema
-from .models import Product, Supplier, SupplierProduct, MarketPrice
+from .models import Product, Supplier, SupplierProduct
 from .serializers import (
     ProductSerializer, SupplierSerializer, SupplierCreateSerializer,
     PriceMessageSerializer, PriceUpdateResultSerializer, SupplierPriceUpdateSerializer,
-    SupplierWithProductsSerializer, MarketPriceSerializer,
+    SupplierWithProductsSerializer,
 )
 
 
@@ -217,7 +215,7 @@ class ProductCatalogView(APIView):
         search = request.query_params.get("search", "").strip()
         products = (
             Product.objects
-            .prefetch_related("supplier_prices__supplier", "market_price")
+            .prefetch_related("supplier_prices__supplier")
             .order_by("name")
         )
         if search:
@@ -233,17 +231,11 @@ class ProductCatalogView(APIView):
             )
             cheapest_price = prices[0].price_per_unit if prices else None
 
-            mp = getattr(product, "market_price", None)
-
             result.append({
                 "product_id": product.id,
                 "product_name": product.name,
                 "unit": product.unit,
                 "unit_display": product.get_unit_display(),
-                "market_price": mp.price_per_unit if mp else None,
-                "market_grade_a": mp.price_grade_a if mp else None,
-                "market_premium": mp.price_premium if mp else None,
-                "market_date": mp.market_date if mp else None,
                 "cheapest_price": cheapest_price,
                 "cheapest_supplier_name": prices[0].supplier.name if prices else None,
                 "suppliers": [
@@ -260,47 +252,3 @@ class ProductCatalogView(APIView):
             })
 
         return Response({"results": result, "has_more": has_more})
-
-
-class MarketPriceListView(generics.ListAPIView):
-    """
-    GET /api/catalog/market-prices/
-    מחזיר את מחירי השוק העדכניים ממועצת הצמחים — שם מוצר, יחידה, סוג א', מובחר, תאריך.
-    """
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = MarketPriceSerializer
-
-    def get_queryset(self):
-        return MarketPrice.objects.select_related("product").order_by("product__name")
-
-
-class MarketPriceRawScrapeView(APIView):
-    """
-    GET /api/catalog/market-prices/raw/
-    Admin-only: live scrape of the plant council site, unfiltered by catalog matching.
-    Lets an admin see everything currently listed on the site (including items not
-    yet in the catalog) before entering prices for suppliers manually.
-    """
-    permission_classes = [permissions.IsAdminUser]
-
-    def get(self, request):
-        url = getattr(settings, "PLANT_COUNCIL_PRICES_URL", "")
-        if not url:
-            return Response({"error": "PLANT_COUNCIL_PRICES_URL not configured"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            rows = fetch_vegetable_prices(url)
-        except Exception as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-
-        catalog_names = set(Product.objects.values_list("name", flat=True))
-        return Response([
-            {
-                "name": row["name"],
-                "in_catalog": row["name"] in catalog_names,
-                "market_date": row["market_date"],
-                "price_grade_a": row["price_grade_a"],
-                "price_premium": row["price_premium"],
-            }
-            for row in rows
-        ])

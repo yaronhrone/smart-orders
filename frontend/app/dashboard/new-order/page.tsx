@@ -255,15 +255,6 @@ export default function NewOrderPage() {
       {/* ─── Step 2: Scenarios ────────────────────────────────────────── */}
       {step === 2 && suggestion && (
         <div className="space-y-5">
-          {/* Market comparison */}
-          {suggestion.market_comparison.total_savings &&
-            Number(suggestion.market_comparison.total_savings) > 0 && (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-sm text-green-800">
-                <span className="font-semibold">חסכון לעומת מחיר שוק: </span>
-                {formatCurrency(suggestion.market_comparison.total_savings)}
-              </div>
-            )}
-
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {(["cheapest", "fewest_suppliers"] as const)
               .map((key) => ({

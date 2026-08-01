@@ -1,0 +1,325 @@
+{
+  "info": {
+    "name": "Smart Orders API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"YourPass!1\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/users/login/", "host": ["{{base_url}}"], "path": ["api","users","login",""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.access) pm.environment.set('access_token', data.access);",
+                  "if (data.refresh) pm.environment.set('refresh_token', data.refresh);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}" },
+            "url": { "raw": "{{base_url}}/api/users/token/refresh/", "host": ["{{base_url}}"], "path": ["api","users","token","refresh",""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": [ "const data = pm.response.json();", "if (data.access) pm.environment.set('access_token', data.access);" ] }
+            }
+          ]
+        },
+        {
+          "name": "Register User (admin)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newuser@example.com\",\n  \"password\": \"Pass!123A\",\n  \"password2\": \"Pass!123A\",\n  \"first_name\": \"שם\",\n  \"last_name\": \"משפחה\",\n  \"company_name\": \"שם החברה\",\n  \"company_phone\": \"0501234567\",\n  \"company_address\": \"כתובת החברה\",\n  \"phone\": \"0501234567\",\n  \"position\": \"תפקיד\",\n  \"region\": \"center\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/users/register/", "host": ["{{base_url}}"], "path": ["api","users","register",""] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/users/me/", "host": ["{{base_url}}"], "path": ["api","users","me",""] } }
+        },
+        {
+          "name": "Update My Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_name\": \"שם החברה\",\n  \"company_phone\": \"0501234567\",\n  \"company_address\": \"כתובת\",\n  \"phone\": \"0501234567\",\n  \"position\": \"תפקיד\",\n  \"region\": \"center\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/users/me/profile/", "host": ["{{base_url}}"], "path": ["api","users","me","profile",""] }
+          }
+        },
+        {
+          "name": "List Users (admin)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/users/admin/users/", "host": ["{{base_url}}"], "path": ["api","users","admin","users",""] } }
+        },
+        {
+          "name": "Get User Detail (admin)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/users/admin/users/:id/", "host": ["{{base_url}}"], "path": ["api","users","admin","users",":id",""], "variable": [ { "key": "id", "value": "1" } ] } }
+        },
+        {
+          "name": "Delete User (admin)",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{base_url}}/api/users/admin/users/:id/", "host": ["{{base_url}}"], "path": ["api","users","admin","users",":id",""], "variable": [ { "key": "id", "value": "1" } ] } }
+        },
+        {
+          "name": "Update User Profile (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"company_name\": \"שם החברה\",\n  \"region\": \"center\"\n}" },
+            "url": { "raw": "{{base_url}}/api/users/admin/users/:id/profile/", "host": ["{{base_url}}"], "path": ["api","users","admin","users",":id","profile",""], "variable": [ { "key": "id", "value": "1" } ] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Catalog",
+      "item": [
+        {
+          "name": "List Products",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/catalog/products/?search=", "host": ["{{base_url}}"], "path": ["api","catalog","products",""], "query": [ { "key": "search", "value": "" } ] } }
+        },
+        {
+          "name": "Create Product (admin)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"עגבנייה\",\n  \"unit\": \"kg\"\n}" },
+            "url": { "raw": "{{base_url}}/api/catalog/products/", "host": ["{{base_url}}"], "path": ["api","catalog","products",""] }
+          }
+        },
+        {
+          "name": "Bulk Create Products (admin)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"products\": [\n    { \"name\": \"עגבנייה\", \"unit\": \"kg\" },\n    { \"name\": \"מלפפון\", \"unit\": \"kg\" }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/catalog/products/bulk/", "host": ["{{base_url}}"], "path": ["api","catalog","products","bulk",""] }
+          }
+        },
+        {
+          "name": "Delete Product (admin)",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{base_url}}/api/catalog/products/:id/", "host": ["{{base_url}}"], "path": ["api","catalog","products",":id",""], "variable": [ { "key": "id", "value": "1" } ] } }
+        },
+        {
+          "name": "List Suppliers",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/catalog/suppliers/?region=", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers",""], "query": [ { "key": "region", "value": "" } ] } }
+        },
+        {
+          "name": "Create Supplier (admin)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"ספק לדוגמה\",\n  \"phone\": \"0501234567\",\n  \"whatsapp_number\": \"0501234567\",\n  \"region\": \"center\",\n  \"minimum_order\": \"200.00\",\n  \"prices\": [\n    { \"product_name\": \"עגבנייה\", \"price_per_unit\": \"3.50\", \"unit\": \"kg\" }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/catalog/suppliers/", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers",""] }
+          }
+        },
+        {
+          "name": "Get Supplier",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/catalog/suppliers/:id/", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers",":id",""], "variable": [ { "key": "id", "value": "1" } ] } }
+        },
+        {
+          "name": "Update Supplier (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"minimum_order\": \"250.00\"\n}" },
+            "url": { "raw": "{{base_url}}/api/catalog/suppliers/:id/", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers",":id",""], "variable": [ { "key": "id", "value": "1" } ] }
+          }
+        },
+        {
+          "name": "Delete Supplier (admin)",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{base_url}}/api/catalog/suppliers/:id/", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers",":id",""], "variable": [ { "key": "id", "value": "1" } ] } }
+        },
+        {
+          "name": "Update Supplier Prices (admin)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"phone\": \"0501234567\",\n  \"prices\": [\n    { \"product_name\": \"עגבנייה\", \"price_per_unit\": \"3.60\" },\n    { \"product_name\": \"מלפפון\", \"price_per_unit\": \"2.10\" }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/catalog/suppliers/prices/", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers","prices",""] }
+          }
+        },
+        {
+          "name": "List All Supplier Prices",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/catalog/suppliers/prices/all/", "host": ["{{base_url}}"], "path": ["api","catalog","suppliers","prices","all",""] } }
+        },
+        {
+          "name": "Product-Centric Prices",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/catalog/product-prices/?search=", "host": ["{{base_url}}"], "path": ["api","catalog","product-prices",""], "query": [ { "key": "search", "value": "" } ] } }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "Suggest Order",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"products\": [\n    { \"product_name\": \"עגבנייה\", \"quantity\": \"10\" },\n    { \"product_name\": \"מלפפון\", \"quantity\": \"5\" }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/orders/suggest/", "host": ["{{base_url}}"], "path": ["api","orders","suggest",""] }
+          }
+        },
+        {
+          "name": "Place Order",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"scenario\": \"cheapest\",\n  \"products\": [\n    { \"product_name\": \"עגבנייה\", \"quantity\": \"10\" },\n    { \"product_name\": \"מלפפון\", \"quantity\": \"5\" }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/orders/place/", "host": ["{{base_url}}"], "path": ["api","orders","place",""] }
+          }
+        },
+        {
+          "name": "List My Orders",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/orders/", "host": ["{{base_url}}"], "path": ["api","orders",""] } }
+        },
+        {
+          "name": "Get Order Detail",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/orders/:id/", "host": ["{{base_url}}"], "path": ["api","orders",":id",""], "variable": [ { "key": "id", "value": "1" } ] } }
+        },
+        {
+          "name": "Update Order Status",
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"SENT\"\n}" },
+            "url": { "raw": "{{base_url}}/api/orders/:id/status/", "host": ["{{base_url}}"], "path": ["api","orders",":id","status",""], "variable": [ { "key": "id", "value": "1" } ] }
+          }
+        },
+        {
+          "name": "Order Stats",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{base_url}}/api/orders/stats/", "host": ["{{base_url}}"], "path": ["api","orders","stats",""] } }
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp Simulation (dev only)",
+      "item": [
+        {
+          "name": "1 - Customer: New Order Message",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/x-www-form-urlencoded" } ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "From", "value": "whatsapp:+972501234567" },
+                { "key": "Body", "value": "40 קילו עגבניות, 20 קילו מלפפון" },
+                { "key": "MessageSid", "value": "SMtest{{$randomInt}}" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/whatsapp/webhook/", "host": ["{{base_url}}"], "path": ["whatsapp","webhook",""] },
+            "description": "Step 1: simulates a customer texting a free-text order. 'From' must match an existing Profile.phone (local '0XXXXXXXXX' digits, matched after stripping the '+972'). Uses newuser@example.com (0501234567) — chosen because it does NOT collide with any Supplier.whatsapp_number.\n\n⚠️ Pitfall found while testing: some of the dummy seed suppliers and dummy seed customers share the exact same digits (e.g. a customer's phone equals a supplier's WhatsApp number). The webhook checks 'is this a known supplier?' FIRST — if your test customer number collides with a supplier record, your message silently gets routed into the supplier price-parsing flow instead of the customer order flow, with no error. Before using a different 'From' number, check GET /api/catalog/suppliers/prices/all/ to make sure it doesn't collide.\n\nResponse to the customer (via WhatsApp) will show pricing options and ask to reply with 'אישור' (if cheapest == fewest-suppliers total) or 'א'/'ב' (if they differ) — check which one applies via the next request or by reading Redis key whatsapp_order:<phone>."
+          }
+        },
+        {
+          "name": "2 - Customer: Confirm Order (א / אישור)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/x-www-form-urlencoded" } ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "From", "value": "whatsapp:+972501234567" },
+                { "key": "Body", "value": "א" },
+                { "key": "MessageSid", "value": "SMtest{{$randomInt}}" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/whatsapp/webhook/", "host": ["{{base_url}}"], "path": ["whatsapp","webhook",""] },
+            "description": "Step 2: confirms the pending order from step 1. Body must be 'א' or '1' (cheapest scenario), 'ב' or '2' (fewest-suppliers scenario), or 'אישור' (only works if both scenarios have the identical total — otherwise it's rejected and you must pick א/ב explicitly).\n\nIf the chosen scenario doesn't meet a supplier's minimum order, you'll get a warning instead and the pending order is now cleared (fixed a bug where it used to get stuck) — just resend step 1 with bigger quantities.\n\nOn success: creates a real OrderRequest (status SENT) and sends a WhatsApp message to the assigned supplier(s) — check GET /api/orders/ or the 'Simulate Supplier Order Reply' request below to continue the flow as the supplier."
+          }
+        },
+        {
+          "name": "Simulate Supplier Price Message",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/x-www-form-urlencoded" } ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "From", "value": "whatsapp:+972501111111" },
+                { "key": "Body", "value": "עגבנייה סוג א 5.5, בצל 4, לוף 8" },
+                { "key": "MessageSid", "value": "SMtest{{$randomInt}}" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/whatsapp/webhook/", "host": ["{{base_url}}"], "path": ["whatsapp","webhook",""] },
+            "description": "Simulates an incoming Twilio WhatsApp webhook from a supplier, without needing a real phone/Twilio account. Only works when TWILIO_SKIP_SIGNATURE_VALIDATION=1 in .env (dev only). 'From' must exactly match an existing Supplier.whatsapp_number (including the leading +) — see 'List All Supplier Prices' to find one. Postman sends UTF-8 correctly, so Hebrew product names work (unlike some terminals/curl setups)."
+          }
+        },
+        {
+          "name": "Simulate Supplier Order Reply",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/x-www-form-urlencoded" } ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "From", "value": "whatsapp:+972501111111" },
+                { "key": "Body", "value": "אישור" },
+                { "key": "MessageSid", "value": "SMtest{{$randomInt}}" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/whatsapp/webhook/", "host": ["{{base_url}}"], "path": ["whatsapp","webhook",""] },
+            "description": "Simulates a supplier confirming/rejecting an order that was already sent to them (only meaningful right after 'Place Order' triggered a real WhatsApp send to this supplier's number)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Misc",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": { "raw": "{{base_url}}/health/", "host": ["{{base_url}}"], "path": ["health",""] } }
+        }
+      ]
+    }
+  ]
+}

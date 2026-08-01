@@ -60,23 +60,6 @@ class ScenarioSerializer(serializers.Serializer):
     supplier_count = serializers.IntegerField()
     products = ScenarioItemSerializer(many=True)
 # ---------------------------------------------------------------------------
-# Output — market comparison
-# ---------------------------------------------------------------------------
-class MarketComparisonItemSerializer(serializers.Serializer):
-    product_id = serializers.IntegerField()
-    product_name = serializers.CharField()
-    quantity = serializers.DecimalField(max_digits=10, decimal_places=2)
-    our_unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    market_unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-    our_subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
-    market_subtotal = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-    savings = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-class MarketComparisonSerializer(serializers.Serializer):
-    products = MarketComparisonItemSerializer(many=True)
-    our_total = serializers.DecimalField(max_digits=10, decimal_places=2)
-    market_total = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-    total_savings = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
-# ---------------------------------------------------------------------------
 # Output — suggest endpoint
 # ---------------------------------------------------------------------------
 class MinimumIssueSerializer(serializers.Serializer):
@@ -95,7 +78,6 @@ class MinimumIssuesByScenarioSerializer(serializers.Serializer):
 class SuggestOrderResponseSerializer(serializers.Serializer):
     cheapest = ScenarioSerializer()
     fewest_suppliers = ScenarioSerializer()
-    market_comparison = MarketComparisonSerializer()
     minimum_issues = MinimumIssuesByScenarioSerializer()
 
 # ---------------------------------------------------------------------------

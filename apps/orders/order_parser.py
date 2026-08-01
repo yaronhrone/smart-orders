@@ -5,6 +5,8 @@ from decimal import Decimal, InvalidOperation
 
 from openai import OpenAI
 
+from apps.catalog.product_matcher import match_order_items
+
 logger = logging.getLogger(__name__)
 
 _client = None
@@ -72,36 +74,44 @@ def parse_customer_order(message: str, product_names: list) -> list:
     Returns [{"product_name": str, "quantity": Decimal}].
     Raises ValueError("no_items") if nothing extracted.
     Raises ValueError("AI parsing failed: ...") on OpenAI error.
-    """
-    known = ", ".join(product_names) if product_names else "—"
-    prompt = (
-        "You are an order parser for a vegetable/fruit ordering system in Israel.\n"
-        "Extract ALL products and quantities from the customer's order message.\n"
-        f"Known products in the system: {known}\n"
-        "Rules:\n"
-        "1. Match product names to known products using fuzzy/phonetic Hebrew matching. "
-        "Use the exact known name when there is a match.\n"
-        "2. Default quantity is 1 if not specified.\n"
-        "Return ONLY a JSON object with key 'items'. "
-        'Each element: {"product_name": "...", "quantity": "5.0"}\n'
-        f"Message: {message}"
-    )
 
-    try:
-        response = _get_client().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0,
+    Segments that resolve via the exact/alias dictionary (data/product_aliases.json)
+    skip the AI entirely — only what's left over goes to OpenAI. If everything
+    resolves via the dictionary, no AI call is made at all.
+    """
+    dict_resolved, remaining_message = match_order_items(message, product_names)
+
+    items = list(dict_resolved)
+    if remaining_message:
+        known = ", ".join(product_names) if product_names else "—"
+        prompt = (
+            "You are an order parser for a vegetable/fruit ordering system in Israel.\n"
+            "Extract ALL products and quantities from the customer's order message.\n"
+            f"Known products in the system: {known}\n"
+            "Rules:\n"
+            "1. Match product names to known products using fuzzy/phonetic Hebrew matching. "
+            "Use the exact known name when there is a match.\n"
+            "2. Default quantity is 1 if not specified.\n"
+            "Return ONLY a JSON object with key 'items'. "
+            'Each element: {"product_name": "...", "quantity": "5.0"}\n'
+            f"Message: {remaining_message}"
         )
-        raw = response.choices[0].message.content
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            data = data.get("items", next(iter(data.values()), []))
-        items = data if isinstance(data, list) else []
-    except Exception as exc:
-        logger.error("OpenAI order parsing failed: %s", exc)
-        raise ValueError(f"AI parsing failed: {exc}")
+
+        try:
+            response = _get_client().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            raw = response.choices[0].message.content
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                data = data.get("items", next(iter(data.values()), []))
+            items += data if isinstance(data, list) else []
+        except Exception as exc:
+            logger.error("OpenAI order parsing failed: %s", exc)
+            raise ValueError(f"AI parsing failed: {exc}")
 
     result = []
     for entry in items:

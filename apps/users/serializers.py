@@ -57,6 +57,12 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"password": "הסיסמאות אינן תואמות"})
         return attrs
 
+    def validate_phone(self, value):
+        # WhatsApp order lookup matches Profile.phone by exact string (digits only,
+        # local "0XXXXXXXXX" format) — dashes/spaces here would make a customer's
+        # WhatsApp messages silently unrecognized.
+        return "".join(filter(str.isdigit, value)) if value else value
+
     def create(self, validated_data):
         validated_data.pop("password2")
         password = validated_data.pop("password")
@@ -86,6 +92,9 @@ class ProfileSerializer(serializers.ModelSerializer):
             "position",
             "region",
         )
+
+    def validate_phone(self, value):
+        return "".join(filter(str.isdigit, value)) if value else value
 class UserWithProfileSerializer(serializers.ModelSerializer):
     profile = ProfileSerializer()
 

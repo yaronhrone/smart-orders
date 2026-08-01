@@ -1,7 +1,7 @@
 from decimal import Decimal
 from collections import defaultdict
 from urllib.parse import quote
-from apps.catalog.models import SupplierProduct, Supplier, MarketPrice
+from apps.catalog.models import SupplierProduct, Supplier
 from apps.orders.models import OrderRequest, OrderRequestProduct
 
 
@@ -13,12 +13,6 @@ def suggest_order(user, region, products):
     return {
         "cheapest": _assignments_to_scenario(cheapest, "cheapest"),
         "fewest_suppliers": _assignments_to_scenario(fewest, "fewest_suppliers"),
-        "market_comparison": {
-            "products": [],
-            "our_total": 0,
-            "market_total": None,
-            "total_savings": None,
-        },
         "minimum_issues": {
             "cheapest": _check_missing_minimum(cheapest),
             "fewest_suppliers": _check_missing_minimum(fewest),

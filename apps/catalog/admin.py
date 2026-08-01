@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Product, Supplier, SupplierProduct, MarketPrice
+from .models import Product, Supplier, SupplierProduct
 
 
 @admin.register(Product)
@@ -25,9 +25,3 @@ class SupplierAdmin(admin.ModelAdmin):
 class SupplierProductAdmin(admin.ModelAdmin):
     list_display = ("supplier", "product", "price_per_unit", "updated_at")
     list_filter = ("supplier", "product")
-
-
-@admin.register(MarketPrice)
-class MarketPriceAdmin(admin.ModelAdmin):
-    list_display = ("product", "price_per_unit", "source", "updated_at")
-    search_fields = ("product__name",)

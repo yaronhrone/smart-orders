@@ -51,7 +51,10 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
         return
 
     customer_profile = getattr(order.user, "profile", None)
-    customer_phone = customer_profile.phone if customer_profile else None
+    customer_phone = (
+        validators._local_to_e164(customer_profile.phone)
+        if customer_profile and customer_profile.phone else None
+    )
     if not customer_phone:
         return
 

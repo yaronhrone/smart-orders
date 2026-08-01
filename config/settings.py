@@ -14,8 +14,6 @@ from pathlib import Path
 
 import os
 
-from celery.schedules import crontab
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -194,20 +192,6 @@ SIMPLE_JWT = {
 CELERY_BROKER_URL = "redis://redis:6379/0"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
-
-CELERY_BEAT_SCHEDULE = {
-    "fetch-market-prices-daily": {
-        "task": "apps.catalog.tasks.fetch_market_prices_task",
-        "schedule": crontab(hour=10, minute=30),
-    },
-}
-
-# כתובת עמוד מחירון הירקות של מועצת הצמחים
-# יש לעדכן ל-URL המדויק של הטבלה באתר
-PLANT_COUNCIL_PRICES_URL = os.environ.get(
-    "PLANT_COUNCIL_PRICES_URL",
-    "https://plants.moonsite.co.il/",
-)
 
 AUTH_USER_MODEL = "users.User"
 

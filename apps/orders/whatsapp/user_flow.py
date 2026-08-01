@@ -344,6 +344,11 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     minimum_issues = data.get("minimum_issues", {})
     scenario_issues = minimum_issues.get(scenario, [])
     if scenario_issues:
+        # Clear the pending order so the customer's next message (a renewed,
+        # larger order — as this warning instructs them to send) is parsed as
+        # a fresh order by _handle_new_order, instead of being reinterpreted
+        # as a stale א/ב scenario choice against the old (too-small) totals.
+        cache.delete(key)
         msg = _format_minimum_warning(scenario_issues)
         msg += "\n\nשלח הזמנה מחודשת עם כמויות גדולות יותר כדי לעמוד במינימום."
         validators.send_whatsapp_message(phone, msg)

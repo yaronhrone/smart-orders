@@ -17,15 +17,6 @@ function fmt(n: string | null | undefined) {
   return `₪${Number(n).toFixed(2)}`;
 }
 
-function MarketBadge({ label, value }: { label: string; value: string | null }) {
-  if (!value) return null;
-  return (
-    <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
-      {label}: {fmt(value)}
-    </span>
-  );
-}
-
 function PriceCell({ suppliers }: { suppliers: CatalogProduct["suppliers"] }) {
   if (suppliers.length === 0)
     return <span className="text-gray-400 text-sm">אין ספק</span>;
@@ -125,7 +116,6 @@ export default function CatalogPage() {
               <tr className="bg-gray-50 text-gray-500 text-xs border-b border-gray-100">
                 <th className="text-right px-4 py-3 font-medium w-48">מוצר</th>
                 <th className="text-right px-4 py-3 font-medium w-20">יחידה</th>
-                <th className="text-right px-4 py-3 font-medium w-56">מחיר שוק</th>
                 <th className="text-right px-4 py-3 font-medium">ספקים ומחירים</th>
                 <th className="text-right px-4 py-3 font-medium w-32">הזול ביותר</th>
               </tr>
@@ -135,18 +125,6 @@ export default function CatalogPage() {
                 <tr key={p.product_id} className="hover:bg-gray-50 transition align-top">
                   <td className="px-4 py-3 font-medium text-gray-800">{p.product_name}</td>
                   <td className="px-4 py-3 text-gray-500">{p.unit_display}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-col gap-1">
-                      <MarketBadge label='סוג א"' value={p.market_grade_a} />
-                      <MarketBadge label="מובחר" value={p.market_premium} />
-                      {!p.market_grade_a && !p.market_premium && (
-                        <span className="text-gray-400 text-xs">אין נתון</span>
-                      )}
-                      {p.market_date && (
-                        <span className="text-xs text-gray-300">{p.market_date}</span>
-                      )}
-                    </div>
-                  </td>
                   <td className="px-4 py-3">
                     <PriceCell suppliers={p.suppliers} />
                   </td>

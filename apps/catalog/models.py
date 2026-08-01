@@ -61,22 +61,3 @@ class SupplierProduct(models.Model):
 
     def __str__(self):
         return f"{self.supplier.name} - {self.product.name}: ₪{self.price_per_unit}"
-
-
-class MarketPrice(models.Model):
-    """מחיר שוק מועצת הצמחים — שורה אחת לכל מוצר, מתעדכן יומית."""
-    product = models.OneToOneField(
-        Product,
-        on_delete=models.CASCADE,
-        related_name="market_price",
-    )
-    # המחיר הראשי — סוג א' אם קיים, אחרת מובחר
-    price_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    price_grade_a = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    price_premium = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    market_date = models.DateField(null=True, blank=True)
-    source = models.CharField(max_length=255, default="מועצת הצמחים")
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"{self.product.name}: ₪{self.price_per_unit} ({self.source})"

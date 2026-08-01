@@ -254,7 +254,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             customer_phone = None
             if first_orp:
                 p = getattr(first_orp.order_request.user, "profile", None)
-                customer_phone = p.phone if p else None
+                customer_phone = validators._local_to_e164(p.phone) if p and p.phone else None
 
             fallback = find_full_coverage_fallback(
                 order_request_id=order_request_id,
@@ -420,7 +420,10 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
 
         if orp and confirmed:
             customer_profile = getattr(orp.order_request.user, "profile", None)
-            customer_phone = customer_profile.phone if customer_profile else None
+            customer_phone = (
+                validators._local_to_e164(customer_profile.phone)
+                if customer_profile and customer_profile.phone else None
+            )
             if customer_phone:
                 customer_lines = [f"✅ *{supplier.name}* אישר:"]
                 for p in products:
