@@ -9,13 +9,12 @@ from django.core.cache import cache
 from django.http import HttpResponse
 from django.utils import timezone
 
+from apps.catalog.product_matcher import MISSING_KEYWORDS
 from .cache import save_supplier_pending_order, CUTOFF_TTL
 from .fallback_flow import _handle_missing_items, _recalculate_order_total
 from . import validators
 
 logger = logging.getLogger(__name__)
-
-MISSING_KEYWORDS = ["חסר", "אין", "נגמר", "אזל", "לא קיים"]
 
 
 def notify_suppliers_for_order(order) -> None:
@@ -170,9 +169,10 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
         return HttpResponse(status=200)
 
     updated = result["updated"]
+    removed = result["removed"]
     skipped = result["skipped"]
 
-    if not updated and not skipped:
+    if not updated and not removed and not skipped:
         validators.send_whatsapp_message(phone, "לא זיהיתי מחירים בהודעה. נסה לשלוח כגון:\nעגבניות 3.50, מלפפון 2.00")
         return HttpResponse(status=200)
 
@@ -192,17 +192,24 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
             unit = u.get("unit", 'ק"ג')
             lines.append(f"  • {u['product_name']}: {u['price']}₪/{unit}")
 
+    if removed:
+        lines.append("\n🚫 סומנו כלא זמינים (לא יוצעו בהזמנות חדשות עד עדכון מחיר):")
+        for r in removed:
+            lines.append(f"  • {r['product_name']}")
+
     if skipped:
         lines.append("\n⚠️ לא זוהה:")
         for s in skipped:
             lines.append(f"  • {s['product_name']} — {s['reason']}")
 
-    total = len(existing) + len(new_products)
+    total = len(existing) + len(new_products) + len(removed)
     parts = []
     if existing:
         parts.append(f"{len(existing)} עודכנו")
     if new_products:
         parts.append(f"{len(new_products)} חדשים נוספו")
+    if removed:
+        parts.append(f"{len(removed)} סומנו לא זמינים")
     if skipped:
         parts.append(f"{len(skipped)} לא זוהו")
     lines.append(f"\nסה\"כ: {', '.join(parts)} ({total} מוצרים)")
@@ -408,6 +415,11 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 ack_lines.append(f"  ✅ {p['product_name']} x{c_qty} {p['unit']}")
         elif p in missing:
             ack_lines.append(f"  ❌ {p['product_name']} — חסר")
+    if missing:
+        ack_lines.append(
+            "\n🚫 סימנו את המוצרים החסרים כלא זמינים אצלך — הם לא יוצעו בהזמנות חדשות. "
+            "שלח לנו מחיר מעודכן כשהם חוזרים למלאי."
+        )
     if cutoff_time:
         ack_lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
     validators.send_whatsapp_message(phone, "\n".join(ack_lines))

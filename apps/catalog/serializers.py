@@ -57,6 +57,7 @@ class PriceMessageSerializer(serializers.Serializer):
 
 class PriceUpdateResultSerializer(serializers.Serializer):
     updated = serializers.ListField(child=serializers.DictField())
+    removed = serializers.ListField(child=serializers.DictField())
     skipped = serializers.ListField(child=serializers.DictField())
 
 

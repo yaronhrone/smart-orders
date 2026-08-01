@@ -82,11 +82,15 @@ def _parse_with_ai(message: str, product_names: list[str]) -> dict:
         "   • 'exact' — הטקסט של הספק זהה לשם הקנוני, או שונה ממנו רק ברבים/יחיד או ה\"א הידיעה "
         "(למשל 'מלפפונים'→'מלפפון', 'עגבניות'→'עגבנייה').\n"
         "   • 'fuzzy' — נדרשה החלטה: הושמט/שונה תיאור, דרגה, זן או צבע (למשל 'עגבנייה סוג א'→'עגבנייה', "
-        "'בצל' בלי תיאור→'בצל יבש'), או שההתאמה פחות ודאית.\n\n"
+        "'בצל' בלי תיאור→'בצל יבש'), או שההתאמה פחות ודאית.\n"
+        "5. אם הספק כותב שמוצר מסוים לא זמין כרגע — נגמר, אזל, אין לו, עונה נגמרה, אין מלאי וכו' "
+        "(בלי מחיר) — אל תכניס אותו ל-'items'. הכנס אותו במקום זאת ל-'unavailable' עם 'original' "
+        "(הטקסט המדויק) ו-'product_name' (השם הקנוני שהתאמת).\n\n"
         "החזר JSON בדיוק בפורמט:\n"
         "{\n"
         '  "items": [{"product_name": "<שם קנוני מדויק>", "price": "3.50", "unit": "קג", '
         '"original": "<טקסט הספק>", "confidence": "exact"}],\n'
+        '  "unavailable": [{"product_name": "<שם קנוני מדויק>", "original": "<טקסט הספק>"}],\n'
         '  "unmatched": [{"original": "<טקסט מהספק>", "price": "X.XX"}]\n'
         "}\n\n"
         f"הודעת הספק: {message}"
@@ -104,6 +108,7 @@ def _parse_with_ai(message: str, product_names: list[str]) -> dict:
 
     return {
         "items": data.get("items", []) if isinstance(data, dict) else [],
+        "unavailable": data.get("unavailable", []) if isinstance(data, dict) else [],
         "unmatched": data.get("unmatched", []) if isinstance(data, dict) else [],
     }
 
@@ -193,9 +198,15 @@ def update_prices_from_message(supplier, message: str) -> dict:
     products, ambiguous defaults) goes to OpenAI. If everything resolves via the
     dictionary, no AI call is made at all.
 
+    Products the supplier reports as out of stock (no price — "נגמר", "אין", "אזל"
+    etc.) have their SupplierProduct row deleted, so future orders stop offering
+    this supplier for that product. Sending a new price for it later restores it
+    automatically (see the update_or_create below).
+
     Returns:
     {
         "updated": [{"product_name": str, "price": str, "unit": str}],
+        "removed": [{"product_name": str}],
         "skipped": [{"product_name": str, "reason": str}],
         "needs_review": [{"product_name": str, "price": str, "unit": str, "original": str}],
     }
@@ -203,9 +214,9 @@ def update_prices_from_message(supplier, message: str) -> dict:
     all_products = {p.name: p for p in Product.objects.all()}
     product_names = list(all_products.keys())
 
-    dict_resolved, remaining_message = match_price_items(message, product_names)
+    dict_resolved, dict_unavailable, remaining_message = match_price_items(message, product_names)
 
-    ai_items, ai_unmatched = [], []
+    ai_items, ai_unavailable, ai_unmatched = [], [], []
     if remaining_message:
         try:
             parsed = _parse_with_ai(remaining_message, product_names)
@@ -213,12 +224,23 @@ def update_prices_from_message(supplier, message: str) -> dict:
             logger.error("OpenAI price parsing failed: %s", exc)
             raise ValueError(f"שגיאה בעיבוד ההודעה עם AI: {exc}")
         ai_items = parsed.get("items", [])
+        ai_unavailable = parsed.get("unavailable", [])
         ai_unmatched = parsed.get("unmatched", [])
 
     updated = []
+    removed = []
     skipped = []
     needs_review = []
     unmatched_for_admin = list(ai_unmatched)
+
+    for entry in dict_unavailable + ai_unavailable:
+        name = entry.get("product_name", "").strip()
+        product = all_products.get(name)
+        if not product:
+            continue
+        deleted, _ = SupplierProduct.objects.filter(supplier=supplier, product=product).delete()
+        if deleted:
+            removed.append({"product_name": name})
 
     for entry in dict_resolved + ai_items:
         name = entry.get("product_name", "").strip()
@@ -278,4 +300,4 @@ def update_prices_from_message(supplier, message: str) -> dict:
     if needs_review:
         _notify_admin_fuzzy_matches(supplier, needs_review, message)
 
-    return {"updated": updated, "skipped": skipped, "needs_review": needs_review}
+    return {"updated": updated, "removed": removed, "skipped": skipped, "needs_review": needs_review}

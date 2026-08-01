@@ -35,7 +35,7 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
     partial_products: supplier confirmed partial qty; remaining qty needs fallback (ORP already reduced).
     Edge case 5: if no fallback exists for a product, auto-remove it from the order.
     """
-    from apps.catalog.models import Product
+    from apps.catalog.models import Product, SupplierProduct
     from apps.orders.models import OrderRequest, OrderRequestProduct
     from apps.orders.services import find_fallback_for_product
 
@@ -73,6 +73,11 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
             order_request_id=order_request_id, product=product
         ).first()
         original_price = str(existing_orp.unit_price) if existing_orp else "?"
+
+        # Supplier has none of this product right now — stop offering them for it
+        # in future orders until they send an updated price (update_or_create in
+        # price_parser.py recreates the row and restores it).
+        SupplierProduct.objects.filter(supplier=original_supplier, product=product).delete()
 
         fallback = find_fallback_for_product(
             product=product,

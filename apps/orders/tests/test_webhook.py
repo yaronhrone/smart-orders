@@ -498,6 +498,7 @@ class SupplierPriceUpdateFlowTests(TestCase):
         """Supplier with no pending order gets price-update flow."""
         mock_update.return_value = {
             "updated": [{"product_name": "עגבניה", "price": "4.00", "is_new": False}],
+            "removed": [],
             "skipped": [],
         }
 
@@ -513,6 +514,7 @@ class SupplierPriceUpdateFlowTests(TestCase):
         """New products are highlighted in the response."""
         mock_update.return_value = {
             "updated": [{"product_name": "פרי חדש", "price": "7.50", "is_new": True}],
+            "removed": [],
             "skipped": [],
         }
 
@@ -525,7 +527,7 @@ class SupplierPriceUpdateFlowTests(TestCase):
     @patch("apps.catalog.price_parser.update_prices_from_message")
     def test_unrecognized_price_message_sends_help(self, mock_update, mock_send):
         """Empty update result → help message."""
-        mock_update.return_value = {"updated": [], "skipped": []}
+        mock_update.return_value = {"updated": [], "removed": [], "skipped": []}
 
         self._post_supplier("שלום מה שלומך")
 
