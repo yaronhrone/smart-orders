@@ -35,16 +35,34 @@ class OrderRequestModelTests(TestCase):
         self.assertEqual(order.status, OrderRequest.Status.PENDING)
 
     def test_order_status_transitions(self):
-        """Status can be changed to approved and sent"""
+        """Real lifecycle: pending -> sent (to suppliers) -> approved (supplier confirmed)."""
         order = OrderRequest.objects.create(user=self.user)
 
-        order.status = OrderRequest.Status.APPROVED
-        order.save()
+        order.transition_to(OrderRequest.Status.SENT)
+        self.assertEqual(OrderRequest.objects.get(id=order.id).status, OrderRequest.Status.SENT)
+
+        order.transition_to(OrderRequest.Status.APPROVED)
         self.assertEqual(OrderRequest.objects.get(id=order.id).status, OrderRequest.Status.APPROVED)
 
-        order.status = OrderRequest.Status.SENT
-        order.save()
-        self.assertEqual(OrderRequest.objects.get(id=order.id).status, OrderRequest.Status.SENT)
+    def test_pending_cannot_jump_to_approved(self):
+        """A fresh order must go through SENT before APPROVED."""
+        order = OrderRequest.objects.create(user=self.user)
+        with self.assertRaises(ValueError):
+            order.transition_to(OrderRequest.Status.APPROVED)
+
+    def test_sent_can_go_straight_to_delivered(self):
+        """Delivery can be confirmed even if the supplier never formally approved."""
+        order = OrderRequest.objects.create(user=self.user)
+        order.transition_to(OrderRequest.Status.SENT)
+        order.transition_to(OrderRequest.Status.DELIVERED)
+        self.assertEqual(OrderRequest.objects.get(id=order.id).status, OrderRequest.Status.DELIVERED)
+
+    def test_delivered_is_a_terminal_state(self):
+        order = OrderRequest.objects.create(user=self.user)
+        order.transition_to(OrderRequest.Status.SENT)
+        order.transition_to(OrderRequest.Status.DELIVERED)
+        with self.assertRaises(ValueError):
+            order.transition_to(OrderRequest.Status.CANCELLED)
 
     def test_order_str(self):
         """__str__ includes order id and user email"""

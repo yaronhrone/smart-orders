@@ -55,8 +55,10 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
         ]
 
         if len(supplier_list) == 1:
-            order.status = OrderRequest.Status.DELIVERED
-            order.save(update_fields=["status"])
+            try:
+                order.transition_to(OrderRequest.Status.DELIVERED)
+            except ValueError as exc:
+                logger.error("Failed to mark order %s delivered: %s", order.id, exc)
             validators.send_whatsapp_message(
                 phone,
                 f"✅ הזמנה #{order.id} מ-{supplier_list[0]['name']} אושרה כנמסרה. תודה!"
@@ -114,10 +116,11 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
         _clear_delivery_state(phone)
         try:
             order = OrderRequest.objects.get(id=order_id)
-            order.status = OrderRequest.Status.DELIVERED
-            order.save(update_fields=["status"])
+            order.transition_to(OrderRequest.Status.DELIVERED)
         except OrderRequest.DoesNotExist:
             pass
+        except ValueError as exc:
+            logger.error("Failed to mark order %s delivered: %s", order_id, exc)
         reply_lines.append(f"\n✅ כל הזמנה #{order_id} אושרה כנמסרה. תודה!")
 
     validators.send_whatsapp_message(phone, "\n".join(reply_lines))

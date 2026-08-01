@@ -22,9 +22,9 @@ class OrderRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     ALLOWED_TRANSITIONS = {
-        Status.PENDING:   [Status.APPROVED, Status.CANCELLED],
-        Status.APPROVED:  [Status.SENT,     Status.CANCELLED],
-        Status.SENT:      [Status.DELIVERED, Status.CANCELLED],
+        Status.PENDING:   [Status.SENT, Status.CANCELLED],
+        Status.SENT:      [Status.APPROVED, Status.DELIVERED, Status.CANCELLED],
+        Status.APPROVED:  [Status.DELIVERED, Status.CANCELLED],
         Status.DELIVERED: [],
         Status.CANCELLED: [],
     }

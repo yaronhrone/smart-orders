@@ -171,33 +171,42 @@ class OrderStatusUpdateViewTests(APITestCase):
         self.other = make_user("other@test.com")
         self.client.force_authenticate(user=self.user)
 
-    def test_update_status_to_approved(self):
-        order = make_order(self.user)
-        res = self.client.patch(
-            reverse("orders-status", args=[order.id]),
-            {"status": "approved"},
-        )
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["status"], "approved")
-        order.refresh_from_db()
-        self.assertEqual(order.status, OrderRequest.Status.APPROVED)
-
     def test_update_status_to_sent(self):
         order = make_order(self.user)
-        order.status = OrderRequest.Status.APPROVED
-        order.save(update_fields=["status"])
         res = self.client.patch(
             reverse("orders-status", args=[order.id]),
             {"status": "sent"},
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["status"], "sent")
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.SENT)
+
+    def test_update_status_to_approved(self):
+        order = make_order(self.user)
+        order.status = OrderRequest.Status.SENT
+        order.save(update_fields=["status"])
+        res = self.client.patch(
+            reverse("orders-status", args=[order.id]),
+            {"status": "approved"},
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["status"], "approved")
 
     def test_illegal_transition_returns_400(self):
         order = make_order(self.user)
         res = self.client.patch(
             reverse("orders-status", args=[order.id]),
             {"status": "delivered"},
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pending_cannot_jump_to_approved(self):
+        """Regression check: PENDING must go through SENT before APPROVED."""
+        order = make_order(self.user)
+        res = self.client.patch(
+            reverse("orders-status", args=[order.id]),
+            {"status": "approved"},
         )
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 

@@ -397,7 +397,9 @@ class SupplierConfirmationFlowTests(TestCase):
         self.tomato = make_product("עגבניה")
         self.carrot = make_product("גזר")
         self.supplier = make_supplier("ספק א")
-        self.order = OrderRequest.objects.create(user=self.user, total_price="100.00")
+        self.order = OrderRequest.objects.create(
+            user=self.user, total_price="100.00", status=OrderRequest.Status.SENT,
+        )
         self.orp1 = OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
             quantity="20", unit_price="5.00",
@@ -427,6 +429,14 @@ class SupplierConfirmationFlowTests(TestCase):
         self._post_supplier("אישור")
 
         self.assertEqual(SupplierConfirmation.objects.filter(order_request_product__order_request=self.order).count(), 2)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_full_confirmation_marks_order_approved(self, mock_send):
+        """Once every item is confirmed, the order moves from SENT to APPROVED."""
+        self._post_supplier("אישור")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_full_confirmation_clears_cache(self, mock_send):

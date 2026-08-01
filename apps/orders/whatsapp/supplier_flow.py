@@ -61,8 +61,7 @@ def notify_suppliers_for_order(order) -> None:
             ],
         )
 
-    order.status = OrderRequest.Status.SENT
-    order.save(update_fields=["status"])
+    order.transition_to(OrderRequest.Status.SENT)
 
 
 def send_order_to_supplier(supplier, assignments: list) -> str:
@@ -320,7 +319,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                     validators.send_whatsapp_message(customer_phone, "\n".join(lines))
             else:
                 # No fallback — cancel the order
-                OrderRequest.objects.filter(id=order_request_id).update(status=OrderRequest.Status.CANCELLED)
+                OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.CANCELLED)
                 if customer_phone:
                     validators.send_whatsapp_message(
                         customer_phone,
@@ -384,7 +383,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 order_request_product__order_request_id=order_request_id
             ).count()
             if total_orps > 0 and confirmed_orps >= total_orps:
-                OrderRequest.objects.filter(id=order_request_id).update(status=OrderRequest.Status.APPROVED)
+                OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.APPROVED)
         except Exception as exc:
             logger.error("Failed to update order status after supplier confirmation: %s", exc)
 
