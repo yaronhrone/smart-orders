@@ -376,7 +376,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     for r in redirects:
         by_supplier[r["fallback_supplier_id"]].append(r)
 
-    success_lines = ["✅ ההעברה בוצעה:"]
+    success_lines = []
     below_minimum_msgs = []
 
     for supplier_id, items in by_supplier.items():
@@ -478,8 +478,12 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     # Edge case 1: recalculate total after all redirect changes
     _recalculate_order_total(order_request_id)
 
-    reply = "\n".join(success_lines)
+    reply_parts = []
+    if success_lines:
+        reply_parts.append("\n".join(["✅ ההעברה בוצעה:"] + success_lines))
     if below_minimum_msgs:
-        reply += "\n\n" + "\n".join(below_minimum_msgs)
-    validators.send_whatsapp_message(phone, reply)
+        reply_parts.append(
+            "\n".join(["⛔ ההעברה לא בוצעה — הפריט טרם נפתר:"] + below_minimum_msgs)
+        )
+    validators.send_whatsapp_message(phone, "\n\n".join(reply_parts))
     return HttpResponse(status=200)
