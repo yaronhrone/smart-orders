@@ -1,12 +1,16 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from django.core.cache import cache
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 
+from core.cache_utils import get_cache_version
 from core.pagination import paginate, paginated_response_serializer
 from .models import OrderRequest
+
+ORDERS_CACHE_TTL = 300  # safety-net TTL; real invalidation happens via signals.py on any write
 from .serializers import (
     SuggestOrderInputSerializer,
     SuggestOrderResponseSerializer,
@@ -85,6 +89,15 @@ class OrderListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     @extend_schema(responses=paginated_response_serializer(OrderListSerializer))
     def get(self, request):
+        limit = request.query_params.get("limit", "")
+        offset = request.query_params.get("offset", "")
+        version = get_cache_version("orders", request.user.id)
+        cache_key = f"orders:list:{request.user.id}:v{version}:{limit}:{offset}"
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         orders = (
             OrderRequest.objects
             .filter(user=request.user)
@@ -103,15 +116,24 @@ class OrderListView(APIView):
             }
             for o in page
         ]
-        return Response({
+        payload = {
             "results": OrderListSerializer(data, many=True).data,
             "has_more": has_more,
-        })
+        }
+        cache.set(cache_key, payload, timeout=ORDERS_CACHE_TTL)
+        return Response(payload)
 class OrderDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(responses=OrderDetailSerializer)
     def get(self, request, pk):
+        version = get_cache_version("orders", request.user.id)
+        cache_key = f"orders:detail:{request.user.id}:v{version}:{pk}"
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         order = get_object_or_404(
             OrderRequest.objects.prefetch_related("products__product", "products__supplier"),
             pk=pk,
@@ -124,7 +146,9 @@ class OrderDetailView(APIView):
             "created_at": order.created_at,
             "products": list(order.products.all()),
         }
-        return Response(OrderDetailSerializer(data).data)
+        payload = OrderDetailSerializer(data).data
+        cache.set(cache_key, payload, timeout=ORDERS_CACHE_TTL)
+        return Response(payload)
 class OrderStatusUpdateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -151,6 +175,13 @@ class OrderStatsView(APIView):
     @extend_schema(responses=OrderStatsSerializer)
     def get(self, request):
         """GET /api/orders/stats/ — spending totals per supplier for the current user."""
+        version = get_cache_version("orders", request.user.id)
+        cache_key = f"orders:stats:{request.user.id}:v{version}"
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         orders = (
             OrderRequest.objects
             .filter(user=request.user)
@@ -189,6 +220,8 @@ class OrderStatsView(APIView):
             "order_count": order_count,
             "by_supplier": by_supplier,
         }
-        return Response(OrderStatsSerializer(result).data)
+        payload = OrderStatsSerializer(result).data
+        cache.set(cache_key, payload, timeout=ORDERS_CACHE_TTL)
+        return Response(payload)
 
 
