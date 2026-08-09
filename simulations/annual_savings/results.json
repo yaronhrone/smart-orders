@@ -1,0 +1,3491 @@
+{
+  "kitchens": [
+    {
+      "name": "מסעדת הגינה (מטבח בינוני)",
+      "regular_supplier": "שוק ירקות המרכז",
+      "order_days": 260,
+      "total_baseline": 45047.86,
+      "total_smart": 36431.49,
+      "total_savings": 8616.37,
+      "savings_pct": 19.1,
+      "avg_savings_per_order_day": 33.14,
+      "daily": [
+        {
+          "week": 0,
+          "day": "Sunday",
+          "baseline": 604.4,
+          "smart": 484.65
+        },
+        {
+          "week": 0,
+          "day": "Monday",
+          "baseline": 102.79,
+          "smart": 80.58
+        },
+        {
+          "week": 0,
+          "day": "Tuesday",
+          "baseline": 78.91,
+          "smart": 62.41
+        },
+        {
+          "week": 0,
+          "day": "Wednesday",
+          "baseline": 40.98,
+          "smart": 34.47
+        },
+        {
+          "week": 0,
+          "day": "Thursday",
+          "baseline": 86.7,
+          "smart": 70.33
+        },
+        {
+          "week": 1,
+          "day": "Sunday",
+          "baseline": 603.08,
+          "smart": 486.39
+        },
+        {
+          "week": 1,
+          "day": "Monday",
+          "baseline": 56.57,
+          "smart": 49.29
+        },
+        {
+          "week": 1,
+          "day": "Tuesday",
+          "baseline": 104.78,
+          "smart": 80.9
+        },
+        {
+          "week": 1,
+          "day": "Wednesday",
+          "baseline": 70.41,
+          "smart": 60.89
+        },
+        {
+          "week": 1,
+          "day": "Thursday",
+          "baseline": 38.2,
+          "smart": 33.91
+        },
+        {
+          "week": 2,
+          "day": "Sunday",
+          "baseline": 563.98,
+          "smart": 459.29
+        },
+        {
+          "week": 2,
+          "day": "Monday",
+          "baseline": 77.63,
+          "smart": 61.87
+        },
+        {
+          "week": 2,
+          "day": "Tuesday",
+          "baseline": 58.33,
+          "smart": 42.74
+        },
+        {
+          "week": 2,
+          "day": "Wednesday",
+          "baseline": 86.25,
+          "smart": 67.35
+        },
+        {
+          "week": 2,
+          "day": "Thursday",
+          "baseline": 34.42,
+          "smart": 28.07
+        },
+        {
+          "week": 3,
+          "day": "Sunday",
+          "baseline": 632.25,
+          "smart": 512.48
+        },
+        {
+          "week": 3,
+          "day": "Monday",
+          "baseline": 37.36,
+          "smart": 32.3
+        },
+        {
+          "week": 3,
+          "day": "Tuesday",
+          "baseline": 99.16,
+          "smart": 79.23
+        },
+        {
+          "week": 3,
+          "day": "Wednesday",
+          "baseline": 38.24,
+          "smart": 28.49
+        },
+        {
+          "week": 3,
+          "day": "Thursday",
+          "baseline": 70.42,
+          "smart": 55.6
+        },
+        {
+          "week": 4,
+          "day": "Sunday",
+          "baseline": 544.9,
+          "smart": 440.84
+        },
+        {
+          "week": 4,
+          "day": "Monday",
+          "baseline": 76.57,
+          "smart": 62.43
+        },
+        {
+          "week": 4,
+          "day": "Tuesday",
+          "baseline": 59.15,
+          "smart": 48.72
+        },
+        {
+          "week": 4,
+          "day": "Wednesday",
+          "baseline": 50.81,
+          "smart": 40.98
+        },
+        {
+          "week": 4,
+          "day": "Thursday",
+          "baseline": 61.34,
+          "smart": 48.98
+        },
+        {
+          "week": 5,
+          "day": "Sunday",
+          "baseline": 645.77,
+          "smart": 521.06
+        },
+        {
+          "week": 5,
+          "day": "Monday",
+          "baseline": 82.5,
+          "smart": 60.97
+        },
+        {
+          "week": 5,
+          "day": "Tuesday",
+          "baseline": 72.05,
+          "smart": 56.32
+        },
+        {
+          "week": 5,
+          "day": "Wednesday",
+          "baseline": 79.13,
+          "smart": 67.77
+        },
+        {
+          "week": 5,
+          "day": "Thursday",
+          "baseline": 79.26,
+          "smart": 62.42
+        },
+        {
+          "week": 6,
+          "day": "Sunday",
+          "baseline": 607.9,
+          "smart": 492.63
+        },
+        {
+          "week": 6,
+          "day": "Monday",
+          "baseline": 67.11,
+          "smart": 51.42
+        },
+        {
+          "week": 6,
+          "day": "Tuesday",
+          "baseline": 97.98,
+          "smart": 78.62
+        },
+        {
+          "week": 6,
+          "day": "Wednesday",
+          "baseline": 75.16,
+          "smart": 64.65
+        },
+        {
+          "week": 6,
+          "day": "Thursday",
+          "baseline": 55.51,
+          "smart": 45.16
+        },
+        {
+          "week": 7,
+          "day": "Sunday",
+          "baseline": 614.21,
+          "smart": 495.09
+        },
+        {
+          "week": 7,
+          "day": "Monday",
+          "baseline": 92.82,
+          "smart": 71.13
+        },
+        {
+          "week": 7,
+          "day": "Tuesday",
+          "baseline": 94.0,
+          "smart": 75.54
+        },
+        {
+          "week": 7,
+          "day": "Wednesday",
+          "baseline": 105.9,
+          "smart": 82.59
+        },
+        {
+          "week": 7,
+          "day": "Thursday",
+          "baseline": 44.06,
+          "smart": 36.51
+        },
+        {
+          "week": 8,
+          "day": "Sunday",
+          "baseline": 570.62,
+          "smart": 463.14
+        },
+        {
+          "week": 8,
+          "day": "Monday",
+          "baseline": 30.18,
+          "smart": 23.54
+        },
+        {
+          "week": 8,
+          "day": "Tuesday",
+          "baseline": 60.79,
+          "smart": 53.35
+        },
+        {
+          "week": 8,
+          "day": "Wednesday",
+          "baseline": 70.47,
+          "smart": 56.55
+        },
+        {
+          "week": 8,
+          "day": "Thursday",
+          "baseline": 80.03,
+          "smart": 65.16
+        },
+        {
+          "week": 9,
+          "day": "Sunday",
+          "baseline": 592.44,
+          "smart": 476.32
+        },
+        {
+          "week": 9,
+          "day": "Monday",
+          "baseline": 78.05,
+          "smart": 63.31
+        },
+        {
+          "week": 9,
+          "day": "Tuesday",
+          "baseline": 76.16,
+          "smart": 62.42
+        },
+        {
+          "week": 9,
+          "day": "Wednesday",
+          "baseline": 45.31,
+          "smart": 39.4
+        },
+        {
+          "week": 9,
+          "day": "Thursday",
+          "baseline": 105.91,
+          "smart": 84.29
+        },
+        {
+          "week": 10,
+          "day": "Sunday",
+          "baseline": 613.73,
+          "smart": 495.55
+        },
+        {
+          "week": 10,
+          "day": "Monday",
+          "baseline": 48.74,
+          "smart": 41.03
+        },
+        {
+          "week": 10,
+          "day": "Tuesday",
+          "baseline": 64.21,
+          "smart": 52.37
+        },
+        {
+          "week": 10,
+          "day": "Wednesday",
+          "baseline": 47.75,
+          "smart": 36.6
+        },
+        {
+          "week": 10,
+          "day": "Thursday",
+          "baseline": 104.4,
+          "smart": 80.35
+        },
+        {
+          "week": 11,
+          "day": "Sunday",
+          "baseline": 607.97,
+          "smart": 493.88
+        },
+        {
+          "week": 11,
+          "day": "Monday",
+          "baseline": 61.32,
+          "smart": 53.37
+        },
+        {
+          "week": 11,
+          "day": "Tuesday",
+          "baseline": 73.19,
+          "smart": 58.61
+        },
+        {
+          "week": 11,
+          "day": "Wednesday",
+          "baseline": 45.25,
+          "smart": 37.09
+        },
+        {
+          "week": 11,
+          "day": "Thursday",
+          "baseline": 36.21,
+          "smart": 30.81
+        },
+        {
+          "week": 12,
+          "day": "Sunday",
+          "baseline": 597.98,
+          "smart": 485.61
+        },
+        {
+          "week": 12,
+          "day": "Monday",
+          "baseline": 77.96,
+          "smart": 63.6
+        },
+        {
+          "week": 12,
+          "day": "Tuesday",
+          "baseline": 20.77,
+          "smart": 18.96
+        },
+        {
+          "week": 12,
+          "day": "Wednesday",
+          "baseline": 108.59,
+          "smart": 87.14
+        },
+        {
+          "week": 12,
+          "day": "Thursday",
+          "baseline": 59.24,
+          "smart": 45.81
+        },
+        {
+          "week": 13,
+          "day": "Sunday",
+          "baseline": 573.67,
+          "smart": 465.88
+        },
+        {
+          "week": 13,
+          "day": "Monday",
+          "baseline": 44.26,
+          "smart": 34.66
+        },
+        {
+          "week": 13,
+          "day": "Tuesday",
+          "baseline": 92.25,
+          "smart": 75.81
+        },
+        {
+          "week": 13,
+          "day": "Wednesday",
+          "baseline": 86.34,
+          "smart": 64.18
+        },
+        {
+          "week": 13,
+          "day": "Thursday",
+          "baseline": 123.12,
+          "smart": 97.83
+        },
+        {
+          "week": 14,
+          "day": "Sunday",
+          "baseline": 589.91,
+          "smart": 482.78
+        },
+        {
+          "week": 14,
+          "day": "Monday",
+          "baseline": 88.34,
+          "smart": 77.36
+        },
+        {
+          "week": 14,
+          "day": "Tuesday",
+          "baseline": 58.52,
+          "smart": 49.81
+        },
+        {
+          "week": 14,
+          "day": "Wednesday",
+          "baseline": 80.13,
+          "smart": 60.47
+        },
+        {
+          "week": 14,
+          "day": "Thursday",
+          "baseline": 45.38,
+          "smart": 39.01
+        },
+        {
+          "week": 15,
+          "day": "Sunday",
+          "baseline": 593.85,
+          "smart": 484.27
+        },
+        {
+          "week": 15,
+          "day": "Monday",
+          "baseline": 45.36,
+          "smart": 37.87
+        },
+        {
+          "week": 15,
+          "day": "Tuesday",
+          "baseline": 44.33,
+          "smart": 36.07
+        },
+        {
+          "week": 15,
+          "day": "Wednesday",
+          "baseline": 51.22,
+          "smart": 40.45
+        },
+        {
+          "week": 15,
+          "day": "Thursday",
+          "baseline": 103.82,
+          "smart": 84.4
+        },
+        {
+          "week": 16,
+          "day": "Sunday",
+          "baseline": 538.36,
+          "smart": 435.81
+        },
+        {
+          "week": 16,
+          "day": "Monday",
+          "baseline": 52.3,
+          "smart": 40.38
+        },
+        {
+          "week": 16,
+          "day": "Tuesday",
+          "baseline": 96.53,
+          "smart": 74.1
+        },
+        {
+          "week": 16,
+          "day": "Wednesday",
+          "baseline": 57.66,
+          "smart": 46.69
+        },
+        {
+          "week": 16,
+          "day": "Thursday",
+          "baseline": 130.34,
+          "smart": 104.82
+        },
+        {
+          "week": 17,
+          "day": "Sunday",
+          "baseline": 585.56,
+          "smart": 472.46
+        },
+        {
+          "week": 17,
+          "day": "Monday",
+          "baseline": 38.72,
+          "smart": 32.57
+        },
+        {
+          "week": 17,
+          "day": "Tuesday",
+          "baseline": 74.41,
+          "smart": 57.36
+        },
+        {
+          "week": 17,
+          "day": "Wednesday",
+          "baseline": 56.26,
+          "smart": 47.05
+        },
+        {
+          "week": 17,
+          "day": "Thursday",
+          "baseline": 41.12,
+          "smart": 34.31
+        },
+        {
+          "week": 18,
+          "day": "Sunday",
+          "baseline": 630.51,
+          "smart": 510.7
+        },
+        {
+          "week": 18,
+          "day": "Monday",
+          "baseline": 37.22,
+          "smart": 29.44
+        },
+        {
+          "week": 18,
+          "day": "Tuesday",
+          "baseline": 67.69,
+          "smart": 59.74
+        },
+        {
+          "week": 18,
+          "day": "Wednesday",
+          "baseline": 58.28,
+          "smart": 43.07
+        },
+        {
+          "week": 18,
+          "day": "Thursday",
+          "baseline": 49.79,
+          "smart": 41.64
+        },
+        {
+          "week": 19,
+          "day": "Sunday",
+          "baseline": 587.6,
+          "smart": 472.83
+        },
+        {
+          "week": 19,
+          "day": "Monday",
+          "baseline": 42.51,
+          "smart": 35.5
+        },
+        {
+          "week": 19,
+          "day": "Tuesday",
+          "baseline": 67.05,
+          "smart": 56.01
+        },
+        {
+          "week": 19,
+          "day": "Wednesday",
+          "baseline": 47.28,
+          "smart": 36.27
+        },
+        {
+          "week": 19,
+          "day": "Thursday",
+          "baseline": 78.87,
+          "smart": 60.41
+        },
+        {
+          "week": 20,
+          "day": "Sunday",
+          "baseline": 607.55,
+          "smart": 491.57
+        },
+        {
+          "week": 20,
+          "day": "Monday",
+          "baseline": 87.12,
+          "smart": 65.85
+        },
+        {
+          "week": 20,
+          "day": "Tuesday",
+          "baseline": 59.43,
+          "smart": 49.71
+        },
+        {
+          "week": 20,
+          "day": "Wednesday",
+          "baseline": 76.26,
+          "smart": 62.8
+        },
+        {
+          "week": 20,
+          "day": "Thursday",
+          "baseline": 92.5,
+          "smart": 69.78
+        },
+        {
+          "week": 21,
+          "day": "Sunday",
+          "baseline": 604.79,
+          "smart": 487.61
+        },
+        {
+          "week": 21,
+          "day": "Monday",
+          "baseline": 111.79,
+          "smart": 90.0
+        },
+        {
+          "week": 21,
+          "day": "Tuesday",
+          "baseline": 89.09,
+          "smart": 73.9
+        },
+        {
+          "week": 21,
+          "day": "Wednesday",
+          "baseline": 38.02,
+          "smart": 28.59
+        },
+        {
+          "week": 21,
+          "day": "Thursday",
+          "baseline": 87.98,
+          "smart": 72.33
+        },
+        {
+          "week": 22,
+          "day": "Sunday",
+          "baseline": 557.02,
+          "smart": 451.27
+        },
+        {
+          "week": 22,
+          "day": "Monday",
+          "baseline": 67.23,
+          "smart": 54.85
+        },
+        {
+          "week": 22,
+          "day": "Tuesday",
+          "baseline": 44.17,
+          "smart": 32.41
+        },
+        {
+          "week": 22,
+          "day": "Wednesday",
+          "baseline": 103.62,
+          "smart": 80.31
+        },
+        {
+          "week": 22,
+          "day": "Thursday",
+          "baseline": 125.81,
+          "smart": 95.01
+        },
+        {
+          "week": 23,
+          "day": "Sunday",
+          "baseline": 565.81,
+          "smart": 458.29
+        },
+        {
+          "week": 23,
+          "day": "Monday",
+          "baseline": 58.22,
+          "smart": 45.87
+        },
+        {
+          "week": 23,
+          "day": "Tuesday",
+          "baseline": 47.95,
+          "smart": 41.88
+        },
+        {
+          "week": 23,
+          "day": "Wednesday",
+          "baseline": 68.84,
+          "smart": 53.23
+        },
+        {
+          "week": 23,
+          "day": "Thursday",
+          "baseline": 23.53,
+          "smart": 19.61
+        },
+        {
+          "week": 24,
+          "day": "Sunday",
+          "baseline": 631.85,
+          "smart": 505.49
+        },
+        {
+          "week": 24,
+          "day": "Monday",
+          "baseline": 78.29,
+          "smart": 65.98
+        },
+        {
+          "week": 24,
+          "day": "Tuesday",
+          "baseline": 79.08,
+          "smart": 63.95
+        },
+        {
+          "week": 24,
+          "day": "Wednesday",
+          "baseline": 64.7,
+          "smart": 52.37
+        },
+        {
+          "week": 24,
+          "day": "Thursday",
+          "baseline": 114.98,
+          "smart": 90.56
+        },
+        {
+          "week": 25,
+          "day": "Sunday",
+          "baseline": 558.28,
+          "smart": 451.36
+        },
+        {
+          "week": 25,
+          "day": "Monday",
+          "baseline": 27.84,
+          "smart": 23.53
+        },
+        {
+          "week": 25,
+          "day": "Tuesday",
+          "baseline": 52.28,
+          "smart": 42.41
+        },
+        {
+          "week": 25,
+          "day": "Wednesday",
+          "baseline": 92.31,
+          "smart": 72.69
+        },
+        {
+          "week": 25,
+          "day": "Thursday",
+          "baseline": 80.11,
+          "smart": 64.97
+        },
+        {
+          "week": 26,
+          "day": "Sunday",
+          "baseline": 581.73,
+          "smart": 474.91
+        },
+        {
+          "week": 26,
+          "day": "Monday",
+          "baseline": 59.26,
+          "smart": 44.65
+        },
+        {
+          "week": 26,
+          "day": "Tuesday",
+          "baseline": 84.91,
+          "smart": 64.97
+        },
+        {
+          "week": 26,
+          "day": "Wednesday",
+          "baseline": 65.57,
+          "smart": 53.25
+        },
+        {
+          "week": 26,
+          "day": "Thursday",
+          "baseline": 33.29,
+          "smart": 29.78
+        },
+        {
+          "week": 27,
+          "day": "Sunday",
+          "baseline": 572.26,
+          "smart": 463.76
+        },
+        {
+          "week": 27,
+          "day": "Monday",
+          "baseline": 43.14,
+          "smart": 35.36
+        },
+        {
+          "week": 27,
+          "day": "Tuesday",
+          "baseline": 56.17,
+          "smart": 44.36
+        },
+        {
+          "week": 27,
+          "day": "Wednesday",
+          "baseline": 92.51,
+          "smart": 73.69
+        },
+        {
+          "week": 27,
+          "day": "Thursday",
+          "baseline": 106.67,
+          "smart": 87.85
+        },
+        {
+          "week": 28,
+          "day": "Sunday",
+          "baseline": 557.3,
+          "smart": 452.91
+        },
+        {
+          "week": 28,
+          "day": "Monday",
+          "baseline": 72.17,
+          "smart": 55.62
+        },
+        {
+          "week": 28,
+          "day": "Tuesday",
+          "baseline": 87.28,
+          "smart": 69.02
+        },
+        {
+          "week": 28,
+          "day": "Wednesday",
+          "baseline": 60.2,
+          "smart": 48.89
+        },
+        {
+          "week": 28,
+          "day": "Thursday",
+          "baseline": 109.93,
+          "smart": 86.38
+        },
+        {
+          "week": 29,
+          "day": "Sunday",
+          "baseline": 598.42,
+          "smart": 487.54
+        },
+        {
+          "week": 29,
+          "day": "Monday",
+          "baseline": 101.65,
+          "smart": 76.51
+        },
+        {
+          "week": 29,
+          "day": "Tuesday",
+          "baseline": 102.14,
+          "smart": 80.2
+        },
+        {
+          "week": 29,
+          "day": "Wednesday",
+          "baseline": 95.79,
+          "smart": 75.66
+        },
+        {
+          "week": 29,
+          "day": "Thursday",
+          "baseline": 78.32,
+          "smart": 68.39
+        },
+        {
+          "week": 30,
+          "day": "Sunday",
+          "baseline": 598.56,
+          "smart": 482.43
+        },
+        {
+          "week": 30,
+          "day": "Monday",
+          "baseline": 62.7,
+          "smart": 48.21
+        },
+        {
+          "week": 30,
+          "day": "Tuesday",
+          "baseline": 79.45,
+          "smart": 62.78
+        },
+        {
+          "week": 30,
+          "day": "Wednesday",
+          "baseline": 67.09,
+          "smart": 50.34
+        },
+        {
+          "week": 30,
+          "day": "Thursday",
+          "baseline": 54.46,
+          "smart": 45.06
+        },
+        {
+          "week": 31,
+          "day": "Sunday",
+          "baseline": 608.57,
+          "smart": 494.94
+        },
+        {
+          "week": 31,
+          "day": "Monday",
+          "baseline": 41.87,
+          "smart": 33.03
+        },
+        {
+          "week": 31,
+          "day": "Tuesday",
+          "baseline": 88.42,
+          "smart": 70.73
+        },
+        {
+          "week": 31,
+          "day": "Wednesday",
+          "baseline": 81.28,
+          "smart": 64.85
+        },
+        {
+          "week": 31,
+          "day": "Thursday",
+          "baseline": 65.16,
+          "smart": 55.63
+        },
+        {
+          "week": 32,
+          "day": "Sunday",
+          "baseline": 580.13,
+          "smart": 467.89
+        },
+        {
+          "week": 32,
+          "day": "Monday",
+          "baseline": 70.87,
+          "smart": 55.49
+        },
+        {
+          "week": 32,
+          "day": "Tuesday",
+          "baseline": 107.97,
+          "smart": 84.5
+        },
+        {
+          "week": 32,
+          "day": "Wednesday",
+          "baseline": 66.58,
+          "smart": 53.89
+        },
+        {
+          "week": 32,
+          "day": "Thursday",
+          "baseline": 81.11,
+          "smart": 67.38
+        },
+        {
+          "week": 33,
+          "day": "Sunday",
+          "baseline": 576.2,
+          "smart": 466.76
+        },
+        {
+          "week": 33,
+          "day": "Monday",
+          "baseline": 55.59,
+          "smart": 48.67
+        },
+        {
+          "week": 33,
+          "day": "Tuesday",
+          "baseline": 93.54,
+          "smart": 76.03
+        },
+        {
+          "week": 33,
+          "day": "Wednesday",
+          "baseline": 82.06,
+          "smart": 64.89
+        },
+        {
+          "week": 33,
+          "day": "Thursday",
+          "baseline": 24.42,
+          "smart": 22.3
+        },
+        {
+          "week": 34,
+          "day": "Sunday",
+          "baseline": 601.37,
+          "smart": 486.83
+        },
+        {
+          "week": 34,
+          "day": "Monday",
+          "baseline": 52.16,
+          "smart": 48.85
+        },
+        {
+          "week": 34,
+          "day": "Tuesday",
+          "baseline": 75.08,
+          "smart": 65.57
+        },
+        {
+          "week": 34,
+          "day": "Wednesday",
+          "baseline": 58.18,
+          "smart": 46.77
+        },
+        {
+          "week": 34,
+          "day": "Thursday",
+          "baseline": 42.2,
+          "smart": 37.49
+        },
+        {
+          "week": 35,
+          "day": "Sunday",
+          "baseline": 601.11,
+          "smart": 482.33
+        },
+        {
+          "week": 35,
+          "day": "Monday",
+          "baseline": 77.22,
+          "smart": 62.83
+        },
+        {
+          "week": 35,
+          "day": "Tuesday",
+          "baseline": 36.32,
+          "smart": 30.1
+        },
+        {
+          "week": 35,
+          "day": "Wednesday",
+          "baseline": 82.11,
+          "smart": 67.75
+        },
+        {
+          "week": 35,
+          "day": "Thursday",
+          "baseline": 43.03,
+          "smart": 39.66
+        },
+        {
+          "week": 36,
+          "day": "Sunday",
+          "baseline": 571.27,
+          "smart": 462.21
+        },
+        {
+          "week": 36,
+          "day": "Monday",
+          "baseline": 17.72,
+          "smart": 15.98
+        },
+        {
+          "week": 36,
+          "day": "Tuesday",
+          "baseline": 48.88,
+          "smart": 39.93
+        },
+        {
+          "week": 36,
+          "day": "Wednesday",
+          "baseline": 54.48,
+          "smart": 41.78
+        },
+        {
+          "week": 36,
+          "day": "Thursday",
+          "baseline": 59.86,
+          "smart": 49.2
+        },
+        {
+          "week": 37,
+          "day": "Sunday",
+          "baseline": 586.57,
+          "smart": 477.95
+        },
+        {
+          "week": 37,
+          "day": "Monday",
+          "baseline": 54.27,
+          "smart": 42.77
+        },
+        {
+          "week": 37,
+          "day": "Tuesday",
+          "baseline": 78.72,
+          "smart": 66.26
+        },
+        {
+          "week": 37,
+          "day": "Wednesday",
+          "baseline": 62.89,
+          "smart": 51.2
+        },
+        {
+          "week": 37,
+          "day": "Thursday",
+          "baseline": 50.64,
+          "smart": 40.22
+        },
+        {
+          "week": 38,
+          "day": "Sunday",
+          "baseline": 604.77,
+          "smart": 494.65
+        },
+        {
+          "week": 38,
+          "day": "Monday",
+          "baseline": 71.63,
+          "smart": 58.53
+        },
+        {
+          "week": 38,
+          "day": "Tuesday",
+          "baseline": 63.56,
+          "smart": 54.44
+        },
+        {
+          "week": 38,
+          "day": "Wednesday",
+          "baseline": 25.69,
+          "smart": 21.02
+        },
+        {
+          "week": 38,
+          "day": "Thursday",
+          "baseline": 54.33,
+          "smart": 40.42
+        },
+        {
+          "week": 39,
+          "day": "Sunday",
+          "baseline": 648.79,
+          "smart": 525.8
+        },
+        {
+          "week": 39,
+          "day": "Monday",
+          "baseline": 116.56,
+          "smart": 93.96
+        },
+        {
+          "week": 39,
+          "day": "Tuesday",
+          "baseline": 83.61,
+          "smart": 67.12
+        },
+        {
+          "week": 39,
+          "day": "Wednesday",
+          "baseline": 80.0,
+          "smart": 64.21
+        },
+        {
+          "week": 39,
+          "day": "Thursday",
+          "baseline": 77.18,
+          "smart": 60.09
+        },
+        {
+          "week": 40,
+          "day": "Sunday",
+          "baseline": 614.05,
+          "smart": 496.26
+        },
+        {
+          "week": 40,
+          "day": "Monday",
+          "baseline": 75.63,
+          "smart": 60.73
+        },
+        {
+          "week": 40,
+          "day": "Tuesday",
+          "baseline": 91.47,
+          "smart": 70.24
+        },
+        {
+          "week": 40,
+          "day": "Wednesday",
+          "baseline": 76.02,
+          "smart": 63.92
+        },
+        {
+          "week": 40,
+          "day": "Thursday",
+          "baseline": 71.93,
+          "smart": 60.17
+        },
+        {
+          "week": 41,
+          "day": "Sunday",
+          "baseline": 616.33,
+          "smart": 498.01
+        },
+        {
+          "week": 41,
+          "day": "Monday",
+          "baseline": 85.18,
+          "smart": 69.04
+        },
+        {
+          "week": 41,
+          "day": "Tuesday",
+          "baseline": 63.52,
+          "smart": 52.5
+        },
+        {
+          "week": 41,
+          "day": "Wednesday",
+          "baseline": 64.45,
+          "smart": 53.84
+        },
+        {
+          "week": 41,
+          "day": "Thursday",
+          "baseline": 76.24,
+          "smart": 63.74
+        },
+        {
+          "week": 42,
+          "day": "Sunday",
+          "baseline": 590.43,
+          "smart": 482.57
+        },
+        {
+          "week": 42,
+          "day": "Monday",
+          "baseline": 85.53,
+          "smart": 66.05
+        },
+        {
+          "week": 42,
+          "day": "Tuesday",
+          "baseline": 119.76,
+          "smart": 90.97
+        },
+        {
+          "week": 42,
+          "day": "Wednesday",
+          "baseline": 34.0,
+          "smart": 28.65
+        },
+        {
+          "week": 42,
+          "day": "Thursday",
+          "baseline": 75.09,
+          "smart": 60.14
+        },
+        {
+          "week": 43,
+          "day": "Sunday",
+          "baseline": 557.02,
+          "smart": 445.85
+        },
+        {
+          "week": 43,
+          "day": "Monday",
+          "baseline": 81.2,
+          "smart": 65.31
+        },
+        {
+          "week": 43,
+          "day": "Tuesday",
+          "baseline": 62.75,
+          "smart": 51.26
+        },
+        {
+          "week": 43,
+          "day": "Wednesday",
+          "baseline": 45.44,
+          "smart": 39.77
+        },
+        {
+          "week": 43,
+          "day": "Thursday",
+          "baseline": 78.75,
+          "smart": 62.51
+        },
+        {
+          "week": 44,
+          "day": "Sunday",
+          "baseline": 601.0,
+          "smart": 485.84
+        },
+        {
+          "week": 44,
+          "day": "Monday",
+          "baseline": 104.07,
+          "smart": 81.52
+        },
+        {
+          "week": 44,
+          "day": "Tuesday",
+          "baseline": 63.07,
+          "smart": 52.69
+        },
+        {
+          "week": 44,
+          "day": "Wednesday",
+          "baseline": 93.55,
+          "smart": 74.09
+        },
+        {
+          "week": 44,
+          "day": "Thursday",
+          "baseline": 99.82,
+          "smart": 74.8
+        },
+        {
+          "week": 45,
+          "day": "Sunday",
+          "baseline": 615.27,
+          "smart": 496.94
+        },
+        {
+          "week": 45,
+          "day": "Monday",
+          "baseline": 45.52,
+          "smart": 40.03
+        },
+        {
+          "week": 45,
+          "day": "Tuesday",
+          "baseline": 65.31,
+          "smart": 48.62
+        },
+        {
+          "week": 45,
+          "day": "Wednesday",
+          "baseline": 39.87,
+          "smart": 33.73
+        },
+        {
+          "week": 45,
+          "day": "Thursday",
+          "baseline": 43.71,
+          "smart": 33.84
+        },
+        {
+          "week": 46,
+          "day": "Sunday",
+          "baseline": 561.03,
+          "smart": 456.12
+        },
+        {
+          "week": 46,
+          "day": "Monday",
+          "baseline": 79.85,
+          "smart": 65.23
+        },
+        {
+          "week": 46,
+          "day": "Tuesday",
+          "baseline": 71.28,
+          "smart": 57.23
+        },
+        {
+          "week": 46,
+          "day": "Wednesday",
+          "baseline": 62.49,
+          "smart": 55.67
+        },
+        {
+          "week": 46,
+          "day": "Thursday",
+          "baseline": 61.78,
+          "smart": 49.12
+        },
+        {
+          "week": 47,
+          "day": "Sunday",
+          "baseline": 589.98,
+          "smart": 476.09
+        },
+        {
+          "week": 47,
+          "day": "Monday",
+          "baseline": 50.03,
+          "smart": 44.73
+        },
+        {
+          "week": 47,
+          "day": "Tuesday",
+          "baseline": 45.7,
+          "smart": 36.87
+        },
+        {
+          "week": 47,
+          "day": "Wednesday",
+          "baseline": 29.6,
+          "smart": 28.41
+        },
+        {
+          "week": 47,
+          "day": "Thursday",
+          "baseline": 57.72,
+          "smart": 48.23
+        },
+        {
+          "week": 48,
+          "day": "Sunday",
+          "baseline": 627.68,
+          "smart": 511.11
+        },
+        {
+          "week": 48,
+          "day": "Monday",
+          "baseline": 47.55,
+          "smart": 40.32
+        },
+        {
+          "week": 48,
+          "day": "Tuesday",
+          "baseline": 62.67,
+          "smart": 47.09
+        },
+        {
+          "week": 48,
+          "day": "Wednesday",
+          "baseline": 69.28,
+          "smart": 54.73
+        },
+        {
+          "week": 48,
+          "day": "Thursday",
+          "baseline": 77.36,
+          "smart": 63.08
+        },
+        {
+          "week": 49,
+          "day": "Sunday",
+          "baseline": 574.75,
+          "smart": 463.96
+        },
+        {
+          "week": 49,
+          "day": "Monday",
+          "baseline": 65.93,
+          "smart": 51.96
+        },
+        {
+          "week": 49,
+          "day": "Tuesday",
+          "baseline": 42.55,
+          "smart": 32.2
+        },
+        {
+          "week": 49,
+          "day": "Wednesday",
+          "baseline": 79.52,
+          "smart": 60.96
+        },
+        {
+          "week": 49,
+          "day": "Thursday",
+          "baseline": 60.36,
+          "smart": 48.92
+        },
+        {
+          "week": 50,
+          "day": "Sunday",
+          "baseline": 582.23,
+          "smart": 474.57
+        },
+        {
+          "week": 50,
+          "day": "Monday",
+          "baseline": 51.3,
+          "smart": 44.77
+        },
+        {
+          "week": 50,
+          "day": "Tuesday",
+          "baseline": 34.56,
+          "smart": 29.77
+        },
+        {
+          "week": 50,
+          "day": "Wednesday",
+          "baseline": 70.48,
+          "smart": 53.41
+        },
+        {
+          "week": 50,
+          "day": "Thursday",
+          "baseline": 67.34,
+          "smart": 53.28
+        },
+        {
+          "week": 51,
+          "day": "Sunday",
+          "baseline": 597.14,
+          "smart": 488.85
+        },
+        {
+          "week": 51,
+          "day": "Monday",
+          "baseline": 101.38,
+          "smart": 84.01
+        },
+        {
+          "week": 51,
+          "day": "Tuesday",
+          "baseline": 27.64,
+          "smart": 22.59
+        },
+        {
+          "week": 51,
+          "day": "Wednesday",
+          "baseline": 57.57,
+          "smart": 47.87
+        },
+        {
+          "week": 51,
+          "day": "Thursday",
+          "baseline": 56.92,
+          "smart": 47.77
+        }
+      ]
+    },
+    {
+      "name": "ביסטרו טעם העיר (מטבח גדול)",
+      "regular_supplier": "ירקות השרון",
+      "order_days": 260,
+      "total_baseline": 66639.69,
+      "total_smart": 58082.53,
+      "total_savings": 8557.16,
+      "savings_pct": 12.8,
+      "avg_savings_per_order_day": 32.91,
+      "daily": [
+        {
+          "week": 0,
+          "day": "Sunday",
+          "baseline": 869.47,
+          "smart": 759.19
+        },
+        {
+          "week": 0,
+          "day": "Monday",
+          "baseline": 60.88,
+          "smart": 56.51
+        },
+        {
+          "week": 0,
+          "day": "Tuesday",
+          "baseline": 74.82,
+          "smart": 67.12
+        },
+        {
+          "week": 0,
+          "day": "Wednesday",
+          "baseline": 80.24,
+          "smart": 65.55
+        },
+        {
+          "week": 0,
+          "day": "Thursday",
+          "baseline": 126.66,
+          "smart": 112.38
+        },
+        {
+          "week": 1,
+          "day": "Sunday",
+          "baseline": 883.92,
+          "smart": 770.33
+        },
+        {
+          "week": 1,
+          "day": "Monday",
+          "baseline": 93.73,
+          "smart": 82.54
+        },
+        {
+          "week": 1,
+          "day": "Tuesday",
+          "baseline": 147.06,
+          "smart": 136.3
+        },
+        {
+          "week": 1,
+          "day": "Wednesday",
+          "baseline": 56.99,
+          "smart": 45.9
+        },
+        {
+          "week": 1,
+          "day": "Thursday",
+          "baseline": 148.0,
+          "smart": 137.54
+        },
+        {
+          "week": 2,
+          "day": "Sunday",
+          "baseline": 848.78,
+          "smart": 734.56
+        },
+        {
+          "week": 2,
+          "day": "Monday",
+          "baseline": 50.92,
+          "smart": 46.64
+        },
+        {
+          "week": 2,
+          "day": "Tuesday",
+          "baseline": 112.03,
+          "smart": 92.02
+        },
+        {
+          "week": 2,
+          "day": "Wednesday",
+          "baseline": 86.51,
+          "smart": 73.04
+        },
+        {
+          "week": 2,
+          "day": "Thursday",
+          "baseline": 109.33,
+          "smart": 87.34
+        },
+        {
+          "week": 3,
+          "day": "Sunday",
+          "baseline": 939.69,
+          "smart": 816.63
+        },
+        {
+          "week": 3,
+          "day": "Monday",
+          "baseline": 116.61,
+          "smart": 98.13
+        },
+        {
+          "week": 3,
+          "day": "Tuesday",
+          "baseline": 127.04,
+          "smart": 115.66
+        },
+        {
+          "week": 3,
+          "day": "Wednesday",
+          "baseline": 151.0,
+          "smart": 130.99
+        },
+        {
+          "week": 3,
+          "day": "Thursday",
+          "baseline": 83.37,
+          "smart": 67.56
+        },
+        {
+          "week": 4,
+          "day": "Sunday",
+          "baseline": 916.43,
+          "smart": 795.17
+        },
+        {
+          "week": 4,
+          "day": "Monday",
+          "baseline": 68.99,
+          "smart": 63.85
+        },
+        {
+          "week": 4,
+          "day": "Tuesday",
+          "baseline": 46.79,
+          "smart": 45.32
+        },
+        {
+          "week": 4,
+          "day": "Wednesday",
+          "baseline": 64.02,
+          "smart": 60.36
+        },
+        {
+          "week": 4,
+          "day": "Thursday",
+          "baseline": 81.73,
+          "smart": 72.33
+        },
+        {
+          "week": 5,
+          "day": "Sunday",
+          "baseline": 875.77,
+          "smart": 768.06
+        },
+        {
+          "week": 5,
+          "day": "Monday",
+          "baseline": 99.14,
+          "smart": 84.67
+        },
+        {
+          "week": 5,
+          "day": "Tuesday",
+          "baseline": 89.17,
+          "smart": 85.53
+        },
+        {
+          "week": 5,
+          "day": "Wednesday",
+          "baseline": 75.59,
+          "smart": 64.73
+        },
+        {
+          "week": 5,
+          "day": "Thursday",
+          "baseline": 46.54,
+          "smart": 40.37
+        },
+        {
+          "week": 6,
+          "day": "Sunday",
+          "baseline": 851.05,
+          "smart": 738.47
+        },
+        {
+          "week": 6,
+          "day": "Monday",
+          "baseline": 72.44,
+          "smart": 71.6
+        },
+        {
+          "week": 6,
+          "day": "Tuesday",
+          "baseline": 158.59,
+          "smart": 129.28
+        },
+        {
+          "week": 6,
+          "day": "Wednesday",
+          "baseline": 133.98,
+          "smart": 117.04
+        },
+        {
+          "week": 6,
+          "day": "Thursday",
+          "baseline": 63.17,
+          "smart": 60.27
+        },
+        {
+          "week": 7,
+          "day": "Sunday",
+          "baseline": 830.22,
+          "smart": 725.1
+        },
+        {
+          "week": 7,
+          "day": "Monday",
+          "baseline": 95.5,
+          "smart": 80.33
+        },
+        {
+          "week": 7,
+          "day": "Tuesday",
+          "baseline": 115.41,
+          "smart": 103.98
+        },
+        {
+          "week": 7,
+          "day": "Wednesday",
+          "baseline": 74.25,
+          "smart": 64.31
+        },
+        {
+          "week": 7,
+          "day": "Thursday",
+          "baseline": 160.53,
+          "smart": 132.09
+        },
+        {
+          "week": 8,
+          "day": "Sunday",
+          "baseline": 817.32,
+          "smart": 715.37
+        },
+        {
+          "week": 8,
+          "day": "Monday",
+          "baseline": 107.51,
+          "smart": 91.78
+        },
+        {
+          "week": 8,
+          "day": "Tuesday",
+          "baseline": 124.69,
+          "smart": 111.48
+        },
+        {
+          "week": 8,
+          "day": "Wednesday",
+          "baseline": 133.44,
+          "smart": 113.91
+        },
+        {
+          "week": 8,
+          "day": "Thursday",
+          "baseline": 92.31,
+          "smart": 84.57
+        },
+        {
+          "week": 9,
+          "day": "Sunday",
+          "baseline": 903.9,
+          "smart": 786.87
+        },
+        {
+          "week": 9,
+          "day": "Monday",
+          "baseline": 80.05,
+          "smart": 67.6
+        },
+        {
+          "week": 9,
+          "day": "Tuesday",
+          "baseline": 153.57,
+          "smart": 139.7
+        },
+        {
+          "week": 9,
+          "day": "Wednesday",
+          "baseline": 128.93,
+          "smart": 116.93
+        },
+        {
+          "week": 9,
+          "day": "Thursday",
+          "baseline": 86.07,
+          "smart": 78.32
+        },
+        {
+          "week": 10,
+          "day": "Sunday",
+          "baseline": 863.54,
+          "smart": 749.56
+        },
+        {
+          "week": 10,
+          "day": "Monday",
+          "baseline": 61.96,
+          "smart": 54.35
+        },
+        {
+          "week": 10,
+          "day": "Tuesday",
+          "baseline": 103.57,
+          "smart": 85.53
+        },
+        {
+          "week": 10,
+          "day": "Wednesday",
+          "baseline": 59.87,
+          "smart": 50.07
+        },
+        {
+          "week": 10,
+          "day": "Thursday",
+          "baseline": 85.74,
+          "smart": 69.1
+        },
+        {
+          "week": 11,
+          "day": "Sunday",
+          "baseline": 947.21,
+          "smart": 825.84
+        },
+        {
+          "week": 11,
+          "day": "Monday",
+          "baseline": 44.96,
+          "smart": 38.32
+        },
+        {
+          "week": 11,
+          "day": "Tuesday",
+          "baseline": 42.03,
+          "smart": 39.55
+        },
+        {
+          "week": 11,
+          "day": "Wednesday",
+          "baseline": 140.5,
+          "smart": 118.93
+        },
+        {
+          "week": 11,
+          "day": "Thursday",
+          "baseline": 132.13,
+          "smart": 111.17
+        },
+        {
+          "week": 12,
+          "day": "Sunday",
+          "baseline": 925.18,
+          "smart": 805.2
+        },
+        {
+          "week": 12,
+          "day": "Monday",
+          "baseline": 72.82,
+          "smart": 60.65
+        },
+        {
+          "week": 12,
+          "day": "Tuesday",
+          "baseline": 107.58,
+          "smart": 95.34
+        },
+        {
+          "week": 12,
+          "day": "Wednesday",
+          "baseline": 62.62,
+          "smart": 58.54
+        },
+        {
+          "week": 12,
+          "day": "Thursday",
+          "baseline": 113.47,
+          "smart": 104.1
+        },
+        {
+          "week": 13,
+          "day": "Sunday",
+          "baseline": 862.7,
+          "smart": 745.34
+        },
+        {
+          "week": 13,
+          "day": "Monday",
+          "baseline": 121.55,
+          "smart": 108.25
+        },
+        {
+          "week": 13,
+          "day": "Tuesday",
+          "baseline": 63.91,
+          "smart": 60.05
+        },
+        {
+          "week": 13,
+          "day": "Wednesday",
+          "baseline": 99.22,
+          "smart": 88.94
+        },
+        {
+          "week": 13,
+          "day": "Thursday",
+          "baseline": 119.25,
+          "smart": 106.3
+        },
+        {
+          "week": 14,
+          "day": "Sunday",
+          "baseline": 782.22,
+          "smart": 689.82
+        },
+        {
+          "week": 14,
+          "day": "Monday",
+          "baseline": 108.46,
+          "smart": 96.94
+        },
+        {
+          "week": 14,
+          "day": "Tuesday",
+          "baseline": 102.89,
+          "smart": 88.28
+        },
+        {
+          "week": 14,
+          "day": "Wednesday",
+          "baseline": 75.84,
+          "smart": 67.67
+        },
+        {
+          "week": 14,
+          "day": "Thursday",
+          "baseline": 110.92,
+          "smart": 89.82
+        },
+        {
+          "week": 15,
+          "day": "Sunday",
+          "baseline": 916.9,
+          "smart": 795.03
+        },
+        {
+          "week": 15,
+          "day": "Monday",
+          "baseline": 178.55,
+          "smart": 160.81
+        },
+        {
+          "week": 15,
+          "day": "Tuesday",
+          "baseline": 175.39,
+          "smart": 145.41
+        },
+        {
+          "week": 15,
+          "day": "Wednesday",
+          "baseline": 96.8,
+          "smart": 81.5
+        },
+        {
+          "week": 15,
+          "day": "Thursday",
+          "baseline": 95.91,
+          "smart": 93.23
+        },
+        {
+          "week": 16,
+          "day": "Sunday",
+          "baseline": 885.84,
+          "smart": 774.02
+        },
+        {
+          "week": 16,
+          "day": "Monday",
+          "baseline": 123.89,
+          "smart": 110.53
+        },
+        {
+          "week": 16,
+          "day": "Tuesday",
+          "baseline": 101.62,
+          "smart": 92.16
+        },
+        {
+          "week": 16,
+          "day": "Wednesday",
+          "baseline": 37.57,
+          "smart": 33.02
+        },
+        {
+          "week": 16,
+          "day": "Thursday",
+          "baseline": 136.55,
+          "smart": 113.56
+        },
+        {
+          "week": 17,
+          "day": "Sunday",
+          "baseline": 860.04,
+          "smart": 746.9
+        },
+        {
+          "week": 17,
+          "day": "Monday",
+          "baseline": 37.49,
+          "smart": 36.58
+        },
+        {
+          "week": 17,
+          "day": "Tuesday",
+          "baseline": 138.63,
+          "smart": 117.26
+        },
+        {
+          "week": 17,
+          "day": "Wednesday",
+          "baseline": 115.07,
+          "smart": 102.41
+        },
+        {
+          "week": 17,
+          "day": "Thursday",
+          "baseline": 78.23,
+          "smart": 66.55
+        },
+        {
+          "week": 18,
+          "day": "Sunday",
+          "baseline": 924.55,
+          "smart": 811.57
+        },
+        {
+          "week": 18,
+          "day": "Monday",
+          "baseline": 129.44,
+          "smart": 111.03
+        },
+        {
+          "week": 18,
+          "day": "Tuesday",
+          "baseline": 47.09,
+          "smart": 40.43
+        },
+        {
+          "week": 18,
+          "day": "Wednesday",
+          "baseline": 60.0,
+          "smart": 55.25
+        },
+        {
+          "week": 18,
+          "day": "Thursday",
+          "baseline": 122.38,
+          "smart": 105.74
+        },
+        {
+          "week": 19,
+          "day": "Sunday",
+          "baseline": 951.29,
+          "smart": 830.2
+        },
+        {
+          "week": 19,
+          "day": "Monday",
+          "baseline": 116.85,
+          "smart": 100.68
+        },
+        {
+          "week": 19,
+          "day": "Tuesday",
+          "baseline": 184.03,
+          "smart": 157.0
+        },
+        {
+          "week": 19,
+          "day": "Wednesday",
+          "baseline": 113.92,
+          "smart": 92.51
+        },
+        {
+          "week": 19,
+          "day": "Thursday",
+          "baseline": 122.95,
+          "smart": 100.16
+        },
+        {
+          "week": 20,
+          "day": "Sunday",
+          "baseline": 973.89,
+          "smart": 841.4
+        },
+        {
+          "week": 20,
+          "day": "Monday",
+          "baseline": 151.26,
+          "smart": 137.96
+        },
+        {
+          "week": 20,
+          "day": "Tuesday",
+          "baseline": 61.5,
+          "smart": 52.58
+        },
+        {
+          "week": 20,
+          "day": "Wednesday",
+          "baseline": 101.05,
+          "smart": 81.59
+        },
+        {
+          "week": 20,
+          "day": "Thursday",
+          "baseline": 93.62,
+          "smart": 75.97
+        },
+        {
+          "week": 21,
+          "day": "Sunday",
+          "baseline": 824.59,
+          "smart": 722.24
+        },
+        {
+          "week": 21,
+          "day": "Monday",
+          "baseline": 96.02,
+          "smart": 92.58
+        },
+        {
+          "week": 21,
+          "day": "Tuesday",
+          "baseline": 94.67,
+          "smart": 86.31
+        },
+        {
+          "week": 21,
+          "day": "Wednesday",
+          "baseline": 139.26,
+          "smart": 111.85
+        },
+        {
+          "week": 21,
+          "day": "Thursday",
+          "baseline": 120.44,
+          "smart": 103.86
+        },
+        {
+          "week": 22,
+          "day": "Sunday",
+          "baseline": 873.08,
+          "smart": 757.65
+        },
+        {
+          "week": 22,
+          "day": "Monday",
+          "baseline": 60.87,
+          "smart": 51.37
+        },
+        {
+          "week": 22,
+          "day": "Tuesday",
+          "baseline": 86.71,
+          "smart": 75.21
+        },
+        {
+          "week": 22,
+          "day": "Wednesday",
+          "baseline": 58.51,
+          "smart": 48.61
+        },
+        {
+          "week": 22,
+          "day": "Thursday",
+          "baseline": 74.64,
+          "smart": 69.02
+        },
+        {
+          "week": 23,
+          "day": "Sunday",
+          "baseline": 873.49,
+          "smart": 760.53
+        },
+        {
+          "week": 23,
+          "day": "Monday",
+          "baseline": 154.9,
+          "smart": 133.23
+        },
+        {
+          "week": 23,
+          "day": "Tuesday",
+          "baseline": 131.83,
+          "smart": 115.17
+        },
+        {
+          "week": 23,
+          "day": "Wednesday",
+          "baseline": 159.0,
+          "smart": 135.41
+        },
+        {
+          "week": 23,
+          "day": "Thursday",
+          "baseline": 70.09,
+          "smart": 56.48
+        },
+        {
+          "week": 24,
+          "day": "Sunday",
+          "baseline": 892.51,
+          "smart": 781.16
+        },
+        {
+          "week": 24,
+          "day": "Monday",
+          "baseline": 125.51,
+          "smart": 106.43
+        },
+        {
+          "week": 24,
+          "day": "Tuesday",
+          "baseline": 130.57,
+          "smart": 113.51
+        },
+        {
+          "week": 24,
+          "day": "Wednesday",
+          "baseline": 85.9,
+          "smart": 74.84
+        },
+        {
+          "week": 24,
+          "day": "Thursday",
+          "baseline": 84.79,
+          "smart": 71.15
+        },
+        {
+          "week": 25,
+          "day": "Sunday",
+          "baseline": 890.36,
+          "smart": 770.38
+        },
+        {
+          "week": 25,
+          "day": "Monday",
+          "baseline": 139.39,
+          "smart": 117.72
+        },
+        {
+          "week": 25,
+          "day": "Tuesday",
+          "baseline": 151.78,
+          "smart": 131.17
+        },
+        {
+          "week": 25,
+          "day": "Wednesday",
+          "baseline": 60.75,
+          "smart": 49.05
+        },
+        {
+          "week": 25,
+          "day": "Thursday",
+          "baseline": 54.29,
+          "smart": 45.46
+        },
+        {
+          "week": 26,
+          "day": "Sunday",
+          "baseline": 888.64,
+          "smart": 778.69
+        },
+        {
+          "week": 26,
+          "day": "Monday",
+          "baseline": 109.32,
+          "smart": 98.32
+        },
+        {
+          "week": 26,
+          "day": "Tuesday",
+          "baseline": 94.29,
+          "smart": 77.61
+        },
+        {
+          "week": 26,
+          "day": "Wednesday",
+          "baseline": 75.46,
+          "smart": 71.94
+        },
+        {
+          "week": 26,
+          "day": "Thursday",
+          "baseline": 166.82,
+          "smart": 148.61
+        },
+        {
+          "week": 27,
+          "day": "Sunday",
+          "baseline": 890.63,
+          "smart": 774.7
+        },
+        {
+          "week": 27,
+          "day": "Monday",
+          "baseline": 119.26,
+          "smart": 107.91
+        },
+        {
+          "week": 27,
+          "day": "Tuesday",
+          "baseline": 59.75,
+          "smart": 51.19
+        },
+        {
+          "week": 27,
+          "day": "Wednesday",
+          "baseline": 130.58,
+          "smart": 108.38
+        },
+        {
+          "week": 27,
+          "day": "Thursday",
+          "baseline": 119.78,
+          "smart": 106.26
+        },
+        {
+          "week": 28,
+          "day": "Sunday",
+          "baseline": 886.11,
+          "smart": 776.32
+        },
+        {
+          "week": 28,
+          "day": "Monday",
+          "baseline": 120.38,
+          "smart": 101.23
+        },
+        {
+          "week": 28,
+          "day": "Tuesday",
+          "baseline": 40.77,
+          "smart": 39.93
+        },
+        {
+          "week": 28,
+          "day": "Wednesday",
+          "baseline": 150.82,
+          "smart": 126.85
+        },
+        {
+          "week": 28,
+          "day": "Thursday",
+          "baseline": 120.53,
+          "smart": 100.08
+        },
+        {
+          "week": 29,
+          "day": "Sunday",
+          "baseline": 870.76,
+          "smart": 760.66
+        },
+        {
+          "week": 29,
+          "day": "Monday",
+          "baseline": 74.77,
+          "smart": 61.69
+        },
+        {
+          "week": 29,
+          "day": "Tuesday",
+          "baseline": 63.77,
+          "smart": 55.71
+        },
+        {
+          "week": 29,
+          "day": "Wednesday",
+          "baseline": 82.68,
+          "smart": 64.23
+        },
+        {
+          "week": 29,
+          "day": "Thursday",
+          "baseline": 93.4,
+          "smart": 90.61
+        },
+        {
+          "week": 30,
+          "day": "Sunday",
+          "baseline": 930.55,
+          "smart": 809.42
+        },
+        {
+          "week": 30,
+          "day": "Monday",
+          "baseline": 102.51,
+          "smart": 84.02
+        },
+        {
+          "week": 30,
+          "day": "Tuesday",
+          "baseline": 137.65,
+          "smart": 122.07
+        },
+        {
+          "week": 30,
+          "day": "Wednesday",
+          "baseline": 86.37,
+          "smart": 75.28
+        },
+        {
+          "week": 30,
+          "day": "Thursday",
+          "baseline": 78.41,
+          "smart": 67.95
+        },
+        {
+          "week": 31,
+          "day": "Sunday",
+          "baseline": 912.31,
+          "smart": 800.26
+        },
+        {
+          "week": 31,
+          "day": "Monday",
+          "baseline": 43.45,
+          "smart": 39.31
+        },
+        {
+          "week": 31,
+          "day": "Tuesday",
+          "baseline": 139.15,
+          "smart": 126.14
+        },
+        {
+          "week": 31,
+          "day": "Wednesday",
+          "baseline": 80.79,
+          "smart": 75.57
+        },
+        {
+          "week": 31,
+          "day": "Thursday",
+          "baseline": 123.82,
+          "smart": 103.99
+        },
+        {
+          "week": 32,
+          "day": "Sunday",
+          "baseline": 829.64,
+          "smart": 731.21
+        },
+        {
+          "week": 32,
+          "day": "Monday",
+          "baseline": 89.12,
+          "smart": 71.21
+        },
+        {
+          "week": 32,
+          "day": "Tuesday",
+          "baseline": 49.62,
+          "smart": 43.14
+        },
+        {
+          "week": 32,
+          "day": "Wednesday",
+          "baseline": 98.72,
+          "smart": 85.47
+        },
+        {
+          "week": 32,
+          "day": "Thursday",
+          "baseline": 127.61,
+          "smart": 107.85
+        },
+        {
+          "week": 33,
+          "day": "Sunday",
+          "baseline": 772.1,
+          "smart": 675.37
+        },
+        {
+          "week": 33,
+          "day": "Monday",
+          "baseline": 100.86,
+          "smart": 84.48
+        },
+        {
+          "week": 33,
+          "day": "Tuesday",
+          "baseline": 92.62,
+          "smart": 77.5
+        },
+        {
+          "week": 33,
+          "day": "Wednesday",
+          "baseline": 68.06,
+          "smart": 65.48
+        },
+        {
+          "week": 33,
+          "day": "Thursday",
+          "baseline": 104.86,
+          "smart": 85.09
+        },
+        {
+          "week": 34,
+          "day": "Sunday",
+          "baseline": 853.36,
+          "smart": 742.37
+        },
+        {
+          "week": 34,
+          "day": "Monday",
+          "baseline": 93.66,
+          "smart": 86.98
+        },
+        {
+          "week": 34,
+          "day": "Tuesday",
+          "baseline": 81.81,
+          "smart": 72.87
+        },
+        {
+          "week": 34,
+          "day": "Wednesday",
+          "baseline": 73.67,
+          "smart": 61.51
+        },
+        {
+          "week": 34,
+          "day": "Thursday",
+          "baseline": 98.34,
+          "smart": 87.77
+        },
+        {
+          "week": 35,
+          "day": "Sunday",
+          "baseline": 920.67,
+          "smart": 804.92
+        },
+        {
+          "week": 35,
+          "day": "Monday",
+          "baseline": 92.65,
+          "smart": 81.11
+        },
+        {
+          "week": 35,
+          "day": "Tuesday",
+          "baseline": 43.75,
+          "smart": 39.81
+        },
+        {
+          "week": 35,
+          "day": "Wednesday",
+          "baseline": 52.35,
+          "smart": 44.8
+        },
+        {
+          "week": 35,
+          "day": "Thursday",
+          "baseline": 32.53,
+          "smart": 28.13
+        },
+        {
+          "week": 36,
+          "day": "Sunday",
+          "baseline": 892.93,
+          "smart": 783.78
+        },
+        {
+          "week": 36,
+          "day": "Monday",
+          "baseline": 123.44,
+          "smart": 109.14
+        },
+        {
+          "week": 36,
+          "day": "Tuesday",
+          "baseline": 82.81,
+          "smart": 69.87
+        },
+        {
+          "week": 36,
+          "day": "Wednesday",
+          "baseline": 94.7,
+          "smart": 78.25
+        },
+        {
+          "week": 36,
+          "day": "Thursday",
+          "baseline": 114.56,
+          "smart": 96.65
+        },
+        {
+          "week": 37,
+          "day": "Sunday",
+          "baseline": 932.25,
+          "smart": 820.63
+        },
+        {
+          "week": 37,
+          "day": "Monday",
+          "baseline": 121.68,
+          "smart": 108.29
+        },
+        {
+          "week": 37,
+          "day": "Tuesday",
+          "baseline": 91.09,
+          "smart": 80.6
+        },
+        {
+          "week": 37,
+          "day": "Wednesday",
+          "baseline": 69.15,
+          "smart": 56.31
+        },
+        {
+          "week": 37,
+          "day": "Thursday",
+          "baseline": 106.82,
+          "smart": 87.97
+        },
+        {
+          "week": 38,
+          "day": "Sunday",
+          "baseline": 950.86,
+          "smart": 826.14
+        },
+        {
+          "week": 38,
+          "day": "Monday",
+          "baseline": 125.85,
+          "smart": 108.99
+        },
+        {
+          "week": 38,
+          "day": "Tuesday",
+          "baseline": 54.73,
+          "smart": 47.19
+        },
+        {
+          "week": 38,
+          "day": "Wednesday",
+          "baseline": 130.45,
+          "smart": 107.72
+        },
+        {
+          "week": 38,
+          "day": "Thursday",
+          "baseline": 105.15,
+          "smart": 92.04
+        },
+        {
+          "week": 39,
+          "day": "Sunday",
+          "baseline": 889.45,
+          "smart": 776.93
+        },
+        {
+          "week": 39,
+          "day": "Monday",
+          "baseline": 90.46,
+          "smart": 80.54
+        },
+        {
+          "week": 39,
+          "day": "Tuesday",
+          "baseline": 117.0,
+          "smart": 98.03
+        },
+        {
+          "week": 39,
+          "day": "Wednesday",
+          "baseline": 71.57,
+          "smart": 67.45
+        },
+        {
+          "week": 39,
+          "day": "Thursday",
+          "baseline": 87.8,
+          "smart": 81.97
+        },
+        {
+          "week": 40,
+          "day": "Sunday",
+          "baseline": 951.1,
+          "smart": 829.09
+        },
+        {
+          "week": 40,
+          "day": "Monday",
+          "baseline": 109.72,
+          "smart": 90.27
+        },
+        {
+          "week": 40,
+          "day": "Tuesday",
+          "baseline": 132.71,
+          "smart": 112.08
+        },
+        {
+          "week": 40,
+          "day": "Wednesday",
+          "baseline": 66.92,
+          "smart": 52.71
+        },
+        {
+          "week": 40,
+          "day": "Thursday",
+          "baseline": 66.59,
+          "smart": 57.62
+        },
+        {
+          "week": 41,
+          "day": "Sunday",
+          "baseline": 870.48,
+          "smart": 760.14
+        },
+        {
+          "week": 41,
+          "day": "Monday",
+          "baseline": 75.01,
+          "smart": 67.5
+        },
+        {
+          "week": 41,
+          "day": "Tuesday",
+          "baseline": 73.74,
+          "smart": 63.66
+        },
+        {
+          "week": 41,
+          "day": "Wednesday",
+          "baseline": 91.49,
+          "smart": 83.44
+        },
+        {
+          "week": 41,
+          "day": "Thursday",
+          "baseline": 112.95,
+          "smart": 110.65
+        },
+        {
+          "week": 42,
+          "day": "Sunday",
+          "baseline": 835.63,
+          "smart": 732.47
+        },
+        {
+          "week": 42,
+          "day": "Monday",
+          "baseline": 100.23,
+          "smart": 86.02
+        },
+        {
+          "week": 42,
+          "day": "Tuesday",
+          "baseline": 146.28,
+          "smart": 133.26
+        },
+        {
+          "week": 42,
+          "day": "Wednesday",
+          "baseline": 120.87,
+          "smart": 113.91
+        },
+        {
+          "week": 42,
+          "day": "Thursday",
+          "baseline": 101.99,
+          "smart": 90.38
+        },
+        {
+          "week": 43,
+          "day": "Sunday",
+          "baseline": 870.44,
+          "smart": 757.89
+        },
+        {
+          "week": 43,
+          "day": "Monday",
+          "baseline": 141.61,
+          "smart": 118.35
+        },
+        {
+          "week": 43,
+          "day": "Tuesday",
+          "baseline": 72.53,
+          "smart": 66.65
+        },
+        {
+          "week": 43,
+          "day": "Wednesday",
+          "baseline": 104.61,
+          "smart": 88.97
+        },
+        {
+          "week": 43,
+          "day": "Thursday",
+          "baseline": 109.73,
+          "smart": 99.37
+        },
+        {
+          "week": 44,
+          "day": "Sunday",
+          "baseline": 874.24,
+          "smart": 754.1
+        },
+        {
+          "week": 44,
+          "day": "Monday",
+          "baseline": 83.14,
+          "smart": 78.89
+        },
+        {
+          "week": 44,
+          "day": "Tuesday",
+          "baseline": 98.99,
+          "smart": 84.1
+        },
+        {
+          "week": 44,
+          "day": "Wednesday",
+          "baseline": 177.82,
+          "smart": 150.7
+        },
+        {
+          "week": 44,
+          "day": "Thursday",
+          "baseline": 158.13,
+          "smart": 129.46
+        },
+        {
+          "week": 45,
+          "day": "Sunday",
+          "baseline": 856.5,
+          "smart": 740.42
+        },
+        {
+          "week": 45,
+          "day": "Monday",
+          "baseline": 68.55,
+          "smart": 60.12
+        },
+        {
+          "week": 45,
+          "day": "Tuesday",
+          "baseline": 74.64,
+          "smart": 61.41
+        },
+        {
+          "week": 45,
+          "day": "Wednesday",
+          "baseline": 62.36,
+          "smart": 54.36
+        },
+        {
+          "week": 45,
+          "day": "Thursday",
+          "baseline": 139.92,
+          "smart": 129.51
+        },
+        {
+          "week": 46,
+          "day": "Sunday",
+          "baseline": 849.66,
+          "smart": 738.69
+        },
+        {
+          "week": 46,
+          "day": "Monday",
+          "baseline": 85.62,
+          "smart": 69.53
+        },
+        {
+          "week": 46,
+          "day": "Tuesday",
+          "baseline": 152.47,
+          "smart": 130.19
+        },
+        {
+          "week": 46,
+          "day": "Wednesday",
+          "baseline": 54.49,
+          "smart": 45.79
+        },
+        {
+          "week": 46,
+          "day": "Thursday",
+          "baseline": 59.36,
+          "smart": 49.85
+        },
+        {
+          "week": 47,
+          "day": "Sunday",
+          "baseline": 894.86,
+          "smart": 790.06
+        },
+        {
+          "week": 47,
+          "day": "Monday",
+          "baseline": 107.03,
+          "smart": 91.29
+        },
+        {
+          "week": 47,
+          "day": "Tuesday",
+          "baseline": 98.98,
+          "smart": 78.82
+        },
+        {
+          "week": 47,
+          "day": "Wednesday",
+          "baseline": 72.31,
+          "smart": 57.88
+        },
+        {
+          "week": 47,
+          "day": "Thursday",
+          "baseline": 85.44,
+          "smart": 72.9
+        },
+        {
+          "week": 48,
+          "day": "Sunday",
+          "baseline": 880.38,
+          "smart": 771.93
+        },
+        {
+          "week": 48,
+          "day": "Monday",
+          "baseline": 122.61,
+          "smart": 108.14
+        },
+        {
+          "week": 48,
+          "day": "Tuesday",
+          "baseline": 125.9,
+          "smart": 107.38
+        },
+        {
+          "week": 48,
+          "day": "Wednesday",
+          "baseline": 145.9,
+          "smart": 124.0
+        },
+        {
+          "week": 48,
+          "day": "Thursday",
+          "baseline": 121.94,
+          "smart": 113.39
+        },
+        {
+          "week": 49,
+          "day": "Sunday",
+          "baseline": 854.39,
+          "smart": 744.53
+        },
+        {
+          "week": 49,
+          "day": "Monday",
+          "baseline": 151.79,
+          "smart": 129.79
+        },
+        {
+          "week": 49,
+          "day": "Tuesday",
+          "baseline": 48.22,
+          "smart": 44.92
+        },
+        {
+          "week": 49,
+          "day": "Wednesday",
+          "baseline": 143.47,
+          "smart": 119.2
+        },
+        {
+          "week": 49,
+          "day": "Thursday",
+          "baseline": 134.81,
+          "smart": 120.07
+        },
+        {
+          "week": 50,
+          "day": "Sunday",
+          "baseline": 865.43,
+          "smart": 752.64
+        },
+        {
+          "week": 50,
+          "day": "Monday",
+          "baseline": 119.74,
+          "smart": 113.0
+        },
+        {
+          "week": 50,
+          "day": "Tuesday",
+          "baseline": 64.0,
+          "smart": 60.05
+        },
+        {
+          "week": 50,
+          "day": "Wednesday",
+          "baseline": 151.22,
+          "smart": 133.09
+        },
+        {
+          "week": 50,
+          "day": "Thursday",
+          "baseline": 53.01,
+          "smart": 52.83
+        },
+        {
+          "week": 51,
+          "day": "Sunday",
+          "baseline": 953.72,
+          "smart": 828.54
+        },
+        {
+          "week": 51,
+          "day": "Monday",
+          "baseline": 42.44,
+          "smart": 38.67
+        },
+        {
+          "week": 51,
+          "day": "Tuesday",
+          "baseline": 85.75,
+          "smart": 80.2
+        },
+        {
+          "week": 51,
+          "day": "Wednesday",
+          "baseline": 60.94,
+          "smart": 55.45
+        },
+        {
+          "week": 51,
+          "day": "Thursday",
+          "baseline": 92.07,
+          "smart": 85.31
+        }
+      ]
+    }
+  ],
+  "monthly_totals": null,
+  "cumulative_weekly": [
+    {
+      "week": 1,
+      "week_savings": 332.67,
+      "cumulative_savings": 332.67
+    },
+    {
+      "week": 2,
+      "week_savings": 318.74,
+      "cumulative_savings": 651.42
+    },
+    {
+      "week": 3,
+      "week_savings": 335.25,
+      "cumulative_savings": 986.67
+    },
+    {
+      "week": 4,
+      "week_savings": 358.07,
+      "cumulative_savings": 1344.74
+    },
+    {
+      "week": 5,
+      "week_savings": 291.73,
+      "cumulative_savings": 1636.47
+    },
+    {
+      "week": 6,
+      "week_savings": 333.04,
+      "cumulative_savings": 1969.51
+    },
+    {
+      "week": 7,
+      "week_savings": 333.76,
+      "cumulative_savings": 2303.27
+    },
+    {
+      "week": 8,
+      "week_savings": 360.23,
+      "cumulative_savings": 2663.49
+    },
+    {
+      "week": 9,
+      "week_savings": 308.49,
+      "cumulative_savings": 2971.99
+    },
+    {
+      "week": 10,
+      "week_savings": 335.24,
+      "cumulative_savings": 3307.23
+    },
+    {
+      "week": 11,
+      "week_savings": 338.99,
+      "cumulative_savings": 3646.21
+    },
+    {
+      "week": 12,
+      "week_savings": 323.2,
+      "cumulative_savings": 3969.41
+    },
+    {
+      "week": 13,
+      "week_savings": 321.27,
+      "cumulative_savings": 4290.68
+    },
+    {
+      "week": 14,
+      "week_savings": 339.02,
+      "cumulative_savings": 4629.7
+    },
+    {
+      "week": 15,
+      "week_savings": 300.66,
+      "cumulative_savings": 4930.36
+    },
+    {
+      "week": 16,
+      "week_savings": 343.12,
+      "cumulative_savings": 5273.48
+    },
+    {
+      "week": 17,
+      "week_savings": 335.55,
+      "cumulative_savings": 5609.03
+    },
+    {
+      "week": 18,
+      "week_savings": 312.07,
+      "cumulative_savings": 5921.1
+    },
+    {
+      "week": 19,
+      "week_savings": 318.32,
+      "cumulative_savings": 6239.42
+    },
+    {
+      "week": 20,
+      "week_savings": 370.8,
+      "cumulative_savings": 6610.22
+    },
+    {
+      "week": 21,
+      "week_savings": 374.95,
+      "cumulative_savings": 6985.17
+    },
+    {
+      "week": 22,
+      "week_savings": 337.35,
+      "cumulative_savings": 7322.52
+    },
+    {
+      "week": 23,
+      "week_savings": 335.94,
+      "cumulative_savings": 7658.47
+    },
+    {
+      "week": 24,
+      "week_savings": 333.95,
+      "cumulative_savings": 7992.42
+    },
+    {
+      "week": 25,
+      "week_savings": 362.73,
+      "cumulative_savings": 8355.15
+    },
+    {
+      "week": 26,
+      "week_savings": 338.66,
+      "cumulative_savings": 8693.82
+    },
+    {
+      "week": 27,
+      "week_savings": 316.57,
+      "cumulative_savings": 9010.39
+    },
+    {
+      "week": 28,
+      "week_savings": 337.3,
+      "cumulative_savings": 9347.69
+    },
+    {
+      "week": 29,
+      "week_savings": 348.24,
+      "cumulative_savings": 9695.93
+    },
+    {
+      "week": 30,
+      "week_savings": 340.5,
+      "cumulative_savings": 10036.43
+    },
+    {
+      "week": 31,
+      "week_savings": 350.21,
+      "cumulative_savings": 10386.63
+    },
+    {
+      "week": 32,
+      "week_savings": 320.39,
+      "cumulative_savings": 10707.02
+    },
+    {
+      "week": 33,
+      "week_savings": 333.35,
+      "cumulative_savings": 11040.37
+    },
+    {
+      "week": 34,
+      "week_savings": 303.72,
+      "cumulative_savings": 11344.09
+    },
+    {
+      "week": 35,
+      "week_savings": 292.8,
+      "cumulative_savings": 11636.89
+    },
+    {
+      "week": 36,
+      "week_savings": 300.29,
+      "cumulative_savings": 11937.18
+    },
+    {
+      "week": 37,
+      "week_savings": 313.87,
+      "cumulative_savings": 12251.06
+    },
+    {
+      "week": 38,
+      "week_savings": 321.85,
+      "cumulative_savings": 12572.91
+    },
+    {
+      "week": 39,
+      "week_savings": 335.87,
+      "cumulative_savings": 12908.78
+    },
+    {
+      "week": 40,
+      "week_savings": 346.35,
+      "cumulative_savings": 13255.12
+    },
+    {
+      "week": 41,
+      "week_savings": 363.06,
+      "cumulative_savings": 13618.18
+    },
+    {
+      "week": 42,
+      "week_savings": 306.87,
+      "cumulative_savings": 13925.05
+    },
+    {
+      "week": 43,
+      "week_savings": 325.38,
+      "cumulative_savings": 14250.43
+    },
+    {
+      "week": 44,
+      "week_savings": 328.15,
+      "cumulative_savings": 14578.58
+    },
+    {
+      "week": 45,
+      "week_savings": 387.63,
+      "cumulative_savings": 14966.21
+    },
+    {
+      "week": 46,
+      "week_savings": 312.67,
+      "cumulative_savings": 15278.88
+    },
+    {
+      "week": 47,
+      "week_savings": 320.61,
+      "cumulative_savings": 15599.49
+    },
+    {
+      "week": 48,
+      "week_savings": 306.34,
+      "cumulative_savings": 15905.83
+    },
+    {
+      "week": 49,
+      "week_savings": 340.1,
+      "cumulative_savings": 16245.93
+    },
+    {
+      "week": 50,
+      "week_savings": 339.28,
+      "cumulative_savings": 16585.21
+    },
+    {
+      "week": 51,
+      "week_savings": 291.89,
+      "cumulative_savings": 16877.11
+    },
+    {
+      "week": 52,
+      "week_savings": 296.3,
+      "cumulative_savings": 17173.4
+    }
+  ],
+  "supplier_prices_sample": {
+    "עגבנייה": {
+      "שוק ירקות המרכז": 5.98,
+      "ירקות השרון": 4.46,
+      "פירות וירקות תל אביב": 5.08,
+      "אספקת ירקות דן": 4.95
+    },
+    "מלפפון": {
+      "שוק ירקות המרכז": 4.75,
+      "ירקות השרון": 4.64,
+      "פירות וירקות תל אביב": 5.05,
+      "אספקת ירקות דן": 3.52
+    },
+    "בצל יבש": {
+      "שוק ירקות המרכז": 3.76,
+      "ירקות השרון": 3.09,
+      "פירות וירקות תל אביב": 3.41,
+      "אספקת ירקות דן": 3.9
+    },
+    "גזר": {
+      "שוק ירקות המרכז": 2.84,
+      "ירקות השרון": 3.11,
+      "פירות וירקות תל אביב": 3.82,
+      "אספקת ירקות דן": 3.66
+    },
+    "תפוח אדמה לבן": {
+      "שוק ירקות המרכז": 2.88,
+      "ירקות השרון": 3.41,
+      "פירות וירקות תל אביב": 3.73,
+      "אספקת ירקות דן": 2.57
+    },
+    "פלפל אדום": {
+      "שוק ירקות המרכז": 10.35,
+      "ירקות השרון": 9.92,
+      "פירות וירקות תל אביב": 8.48,
+      "אספקת ירקות דן": 7.74
+    },
+    "חסה אייסברג": {
+      "שוק ירקות המרכז": 5.54,
+      "ירקות השרון": 4.28,
+      "פירות וירקות תל אביב": 3.79,
+      "אספקת ירקות דן": 3.8
+    },
+    "פטרוזיליה": {
+      "שוק ירקות המרכז": 2.95,
+      "ירקות השרון": 2.68,
+      "פירות וירקות תל אביב": 2.91,
+      "אספקת ירקות דן": 2.82
+    },
+    "לימון": {
+      "שוק ירקות המרכז": 6.77,
+      "ירקות השרון": 8.05,
+      "פירות וירקות תל אביב": 6.31,
+      "אספקת ירקות דן": 6.81
+    },
+    "תפוז": {
+      "שוק ירקות המרכז": 5.63,
+      "ירקות השרון": 5.18,
+      "פירות וירקות תל אביב": 5.7,
+      "אספקת ירקות דן": 5.09
+    },
+    "חציל": {
+      "שוק ירקות המרכז": 5.81,
+      "ירקות השרון": 4.27,
+      "פירות וירקות תל אביב": 4.69,
+      "אספקת ירקות דן": 4.84
+    },
+    "קישוא": {
+      "שוק ירקות המרכז": 3.85,
+      "ירקות השרון": 4.16,
+      "פירות וירקות תל אביב": 3.89,
+      "אספקת ירקות דן": 4.26
+    }
+  },
+  "combined": {
+    "total_baseline": 111687.55,
+    "total_smart": 94514.02,
+    "total_savings": 17173.53,
+    "savings_pct": 15.4
+  }
+}
