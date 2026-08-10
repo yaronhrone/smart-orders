@@ -146,6 +146,75 @@ class BuildOrderServiceTests(TestCase):
 
         self.assertEqual(order.products.first().supplier, alt_b)
 
+    def test_minimum_order_pads_with_other_order_items_when_no_switch_alt(self):
+        """
+        No alternative supplier carries the under-minimum product at all, so
+        switching is impossible — but the under-minimum supplier also sells
+        OTHER products in the same order, close to their cheapest price. The
+        engine should pull those onto it to clear its own minimum, rather
+        than leaving the group unresolved.
+        """
+        cheap = make_supplier("cheap", minimum_order=70)  # only seller of tomato
+        other = make_supplier("other", minimum_order=0)   # cheapest for cucumber
+
+        set_price(cheap, self.tomato, "3.00")    # cheap's group: 10 * 3.00 = 30, below its 70 minimum
+        set_price(cheap, self.cucumber, "2.10")  # slightly pricier than "other"'s cucumber
+        set_price(other, self.cucumber, "2.00")  # cucumber's initial cheapest
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("10")},
+            {"product": self.cucumber, "quantity": Decimal("20")},
+        ])
+
+        items = {item.product: item for item in order.products.all()}
+        self.assertEqual(items[self.tomato].supplier, cheap)
+        self.assertEqual(items[self.cucumber].supplier, cheap)
+        self.assertEqual(items[self.cucumber].unit_price, Decimal("2.10"))
+
+    def test_minimum_order_pad_skips_donor_that_would_drop_below_its_own_minimum(self):
+        """Padding won't steal an item if doing so would push the donor supplier
+        below its own minimum — even though on paper padding could otherwise work."""
+        cheap = make_supplier("cheap", minimum_order=70)
+        donor = make_supplier("donor", minimum_order=40)  # exactly needs its cucumber revenue
+
+        set_price(cheap, self.tomato, "3.00")    # 30, below cheap's 70 minimum
+        set_price(cheap, self.cucumber, "2.10")
+        set_price(donor, self.cucumber, "2.00")  # donor's only product: 20 * 2.00 = 40 == its own minimum
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("10")},
+            {"product": self.cucumber, "quantity": Decimal("20")},
+        ])
+
+        # donor's cucumber revenue (40) exactly meets its own minimum — removing
+        # it would drop donor below 40, so padding must not take it. No switch
+        # alternative exists for tomato either, so cheap's group stays as-is.
+        items = {item.product: item for item in order.products.all()}
+        self.assertEqual(items[self.tomato].supplier, cheap)
+        self.assertEqual(items[self.cucumber].supplier, donor)
+
+    def test_minimum_order_chooses_cheaper_of_pad_vs_switch(self):
+        """When both padding and switching can clear the minimum, pick whichever
+        adds less total cost to the order."""
+        cheap = make_supplier("cheap", minimum_order=70)               # tomato's cheapest, under minimum alone
+        switch_target = make_supplier("switch_target", minimum_order=0)  # can take tomato, but pricier
+        donor = make_supplier("donor", minimum_order=0)                # cucumber's cheapest, has slack
+
+        set_price(cheap, self.tomato, "3.00")          # 10 * 3.00 = 30, below cheap's 70 minimum
+        set_price(switch_target, self.tomato, "3.50")  # switch: 10 * 3.50 = 35, added cost = 5.00
+        set_price(cheap, self.cucumber, "2.05")        # pad: 20 * 2.05 = 41.00, penalty = 20 * 0.05 = 1.00
+        set_price(donor, self.cucumber, "2.00")
+
+        order, _ = build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("10")},
+            {"product": self.cucumber, "quantity": Decimal("20")},
+        ])
+
+        # padding costs only 1.00 extra vs 5.00 for switching → padding wins.
+        items = {item.product: item for item in order.products.all()}
+        self.assertEqual(items[self.tomato].supplier, cheap)
+        self.assertEqual(items[self.cucumber].supplier, cheap)
+
     def test_minimum_order_not_triggered_when_met(self):
         """Supplier meets minimum → no switch."""
         supplier = make_supplier("supplier", minimum_order=30)

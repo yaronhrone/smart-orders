@@ -262,22 +262,111 @@ def _check_missing_minimum(assignments):
 
 
 def _force_minimum_switch(assignments):
-    totals, suppliers = _calculate_supplier_totals(assignments)
-    grouped = _group_by_supplier(assignments)
+    """
+    For each supplier group below its own minimum order, automatically resolve
+    it with whichever of two strategies costs less — no human/customer
+    intervention needed unless neither strategy can clear the minimum at all:
 
-    for sid, items in grouped.items():
+      - "pad": pull a few more items onto this supplier from elsewhere in the
+        SAME order — cheapest-penalty-first (the items where this supplier is
+        closest to what's already being paid) — until its total clears its
+        minimum. Only pulls from suppliers who have slack to spare (won't
+        rob one group's minimum to fix another's).
+      - "switch": move the whole under-minimum group to a different supplier
+        who can carry all of it and already clears (or reaches) their own
+        minimum — the original, simpler strategy.
+
+    Both strategies only ever raise the order's total versus the pure
+    cheapest-per-item baseline (by definition — that baseline is what's
+    already assigned), so comparing them is just comparing added cost.
+
+    Which groups get one resolution attempt is decided once upfront (the
+    initially-under-minimum suppliers), but the totals/suppliers snapshot
+    used for each attempt's safety checks is recomputed fresh every time —
+    an earlier group's pad/switch in this same call can move items and
+    change other suppliers' totals, and a stale snapshot would let a later
+    group's padding steal from a donor that's already been drawn down.
+    """
+    initial_totals, initial_suppliers = _calculate_supplier_totals(assignments)
+    problem_sids = [
+        sid for sid, total in initial_totals.items()
+        if total < initial_suppliers[sid].minimum_order
+    ]
+
+    for sid in problem_sids:
+        totals, suppliers = _calculate_supplier_totals(assignments)
+        items = [a for a in assignments if a["supplier"].id == sid]
+        if not items:
+            continue  # this group was fully absorbed by an earlier group's switch already
         supplier = suppliers[sid]
         total = totals[sid]
 
         if total >= supplier.minimum_order:
-            continue
+            continue  # already resolved as a side effect of an earlier group
 
-        best_supplier = _find_next_valid_supplier(items, sid, assignments)
+        pad_plan, pad_added_cost = _try_pad_plan(sid, supplier, total, items, assignments, totals, suppliers)
 
-        if best_supplier:
-            _move_items_to_supplier(items, best_supplier)
+        switch_supplier = _find_next_valid_supplier(items, sid, assignments)
+        switch_added_cost = None
+        if switch_supplier is not None:
+            new_group_total = _calculate_total_for_supplier(items, switch_supplier.id)
+            switch_added_cost = new_group_total - total
+
+        if pad_plan is not None and (switch_added_cost is None or pad_added_cost <= switch_added_cost):
+            for item, new_price in pad_plan:
+                item["supplier"] = supplier
+                item["unit_price"] = new_price
+        elif switch_supplier is not None:
+            _move_items_to_supplier(items, switch_supplier)
+        # else: neither strategy can clear the minimum — left as-is, still
+        # surfaced via _check_missing_minimum for the caller to act on.
 
     return assignments
+
+
+def _try_pad_plan(sid, supplier, current_total, group_items, all_assignments, totals, suppliers):
+    """
+    Try to reach `supplier`'s minimum by moving OTHER order items onto it,
+    cheapest-penalty-first (penalty = extra cost vs. that item's current
+    supplier). Skips any item whose current supplier would itself drop below
+    its own minimum by losing it — padding only draws on genuine slack.
+
+    Returns ([(item, new_price), ...], added_cost) on success, or (None, None)
+    if this supplier doesn't carry enough of the rest of the order to ever
+    reach its minimum this way.
+    """
+    group_ids = {id(a) for a in group_items}
+    candidates = []
+    for item in all_assignments:
+        if id(item) in group_ids:
+            continue
+        price_at_sid = item["price_by_supplier"].get(sid)
+        if price_at_sid is None:
+            continue
+
+        orig_sid = item["supplier"].id
+        item_cost_at_orig = item["quantity"] * item["unit_price"]
+        if totals[orig_sid] - item_cost_at_orig < suppliers[orig_sid].minimum_order:
+            continue  # would push the item's current supplier below its own minimum
+
+        penalty = (price_at_sid - item["unit_price"]) * item["quantity"]
+        candidates.append((penalty, price_at_sid, item))
+
+    candidates.sort(key=lambda c: c[0])
+
+    running_total = current_total
+    added_cost = Decimal(0)
+    plan = []
+    for penalty, price_at_sid, item in candidates:
+        if running_total >= supplier.minimum_order:
+            break
+        running_total += item["quantity"] * price_at_sid
+        added_cost += penalty
+        plan.append((item, price_at_sid))
+
+    if running_total >= supplier.minimum_order:
+        return plan, added_cost
+    return None, None
 
 
 def _calculate_supplier_totals(assignments):

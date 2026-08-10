@@ -5,288 +5,288 @@
       "regular_supplier": "סים - שוק ירקות המרכז",
       "order_days": 260,
       "total_baseline": 233532.23,
-      "total_smart": 197677.62,
-      "total_savings": 35854.6,
-      "savings_pct": 15.4,
-      "avg_savings_per_order_day": 137.9
+      "total_smart": 192753.91,
+      "total_savings": 40778.31,
+      "savings_pct": 17.5,
+      "avg_savings_per_order_day": 156.84
     },
     {
       "name": "מטבח תעשייתי - קייטרינג גדול",
       "regular_supplier": "סים - ירקות השרון",
       "order_days": 260,
       "total_baseline": 374284.47,
-      "total_smart": 328806.26,
-      "total_savings": 45478.22,
-      "savings_pct": 12.2,
-      "avg_savings_per_order_day": 174.92
+      "total_smart": 327649.56,
+      "total_savings": 46634.91,
+      "savings_pct": 12.5,
+      "avg_savings_per_order_day": 179.37
     }
   ],
   "combined": {
     "total_baseline": 607816.7,
-    "total_smart": 526483.88,
-    "total_savings": 81332.82,
-    "savings_pct": 13.4
+    "total_smart": 520403.47,
+    "total_savings": 87413.23,
+    "savings_pct": 14.4
   },
   "cumulative_weekly": [
     {
       "week": 1,
-      "week_savings": 1509.94,
-      "cumulative_savings": 1509.94
+      "week_savings": 1708.84,
+      "cumulative_savings": 1708.84
     },
     {
       "week": 2,
-      "week_savings": 1437.34,
-      "cumulative_savings": 2947.28
+      "week_savings": 1630.41,
+      "cumulative_savings": 3339.25
     },
     {
       "week": 3,
-      "week_savings": 1523.9,
-      "cumulative_savings": 4471.18
+      "week_savings": 1729.71,
+      "cumulative_savings": 5068.96
     },
     {
       "week": 4,
-      "week_savings": 1532.96,
-      "cumulative_savings": 6004.15
+      "week_savings": 1731.59,
+      "cumulative_savings": 6800.55
     },
     {
       "week": 5,
-      "week_savings": 1653.51,
-      "cumulative_savings": 7657.66
+      "week_savings": 1676.34,
+      "cumulative_savings": 8476.89
     },
     {
       "week": 6,
-      "week_savings": 1635.81,
-      "cumulative_savings": 9293.46
+      "week_savings": 1724.26,
+      "cumulative_savings": 10201.15
     },
     {
       "week": 7,
-      "week_savings": 1377.07,
-      "cumulative_savings": 10670.53
+      "week_savings": 1577.24,
+      "cumulative_savings": 11778.39
     },
     {
       "week": 8,
-      "week_savings": 1478.38,
-      "cumulative_savings": 12148.91
+      "week_savings": 1659.51,
+      "cumulative_savings": 13437.9
     },
     {
       "week": 9,
-      "week_savings": 1577.83,
-      "cumulative_savings": 13726.74
+      "week_savings": 1637.5,
+      "cumulative_savings": 15075.4
     },
     {
       "week": 10,
-      "week_savings": 1733.81,
-      "cumulative_savings": 15460.55
+      "week_savings": 1777.84,
+      "cumulative_savings": 16853.24
     },
     {
       "week": 11,
-      "week_savings": 1466.43,
-      "cumulative_savings": 16926.98
+      "week_savings": 1673.28,
+      "cumulative_savings": 18526.52
     },
     {
       "week": 12,
-      "week_savings": 1821.22,
-      "cumulative_savings": 18748.2
+      "week_savings": 1846.11,
+      "cumulative_savings": 20372.63
     },
     {
       "week": 13,
-      "week_savings": 1466.43,
-      "cumulative_savings": 20214.63
+      "week_savings": 1636.48,
+      "cumulative_savings": 22009.1
     },
     {
       "week": 14,
-      "week_savings": 1679.6,
-      "cumulative_savings": 21894.23
+      "week_savings": 1890.08,
+      "cumulative_savings": 23899.18
     },
     {
       "week": 15,
-      "week_savings": 1371.17,
-      "cumulative_savings": 23265.4
+      "week_savings": 1558.01,
+      "cumulative_savings": 25457.19
     },
     {
       "week": 16,
-      "week_savings": 1821.14,
-      "cumulative_savings": 25086.54
+      "week_savings": 1856.56,
+      "cumulative_savings": 27313.76
     },
     {
       "week": 17,
-      "week_savings": 1384.68,
-      "cumulative_savings": 26471.21
+      "week_savings": 1417.99,
+      "cumulative_savings": 28731.75
     },
     {
       "week": 18,
-      "week_savings": 1651.02,
-      "cumulative_savings": 28122.24
+      "week_savings": 1830.49,
+      "cumulative_savings": 30562.24
     },
     {
       "week": 19,
-      "week_savings": 1425.69,
-      "cumulative_savings": 29547.92
+      "week_savings": 1595.52,
+      "cumulative_savings": 32157.76
     },
     {
       "week": 20,
-      "week_savings": 1546.66,
-      "cumulative_savings": 31094.59
+      "week_savings": 1717.61,
+      "cumulative_savings": 33875.37
     },
     {
       "week": 21,
-      "week_savings": 1581.21,
-      "cumulative_savings": 32675.79
+      "week_savings": 1620.01,
+      "cumulative_savings": 35495.38
     },
     {
       "week": 22,
-      "week_savings": 1340.29,
-      "cumulative_savings": 34016.08
+      "week_savings": 1521.16,
+      "cumulative_savings": 37016.54
     },
     {
       "week": 23,
-      "week_savings": 1678.97,
-      "cumulative_savings": 35695.05
+      "week_savings": 1811.37,
+      "cumulative_savings": 38827.91
     },
     {
       "week": 24,
-      "week_savings": 1521.96,
-      "cumulative_savings": 37217.01
+      "week_savings": 1696.23,
+      "cumulative_savings": 40524.15
     },
     {
       "week": 25,
-      "week_savings": 1772.89,
-      "cumulative_savings": 38989.9
+      "week_savings": 1820.32,
+      "cumulative_savings": 42344.47
     },
     {
       "week": 26,
-      "week_savings": 1494.18,
-      "cumulative_savings": 40484.08
+      "week_savings": 1631.34,
+      "cumulative_savings": 43975.8
     },
     {
       "week": 27,
-      "week_savings": 1462.45,
-      "cumulative_savings": 41946.53
+      "week_savings": 1659.84,
+      "cumulative_savings": 45635.65
     },
     {
       "week": 28,
-      "week_savings": 1407.13,
-      "cumulative_savings": 43353.66
+      "week_savings": 1562.88,
+      "cumulative_savings": 47198.53
     },
     {
       "week": 29,
-      "week_savings": 1582.73,
-      "cumulative_savings": 44936.39
+      "week_savings": 1654.08,
+      "cumulative_savings": 48852.6
     },
     {
       "week": 30,
-      "week_savings": 1354.39,
-      "cumulative_savings": 46290.78
+      "week_savings": 1511.67,
+      "cumulative_savings": 50364.28
     },
     {
       "week": 31,
-      "week_savings": 1597.74,
-      "cumulative_savings": 47888.51
+      "week_savings": 1798.3,
+      "cumulative_savings": 52162.57
     },
     {
       "week": 32,
-      "week_savings": 1414.58,
-      "cumulative_savings": 49303.09
+      "week_savings": 1466.02,
+      "cumulative_savings": 53628.59
     },
     {
       "week": 33,
-      "week_savings": 1799.06,
-      "cumulative_savings": 51102.15
+      "week_savings": 1824.85,
+      "cumulative_savings": 55453.44
     },
     {
       "week": 34,
-      "week_savings": 1538.42,
-      "cumulative_savings": 52640.58
+      "week_savings": 1718.48,
+      "cumulative_savings": 57171.92
     },
     {
       "week": 35,
-      "week_savings": 1410.99,
-      "cumulative_savings": 54051.57
+      "week_savings": 1601.34,
+      "cumulative_savings": 58773.26
     },
     {
       "week": 36,
-      "week_savings": 1805.14,
-      "cumulative_savings": 55856.72
+      "week_savings": 1850.06,
+      "cumulative_savings": 60623.32
     },
     {
       "week": 37,
-      "week_savings": 1794.56,
-      "cumulative_savings": 57651.27
+      "week_savings": 1858.45,
+      "cumulative_savings": 62481.77
     },
     {
       "week": 38,
-      "week_savings": 1577.41,
-      "cumulative_savings": 59228.68
+      "week_savings": 1634.26,
+      "cumulative_savings": 64116.03
     },
     {
       "week": 39,
-      "week_savings": 1385.88,
-      "cumulative_savings": 60614.56
+      "week_savings": 1530.26,
+      "cumulative_savings": 65646.29
     },
     {
       "week": 40,
-      "week_savings": 1477.96,
-      "cumulative_savings": 62092.52
+      "week_savings": 1653.53,
+      "cumulative_savings": 67299.83
     },
     {
       "week": 41,
-      "week_savings": 1484.08,
-      "cumulative_savings": 63576.61
+      "week_savings": 1663.74,
+      "cumulative_savings": 68963.56
     },
     {
       "week": 42,
-      "week_savings": 1561.75,
-      "cumulative_savings": 65138.35
+      "week_savings": 1608.26,
+      "cumulative_savings": 70571.82
     },
     {
       "week": 43,
-      "week_savings": 1411.67,
-      "cumulative_savings": 66550.02
+      "week_savings": 1628.39,
+      "cumulative_savings": 72200.21
     },
     {
       "week": 44,
-      "week_savings": 1744.37,
-      "cumulative_savings": 68294.4
+      "week_savings": 1765.03,
+      "cumulative_savings": 73965.24
     },
     {
       "week": 45,
-      "week_savings": 1514.37,
-      "cumulative_savings": 69808.77
+      "week_savings": 1677.88,
+      "cumulative_savings": 75643.12
     },
     {
       "week": 46,
-      "week_savings": 1463.06,
-      "cumulative_savings": 71271.83
+      "week_savings": 1683.8,
+      "cumulative_savings": 77326.92
     },
     {
       "week": 47,
-      "week_savings": 1513.81,
-      "cumulative_savings": 72785.64
+      "week_savings": 1675.16,
+      "cumulative_savings": 79002.08
     },
     {
       "week": 48,
-      "week_savings": 1586.48,
-      "cumulative_savings": 74372.12
+      "week_savings": 1617.75,
+      "cumulative_savings": 80619.83
     },
     {
       "week": 49,
-      "week_savings": 1772.29,
-      "cumulative_savings": 76144.41
+      "week_savings": 1844.11,
+      "cumulative_savings": 82463.95
     },
     {
       "week": 50,
-      "week_savings": 1773.01,
-      "cumulative_savings": 77917.42
+      "week_savings": 1558.49,
+      "cumulative_savings": 84022.44
     },
     {
       "week": 51,
-      "week_savings": 1694.2,
-      "cumulative_savings": 79611.62
+      "week_savings": 1492.31,
+      "cumulative_savings": 85514.74
     },
     {
       "week": 52,
-      "week_savings": 1721.2,
-      "cumulative_savings": 81332.82
+      "week_savings": 1898.48,
+      "cumulative_savings": 87413.22
     }
   ],
   "minimum_order_stats": {
@@ -294,8 +294,8 @@
     "days_with_unresolved_minimum_issue": 161,
     "pct_fully_resolved_automatically": 69.0,
     "scenario_used_counts": {
-      "cheapest": 267,
-      "fewest_suppliers": 253
+      "cheapest": 297,
+      "fewest_suppliers": 223
     }
   }
 }
