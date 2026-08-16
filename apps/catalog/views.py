@@ -1,8 +1,10 @@
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 from .price_parser import update_prices_from_message
+from core.cache_utils import get_cache_version
 from core.pagination import paginate, LoadMorePagination
 from drf_spectacular.utils import extend_schema
 from .models import Product, Supplier, SupplierProduct
@@ -11,6 +13,8 @@ from .serializers import (
     PriceMessageSerializer, PriceUpdateResultSerializer, SupplierPriceUpdateSerializer,
     SupplierWithProductsSerializer,
 )
+
+CATALOG_CACHE_TTL = 300  # safety-net TTL; real invalidation is via signals.py on any write
 
 
 class ProductListCreateView(generics.ListCreateAPIView):
@@ -203,6 +207,18 @@ class SupplierPricesListView(generics.ListAPIView):
     def get_queryset(self):
         return Supplier.objects.prefetch_related("products__product").order_by("name")
 
+    def list(self, request, *args, **kwargs):
+        version = get_cache_version("catalog", "prices")
+        cache_key = f"catalog:suppliers_prices_all:v{version}"
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, timeout=CATALOG_CACHE_TTL)
+        return response
+
 
 class ProductCatalogView(APIView):
     """
@@ -213,6 +229,15 @@ class ProductCatalogView(APIView):
 
     def get(self, request):
         search = request.query_params.get("search", "").strip()
+        limit = request.query_params.get("limit", "")
+        offset = request.query_params.get("offset", "")
+        version = get_cache_version("catalog", "prices")
+        cache_key = f"catalog:product_prices:v{version}:{search}:{limit}:{offset}"
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         products = (
             Product.objects
             .prefetch_related("supplier_prices__supplier")
@@ -251,4 +276,6 @@ class ProductCatalogView(APIView):
                 ],
             })
 
-        return Response({"results": result, "has_more": has_more})
+        payload = {"results": result, "has_more": has_more}
+        cache.set(cache_key, payload, timeout=CATALOG_CACHE_TTL)
+        return Response(payload)
