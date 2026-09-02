@@ -46,6 +46,7 @@ jobs:
           DB_PASS: testpass
           DB_PORT: 5432
           REDIS_HOST: localhost
+          REDIS_PORT: 6379
           DJANGO_SECRET_KEY: ci-only-secret-key-not-used-in-prod
           DEBUG: 1
           TWILIO_ACCOUNT_SID: dummy
