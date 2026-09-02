@@ -1,16 +1,16 @@
 name: CI/CD → AWS EC2
-
+ 
 on:
   push:
     branches: ["*"]
   pull_request:
     branches: [main]
-
+ 
 jobs:
   # ─── Job 1: Tests ───────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
-
+ 
     services:
       postgres:
         image: postgres:16
@@ -23,21 +23,21 @@ jobs:
           --health-cmd pg_isready
           --health-interval 5s
           --health-retries 5
-
+ 
       redis:
         image: redis:7-alpine
         ports: ["6379:6379"]
-
+ 
     steps:
       - uses: actions/checkout@v4
-
+ 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+ 
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements.dev.txt
-
+ 
       - name: Run Django tests
         env:
           DB_HOST: localhost
@@ -54,14 +54,14 @@ jobs:
           TWILIO_WHATSAPP_NUMBER: "+10000000000"
           OPENAI_API_KEY: dummy
         run: python manage.py test --verbosity=2
-
+ 
   # ─── Job 2: Deploy (only on push to main) ───────────────────────
   deploy:
     needs: test
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/refactor') && github.event_name == 'push'
     runs-on: ubuntu-latest
-
-
+ 
+ 
     steps:
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -71,21 +71,56 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ~/smart-orders
+ 
+            # Remember what's currently running, in case the new build turns out unhealthy.
+            PREVIOUS_COMMIT=$(git rev-parse HEAD)
+ 
             git pull origin main
             docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans
             docker image prune -f
-
+ 
             echo "Waiting for /health/ to report healthy..."
+            healthy=""
             for i in $(seq 1 30); do
               if curl -fsLk http://localhost/health/ | grep -q '"status": "healthy"'; then
                 echo "Deploy healthy"
-                exit 0
+                healthy=1
+                break
               fi
               echo "Not healthy yet ($i/30)..."
               sleep 5
             done
-
-            echo "DEPLOY FAILED - app did not become healthy"
+ 
+            if [ -n "$healthy" ]; then
+              exit 0
+            fi
+ 
+            echo "DEPLOY FAILED - app did not become healthy on commit $(git rev-parse HEAD)"
             docker-compose -f docker-compose.prod.yml ps
             docker-compose -f docker-compose.prod.yml logs --tail=100
+ 
+            echo "Rolling back to previous commit $PREVIOUS_COMMIT..."
+            git reset --hard "$PREVIOUS_COMMIT"
+            docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans
+ 
+            echo "Waiting for rollback to report healthy..."
+            rolled_back=""
+            for i in $(seq 1 30); do
+              if curl -fsLk http://localhost/health/ | grep -q '"status": "healthy"'; then
+                echo "Rollback succeeded - service restored on $PREVIOUS_COMMIT"
+                rolled_back=1
+                break
+              fi
+              echo "Rollback not healthy yet ($i/30)..."
+              sleep 5
+            done
+ 
+            if [ -z "$rolled_back" ]; then
+              echo "ROLLBACK FAILED - service is down, manual intervention required"
+              docker-compose -f docker-compose.prod.yml ps
+              docker-compose -f docker-compose.prod.yml logs --tail=100
+            fi
+ 
+            # Fail the workflow either way, so a broken push to main never shows green -
+            # even when the rollback itself succeeded and service is back up.
             exit 1
