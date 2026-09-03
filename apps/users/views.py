@@ -1,5 +1,10 @@
+from django.conf import settings
 from rest_framework import generics, permissions
+from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
 from django.shortcuts import get_object_or_404
 from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer, HebrewTokenObtainPairSerializer
 from django.contrib.auth import get_user_model
@@ -9,8 +14,94 @@ from core.pagination import LoadMorePagination10
 User = get_user_model()
 
 
+def _set_auth_cookies(response, access, refresh=None):
+    """Write the access token (and optionally a rotated refresh token) as
+    HttpOnly cookies. The refresh cookie is scoped to /api/users/ only —
+    it never needs to travel on regular API requests, just refresh/logout."""
+    response.set_cookie(
+        settings.JWT_ACCESS_COOKIE,
+        str(access),
+        max_age=int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
+        httponly=True,
+        secure=settings.JWT_COOKIE_SECURE,
+        samesite=settings.JWT_COOKIE_SAMESITE,
+        path="/",
+    )
+    if refresh is not None:
+        response.set_cookie(
+            settings.JWT_REFRESH_COOKIE,
+            str(refresh),
+            max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+            httponly=True,
+            secure=settings.JWT_COOKIE_SECURE,
+            samesite=settings.JWT_COOKIE_SAMESITE,
+            path="/api/users/",
+        )
+
+
+def _clear_auth_cookies(response):
+    response.delete_cookie(settings.JWT_ACCESS_COOKIE, path="/")
+    response.delete_cookie(settings.JWT_REFRESH_COOKIE, path="/api/users/")
+
+
 class HebrewLoginView(TokenObtainPairView):
     serializer_class = HebrewTokenObtainPairSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        access = serializer.validated_data["access"]
+        refresh = serializer.validated_data["refresh"]
+
+        response = Response({"detail": "התחברת בהצלחה"})
+        _set_auth_cookies(response, access, refresh)
+        return response
+
+
+class TokenRefreshCookieView(APIView):
+    """POST /api/users/token/refresh/ — reads the refresh token from its
+    HttpOnly cookie (never from the request body, so JS never handles it),
+    issues a new access token, and — since ROTATE_REFRESH_TOKENS is on —
+    a new refresh token too, overwriting both cookies."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        raw_refresh = request.COOKIES.get(settings.JWT_REFRESH_COOKIE)
+        if not raw_refresh:
+            return Response({"detail": "לא מחובר"}, status=401)
+
+        serializer = TokenRefreshSerializer(data={"refresh": raw_refresh})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except TokenError:
+            response = Response({"detail": "פג תוקף ההתחברות, יש להתחבר מחדש"}, status=401)
+            _clear_auth_cookies(response)
+            return response
+
+        access = serializer.validated_data["access"]
+        new_refresh = serializer.validated_data.get("refresh")
+
+        response = Response({"detail": "רוענן"})
+        _set_auth_cookies(response, access, new_refresh)
+        return response
+
+
+class LogoutView(APIView):
+    """POST /api/users/logout/ — blacklists the refresh token so it can't
+    be replayed even if it leaked before logout, and clears both cookies."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        raw_refresh = request.COOKIES.get(settings.JWT_REFRESH_COOKIE)
+        if raw_refresh:
+            try:
+                RefreshToken(raw_refresh).blacklist()
+            except TokenError:
+                pass  # already invalid/expired — nothing to blacklist
+
+        response = Response({"detail": "התנתקת"})
+        _clear_auth_cookies(response)
+        return response
 
 
 class RegisterView(generics.CreateAPIView):

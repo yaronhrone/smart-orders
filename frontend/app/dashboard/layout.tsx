@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchMe, Me } from "../lib/api";
+import { fetchMe, logout as apiLogout, Me } from "../lib/api";
 import { AppSidebar } from "../components/AppSidebar";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -11,22 +11,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.push("/login");
-      return;
-    }
     fetchMe()
       .then((data) => { setMe(data); setReady(true); })
-      .catch(() => {
-        localStorage.removeItem("token");
-        router.push("/login");
-      });
+      .catch(() => router.push("/login"));
   }, [router]);
 
   function logout() {
-    localStorage.removeItem("token");
-    router.push("/login");
+    apiLogout().finally(() => router.push("/login"));
   }
 
   if (!ready) {

@@ -33,9 +33,19 @@
               "listen": "test",
               "script": {
                 "exec": [
-                  "const data = pm.response.json();",
-                  "if (data.access) pm.environment.set('access_token', data.access);",
-                  "if (data.refresh) pm.environment.set('refresh_token', data.refresh);"
+                  "// Tokens now travel as HttpOnly Set-Cookie headers, not in the JSON body.",
+                  "// Postman's cookie jar attaches them automatically to later requests to",
+                  "// {{base_url}}; we also copy them into env vars so the collection's",
+                  "// existing Bearer auth (Authorization: Bearer {{access_token}}) still works.",
+                  "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie');",
+                  "function extract(name) {",
+                  "  const c = cookies.find(h => h.value.startsWith(name + '='));",
+                  "  return c ? c.value.split(';')[0].slice(name.length + 1) : null;",
+                  "}",
+                  "const access = extract('access_token');",
+                  "const refresh = extract('refresh_token');",
+                  "if (access) pm.environment.set('access_token', access);",
+                  "if (refresh) pm.environment.set('refresh_token', refresh);"
                 ]
               }
             }
@@ -46,14 +56,42 @@
           "request": {
             "auth": { "type": "noauth" },
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}" },
-            "url": { "raw": "{{base_url}}/api/users/token/refresh/", "host": ["{{base_url}}"], "path": ["api","users","token","refresh",""] }
+            "header": [],
+            "url": { "raw": "{{base_url}}/api/users/token/refresh/", "host": ["{{base_url}}"], "path": ["api","users","token","refresh",""] },
+            "description": "No body needed — the refresh token travels as an HttpOnly cookie, sent automatically by Postman's cookie jar from the Login request above."
           },
           "event": [
             {
               "listen": "test",
-              "script": { "exec": [ "const data = pm.response.json();", "if (data.access) pm.environment.set('access_token', data.access);" ] }
+              "script": {
+                "exec": [
+                  "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie');",
+                  "function extract(name) {",
+                  "  const c = cookies.find(h => h.value.startsWith(name + '='));",
+                  "  return c ? c.value.split(';')[0].slice(name.length + 1) : null;",
+                  "}",
+                  "const access = extract('access_token');",
+                  "const refresh = extract('refresh_token');",
+                  "if (access) pm.environment.set('access_token', access);",
+                  "if (refresh) pm.environment.set('refresh_token', refresh);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/api/users/logout/", "host": ["{{base_url}}"], "path": ["api","users","logout",""] },
+            "description": "Blacklists the refresh token (from the cookie jar) and clears both cookies."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": [ "pm.environment.set('access_token', ''); pm.environment.set('refresh_token', '');" ] }
             }
           ]
         },

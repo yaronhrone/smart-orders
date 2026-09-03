@@ -37,31 +37,28 @@ function _parseErrorBody(body: string): string {
   }
 }
 
+// Auth tokens live in HttpOnly cookies set by the backend — this file never
+// reads or stores them. The browser attaches them to same-origin requests
+// automatically, so every fetch just needs credentials: "include".
+
 async function tryRefresh(): Promise<boolean> {
-  const refresh = typeof window !== "undefined" ? localStorage.getItem("refresh") : null;
-  if (!refresh) return false;
   try {
     const res = await fetch("/api/users/token/refresh/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh }),
+      credentials: "include",
     });
-    if (!res.ok) return false;
-    const data = await res.json();
-    localStorage.setItem("token", data.access);
-    return true;
+    return res.ok;
   } catch {
     return false;
   }
 }
 
 export async function request<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
   const res = await fetch(path, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
   });
@@ -70,8 +67,6 @@ export async function request<T>(path: string, options: RequestInit = {}, _retri
       const refreshed = await tryRefresh();
       if (refreshed) return request<T>(path, options, true);
     }
-    localStorage.removeItem("token");
-    localStorage.removeItem("refresh");
     window.location.href = "/login";
     throw new Error("פג תוקף ההתחברות, מועבר לדף הכניסה");
   }
@@ -85,16 +80,25 @@ export async function request<T>(path: string, options: RequestInit = {}, _retri
 
 // ─────────────── Auth ───────────────
 
-export interface TokenPair {
-  access: string;
-  refresh: string;
-}
-
-export async function login(email: string, password: string): Promise<TokenPair> {
-  return request<TokenPair>("/api/users/login/", {
+export async function login(email: string, password: string): Promise<void> {
+  // Deliberately not routed through request(): a wrong password is a normal
+  // 401 the login form needs to show as "אימייל או סיסמה שגויים" — request()'s
+  // 401 handling assumes an *expired session* and force-redirects to /login,
+  // which is wrong here (we're already on it) and would swallow this error.
+  const res = await fetch("/api/users/login/", {
     method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(_parseErrorBody(body) || res.statusText);
+  }
+}
+
+export async function logout(): Promise<void> {
+  await request<{ detail: string }>("/api/users/logout/", { method: "POST" });
 }
 
 // ─────────────── User / Me ───────────────

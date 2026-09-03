@@ -19,9 +19,7 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const { access, refresh } = await login(email, password);
-      localStorage.setItem("token", access);
-      localStorage.setItem("refresh", refresh);
+      await login(email, password);
       router.push("/dashboard");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

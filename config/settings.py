@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "core",
     "apps.users",
     "apps.catalog",
@@ -166,7 +167,7 @@ CACHES = {
 }
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.users.authentication.CookieJWTAuthentication",
     ],
     # "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -188,11 +189,25 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+# JWT is delivered to the browser as HttpOnly cookies (set by
+# apps.users.views), not in the response body — JS on the page can never
+# read them, so a compromised dependency/XSS payload can't exfiltrate a
+# session. CookieJWTAuthentication (below) still accepts a bare
+# Authorization header first, so Postman/scripts/CI keep working unchanged.
+JWT_ACCESS_COOKIE = "access_token"
+JWT_REFRESH_COOKIE = "refresh_token"
+# Secure requires HTTPS — off in local dev (plain http://localhost), on in
+# prod (nginx terminates TLS). SameSite=Lax is the actual CSRF defense here:
+# the cookie is never attached to a cross-site POST, so there's no separate
+# CSRF-token endpoint to build/maintain.
+JWT_COOKIE_SECURE = not DEBUG
+JWT_COOKIE_SAMESITE = "Lax"
 
 CELERY_BROKER_URL = REDIS_URL
 CELERY_ACCEPT_CONTENT = ["json"]
@@ -215,6 +230,10 @@ ADMIN_WHATSAPP_NUMBER = os.environ.get("ADMIN_WHATSAPP_NUMBER", "")
 
 _extra_cors = [o for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o]
 CORS_ALLOWED_ORIGINS = ["http://localhost:3000"] + _extra_cors
+# Needed so the browser attaches/accepts the JWT cookies on any direct
+# (non-proxied) cross-origin call — the Next.js rewrite normally makes
+# frontend→backend calls same-origin, but this keeps a direct call working too.
+CORS_ALLOW_CREDENTIALS = True
 
 LOGGING = {
     "version": 1,
