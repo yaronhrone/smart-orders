@@ -57,7 +57,19 @@ def _validate_twilio_signature(request) -> bool:
         validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
         signature = request.META.get("HTTP_X_TWILIO_SIGNATURE", "")
         url = request.build_absolute_uri()
-        return validator.validate(url, request.POST, signature)
+        valid = validator.validate(url, request.POST, signature)
+        if not valid:
+            # Diagnostic only — none of this is sensitive (the signature is a
+            # per-request HMAC, not the auth token itself). Remove once the
+            # mismatch against the URL saved in the Twilio console is found.
+            logger.warning(
+                "Twilio signature mismatch. Django computed url=%r signature_header=%r "
+                "X-Forwarded-Proto=%r Host=%r",
+                url, signature,
+                request.META.get("HTTP_X_FORWARDED_PROTO"),
+                request.META.get("HTTP_HOST"),
+            )
+        return valid
     except Exception as exc:
         logger.error("Twilio signature validation error: %s", exc)
         return False
