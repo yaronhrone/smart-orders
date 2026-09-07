@@ -185,7 +185,7 @@ export default function SuppliersPage() {
                   onClick={() => toggleExpand(s.id)}
                   className="flex-1 flex items-center gap-4 hover:bg-gray-50 transition text-right"
                 >
-                  <div className="flex-1 grid grid-cols-4 gap-4 text-sm min-w-0">
+                  <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm min-w-0">
                     <span className="font-medium text-gray-800 truncate">{s.name}</span>
                     <span className="text-gray-500 truncate">{REGION_LABEL[s.region] ?? s.region}</span>
                     <span className="text-gray-500 truncate">{s.phone}</span>
@@ -220,7 +220,7 @@ export default function SuppliersPage() {
 
               {/* Expanded products */}
               {expanded === s.id && s.products.length > 0 && (
-                <div className="border-t border-gray-100">
+                <div className="border-t border-gray-100 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 text-gray-500 text-xs">

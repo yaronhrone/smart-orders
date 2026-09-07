@@ -143,7 +143,7 @@ export default function DashboardPage() {
         {orders.length === 0 ? (
           <p className="text-sm text-gray-600">אין הזמנות עדיין.</p>
         ) : (
-          <div className="bg-white rounded-xl shadow-md overflow-hidden">
+          <div className="bg-white rounded-xl shadow-md overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-green-800 text-green-100 text-xs">

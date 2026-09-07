@@ -17,6 +17,9 @@ body {
   font-family: Arial, Helvetica, sans-serif;
   background-color: #f1f5f0;
   min-height: 100vh;
+  /* The off-canvas mobile sidebar sits off-screen via translateX past the
+     right edge; this keeps that from ever opening a horizontal scrollbar. */
+  overflow-x: hidden;
 }
 
 #__next, main, .page-root {

@@ -143,7 +143,7 @@ export default function OrderDetailPage() {
                 {formatCurrency(groupTotal)}
               </span>
             </div>
-            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-gray-500 text-xs">

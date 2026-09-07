@@ -28,7 +28,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen bg-gray-50" dir="rtl">
       <AppSidebar me={me} onLogout={logout} />
-      <div className="mr-56 min-h-screen">{children}</div>
+      <div className="pt-14 md:pt-0 md:mr-56 min-h-screen">{children}</div>
     </div>
   );
 }

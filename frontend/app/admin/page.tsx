@@ -201,7 +201,7 @@ export default function AdminPage() {
                   onClick={() => toggleExpand(u.id)}
                   className="flex-1 flex items-center gap-4 text-right hover:opacity-80 transition"
                 >
-                  <div className="flex-1 grid grid-cols-4 gap-4 text-sm min-w-0">
+                  <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm min-w-0">
                     <span className="font-medium text-gray-800 truncate">{u.first_name} {u.last_name}</span>
                     <span className="text-gray-500 truncate">{u.email}</span>
                     <span className="text-gray-600 truncate">{u.profile?.company_name ?? "—"}</span>
@@ -230,7 +230,7 @@ export default function AdminPage() {
 
               {/* Expanded profile details */}
               {expanded === u.id && (
-                <div className="border-t border-gray-100 px-4 py-4 bg-gray-50 grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                <div className="border-t border-gray-100 px-4 py-4 bg-gray-50 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 text-sm">
                   <Detail label="טלפון חברה" value={u.profile?.company_phone} />
                   <Detail label="כתובת" value={u.profile?.company_address} />
                   <Detail label="טלפון אישי" value={u.profile?.phone} />
