@@ -139,6 +139,11 @@ celerybeat.pid
 .env
 .env.prod
 .envrc
+
+# Let's Encrypt certs + private keys, materialized on the EC2 host by certbot
+# (already in .dockerignore; this is what stops `git add .` from committing
+# privkey.pem to the repo).
+certbot/
 .venv
 env/
 venv/

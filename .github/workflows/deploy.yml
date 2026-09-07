@@ -71,26 +71,33 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ~/smart-orders
- 
+
             # Remember what's currently running, in case the new build turns out unhealthy.
             PREVIOUS_COMMIT=$(git rev-parse HEAD)
- 
-            git pull origin main
-            docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans
-            docker image prune -f
- 
-            echo "Waiting for /health/ to report healthy..."
+
+            # Without this check, a failed pull or build (dirty working tree,
+            # merge conflict, broken Dockerfile) fell straight through to the
+            # health check below, which then passed against whatever was still
+            # running from before — reporting a deploy "healthy" that never
+            # actually happened, with the workflow green and HEAD unchanged.
             healthy=""
-            for i in $(seq 1 30); do
-              if curl -fsLk http://localhost/health/ | grep -q '"status": "healthy"'; then
-                echo "Deploy healthy"
-                healthy=1
-                break
-              fi
-              echo "Not healthy yet ($i/30)..."
-              sleep 5
-            done
- 
+            if git pull origin main && docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans; then
+              docker image prune -f
+
+              echo "Waiting for /health/ to report healthy..."
+              for i in $(seq 1 30); do
+                if curl -fsLk http://localhost/health/ | grep -q '"status": "healthy"'; then
+                  echo "Deploy healthy"
+                  healthy=1
+                  break
+                fi
+                echo "Not healthy yet ($i/30)..."
+                sleep 5
+              done
+            else
+              echo "git pull or docker build failed - treating this as an unhealthy deploy"
+            fi
+
             if [ -n "$healthy" ]; then
               exit 0
             fi
