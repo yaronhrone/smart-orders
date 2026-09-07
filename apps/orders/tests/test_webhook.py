@@ -103,6 +103,32 @@ class ParseSupplierReplyTests(TestCase):
         confirmed, _ = _parse_supplier_reply("25", self._products())
         self.assertEqual(confirmed, {})
 
+    def test_missing_matches_plural_of_catalog_spelling(self):
+        """
+        The catalog's canonical name is "עגבנייה" (double yud) while suppliers
+        write "עגבניות". The prefix heuristic cannot bridge that two-letter
+        suffix, so the alias dictionary has to — otherwise the reply confirms
+        the very item the supplier just declared out of stock.
+        """
+        products = [
+            {"orp_id": 1, "product_name": "עגבנייה", "quantity": "20", "unit": 'ק"ג'},
+            {"orp_id": 2, "product_name": "גזר", "quantity": "15", "unit": 'ק"ג'},
+        ]
+        confirmed, missing = _parse_supplier_reply("חסר עגבניות, שאר אישור", products)
+        self.assertEqual([p["orp_id"] for p in missing], [1])
+        self.assertNotIn(1, confirmed)
+        self.assertEqual(confirmed[2], Decimal("15"))
+
+    def test_missing_matches_plural_of_multiword_product(self):
+        """Same path for a two-word product: 'אין בצלים' → 'בצל יבש' is missing."""
+        products = [
+            {"orp_id": 1, "product_name": "בצל יבש", "quantity": "40", "unit": 'ק"ג'},
+            {"orp_id": 2, "product_name": "גזר", "quantity": "15", "unit": 'ק"ג'},
+        ]
+        confirmed, missing = _parse_supplier_reply("אין בצלים, השאר אישור", products)
+        self.assertEqual([p["orp_id"] for p in missing], [1])
+        self.assertEqual(confirmed[2], Decimal("15"))
+
 
 # ─────────────────────── Webhook routing ───────────────────────
 

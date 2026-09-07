@@ -15,9 +15,15 @@ from django.core.management.base import BaseCommand
 from django.core.cache import cache
 
 
-CUSTOMER_PHONE = "0502555555"   # itay
-SUPPLIER_A_PHONE = "+972521234567"  # אבי ירקות
-SUPPLIER_A_NAME = "אבי ירקות - שוק הכרמל"
+# Defaults only — handle() re-points these at whatever `manage.py seed_demo`
+# actually created, so the rehearsal always runs against the live demo data
+# instead of a supplier or phone that was renamed out from under it.
+CUSTOMER_PHONE = "0501234567"
+SUPPLIER_A_PHONE = "+972521100110"
+SUPPLIER_A_NAME = "ירקות השרון"
+
+TOMATO = "עגבנייה"
+CARROT = "גזר"
 
 
 class Command(BaseCommand):
@@ -34,6 +40,8 @@ class Command(BaseCommand):
                             help="Customer reply to fallback offer (כן / לא)")
 
     def handle(self, *args, **options):
+        self._resolve_demo_targets()
+
         if options["cleanup"]:
             self._cleanup()
             return
@@ -61,6 +69,41 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("─" * 60))
             self._step2_customer_approval(options["customer_reply"])
 
+    def _resolve_demo_targets(self):
+        """
+        Points the module-level targets at the seeded demo rows. Rebinding the
+        globals (rather than threading them through every helper) keeps this
+        one-shot command's call sites unchanged; the process exits right after.
+        """
+        global CUSTOMER_PHONE, SUPPLIER_A_PHONE, SUPPLIER_A_NAME
+
+        from apps.catalog.models import Region, Supplier
+        from apps.orders.whatsapp import validators
+        from apps.users.models import Profile
+
+        with_phone = Profile.objects.exclude(phone="").select_related("user")
+        profile = (
+            with_phone.filter(user__email="demo@smart-orders.co.il").first()
+            or with_phone.order_by("id").first()
+        )
+        # Held on the command so later steps use THIS profile rather than
+        # re-querying by phone — dev databases can hold two profiles with the
+        # same number, and the re-query was picking the wrong one.
+        self.profile = profile
+        if profile:
+            # E.164, because that is what Twilio puts in the webhook's From
+            # field and therefore the key every cache entry in the user flow is
+            # written under. The local form only ever addresses Profile.phone,
+            # which this command now reads off self.profile instead.
+            CUSTOMER_PHONE = validators._local_to_e164(profile.phone)
+
+        supplier = Supplier.objects.filter(
+            region=profile.region if profile else Region.CENTER
+        ).order_by("id").first()
+        if supplier:
+            SUPPLIER_A_PHONE = supplier.whatsapp_number
+            SUPPLIER_A_NAME = supplier.name
+
     # ── Step 1: create order + supplier says "חסר" ──────────────────
 
     def _step1_supplier_missing(self, supplier_body: str):
@@ -72,7 +115,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("\n══ שלב 1: יצירת הזמנה ← ספק מדווח על חסר ══\n"))
 
         # Resolve user
-        profile = Profile.objects.filter(phone=CUSTOMER_PHONE).select_related("user").first()
+        profile = self.profile
         if not profile:
             self.stderr.write(f"לא נמצא פרופיל עם מספר {CUSTOMER_PHONE}")
             return None
@@ -88,9 +131,9 @@ class Command(BaseCommand):
         self.stdout.write(f"  ספק A: {supplier_a.name} (מינימום ₪{supplier_a.minimum_order})")
 
         # Resolve product
-        tomato = Product.objects.filter(name="עגבניה").first()
+        tomato = Product.objects.filter(name=TOMATO).first()
         if not tomato:
-            self.stderr.write("לא נמצא מוצר 'עגבניה'")
+            self.stderr.write(f"לא נמצא מוצר '{TOMATO}'")
             return None
 
         # Create a SENT order with 100kg tomatoes from supplier A
@@ -194,10 +237,10 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS("\n══ בדיקת Auto-Transfer ══\n"))
 
-        profile = Profile.objects.filter(phone=CUSTOMER_PHONE).select_related("user").first()
+        profile = self.profile
         supplier_a = Supplier.objects.get(whatsapp_number=SUPPLIER_A_PHONE)
-        tomato = Product.objects.get(name="עגבניה")
-        carrot = Product.objects.get(name="גזר")
+        tomato = Product.objects.get(name=TOMATO)
+        carrot = Product.objects.get(name=CARROT)
 
         # Order: 20kg tomatoes + 20kg carrot from supplier A
         # Total = 20*4.90 + 20*3.50 = 98 + 70 = 168₪ (below 500₪ minimum)
@@ -262,9 +305,9 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS("\n══ בדיקת כמות חלקית ══\n"))
 
-        profile = Profile.objects.filter(phone=CUSTOMER_PHONE).select_related("user").first()
+        profile = self.profile
         supplier_a = Supplier.objects.get(whatsapp_number=SUPPLIER_A_PHONE)
-        tomato = Product.objects.get(name="עגבניה")
+        tomato = Product.objects.get(name=TOMATO)
 
         # Order: 100kg tomatoes, but supplier A can only supply 40kg
         order = OrderRequest.objects.create(
@@ -337,7 +380,7 @@ class Command(BaseCommand):
         from apps.orders.models import OrderRequest
         from apps.users.models import Profile
 
-        profile = Profile.objects.filter(phone=CUSTOMER_PHONE).select_related("user").first()
+        profile = self.profile
         if profile:
             deleted, _ = OrderRequest.objects.filter(
                 user=profile.user, status=OrderRequest.Status.SENT

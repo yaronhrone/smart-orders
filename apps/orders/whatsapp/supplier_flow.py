@@ -9,7 +9,7 @@ from django.core.cache import cache
 from django.http import HttpResponse
 from django.utils import timezone
 
-from apps.catalog.product_matcher import MISSING_KEYWORDS
+from apps.catalog.product_matcher import MISSING_KEYWORDS, resolve_alias
 from .cache import save_supplier_pending_order, CUTOFF_TTL
 from .fallback_flow import _handle_missing_items, _recalculate_order_total
 from . import validators
@@ -114,13 +114,23 @@ def _parse_supplier_reply(body: str, products: list) -> tuple[dict, list]:
         for m in re.finditer(rf"({_HEB})\s+{re.escape(kw)}", body_lower):
             missing_mentions.add(m.group(1).strip())
 
+    # Resolve mentions through the alias dictionary first — it already maps the
+    # plural/spelling variants a supplier actually types ("עגבניות" → "עגבנייה").
+    # The prefix heuristic below is only a fallback: dropping one character does
+    # not bridge a two-letter suffix ("עגבנייה"[:-1] never matches "עגבניות"),
+    # which silently confirmed items the supplier had just declared missing.
+    catalog_names = {p["product_name"] for p in products}
+    resolved_missing = {
+        resolve_alias(mention, catalog_names) for mention in missing_mentions
+    } - {None}
+
     missing = []
     remaining = []
     for p in products:
         name_lower = p["product_name"].lower()
         # Prefix to handle Hebrew pluralization: עגבניה → עגבני (matches עגבניות)
         match_name = name_lower[:-1] if len(name_lower) > 4 else name_lower
-        is_missing = any(
+        is_missing = p["product_name"] in resolved_missing or any(
             mention.startswith(match_name) or match_name in mention
             for mention in missing_mentions
         )
