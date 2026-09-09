@@ -17,7 +17,12 @@ _NUMBER = r"\d+(?:\.\d+)?"
 _QTY_UNIT_WORDS = r"(?:ק\"ג|קג|קילו|גרם|יחיד(?:ה|ות)|חבילות?|אגוד(?:ה|ות)|ארג(?:ז|זים))"
 
 _ORDER_SEGMENT_RE = re.compile(rf"^(?P<number>{_NUMBER})\s*{_QTY_UNIT_WORDS}?\s+(?P<name>.+?)\s*$")
-_PRICE_SEGMENT_RE = re.compile(rf"^(?P<name>.+?)\s+(?P<number>{_NUMBER})\s*$")
+# The unit word is also allowed to trail the number here ("עגבניה 20 יחידות") —
+# without this, a unit word anywhere in "name number [unit]" phrasing (not just
+# "יחידות": also "קילו", "אגודות", "חבילות"...) broke the match entirely and
+# fell through to the AI parser, since the old pattern required the number to
+# be the very last thing in the segment.
+_PRICE_SEGMENT_RE = re.compile(rf"^(?P<name>.+?)\s+(?P<number>{_NUMBER})\s*{_QTY_UNIT_WORDS}?\s*$")
 
 # Words a supplier uses to say a product is out of stock, e.g. "עגבניות אין" or "אין עגבניות".
 MISSING_KEYWORDS = ["חסר", "אין", "נגמר", "אזל", "לא קיים"]

@@ -212,3 +212,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local working docs — not part of the codebase, never committed
+meta-templates-submission.md

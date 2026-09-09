@@ -34,11 +34,15 @@ def save_pending_order(phone: str, cheapest: dict, fewest: dict,
                        products: list = None,
                        user_id: int = None,
                        region: str = None,
-                       minimum_issues: dict = None):
+                       minimum_issues: dict = None,
+                       single_scenario: str = None):
     """
     Cache the suggested order options for a user.
     `products` (list of {product_id, quantity}), `user_id`, and `region`
     are optional but required for actually building the order on confirmation.
+    `single_scenario` ("cheapest" | "fewest_suppliers"), when set, means only
+    that one scenario was actually offered (the other failed a supplier
+    minimum) — any reply confirms it, same as the cheapest==fewest shortcut.
     """
     key = f"whatsapp_order:{phone}"
     payload = {"cheapest": cheapest, "fewest": fewest}
@@ -50,6 +54,8 @@ def save_pending_order(phone: str, cheapest: dict, fewest: dict,
         payload["region"] = region
     if minimum_issues is not None:
         payload["minimum_issues"] = minimum_issues
+    if single_scenario is not None:
+        payload["single_scenario"] = single_scenario
     cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
 
 

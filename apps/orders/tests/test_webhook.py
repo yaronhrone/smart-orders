@@ -412,6 +412,144 @@ class UserConfirmationFlowTests(TestCase):
         self.assertIsNotNone(supplier_cache)
 
 
+# ─────────────────────── User: minimum-order scenario filtering ─────────────
+#
+# suggest_order() itself is mocked (its real assignment/minimum-enforcement
+# logic is exercised elsewhere) — these target only what _handle_new_order
+# does with the minimum_issues it gets back: whether it still offers a
+# scenario that can't actually be ordered.
+
+def _scenario(price, supplier_name="ספק"):
+    return {
+        "scenario": "x",
+        "total_price": price,
+        "supplier_count": 1,
+        "products": [{
+            "product_id": 1, "product_name": "עגבניה", "unit": 'ק"ג',
+            "quantity": "10", "unit_price": price, "subtotal": price,
+            "supplier_id": 1, "supplier_name": supplier_name,
+        }],
+    }
+
+
+def _issue(supplier_name, missing="900.00"):
+    return [{
+        "supplier_id": 2, "supplier_name": supplier_name,
+        "current_total": "20.00", "minimum_required": "1000.00",
+        "missing_amount": missing,
+    }]
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class MinimumScenarioFilteringTests(TestCase):
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.supplier = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
+        self.user = make_user_with_profile(phone="+972506666666")
+
+    def _post(self, phone, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{phone}",
+            "Body": body,
+        })
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_both_valid_offers_both_as_before(self, mock_suggest, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00"),
+            "fewest_suppliers": _scenario("60.00"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+        }
+
+        self._post("+972506666666", "10 עגבניות")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("*א*", msg)
+        self.assertIn("*ב*", msg)
+        data = json.loads(cache.get("whatsapp_order:+972506666666"))
+        self.assertNotIn("single_scenario", data)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_scenario_failing_minimum_is_not_offered_as_a_choice(self, mock_suggest, mock_parse, mock_send):
+        """
+        fewest_suppliers fails its supplier's minimum, cheapest doesn't. The
+        customer must not be offered a choice that leads to a dead end — only
+        the valid scenario should appear, already ready to confirm.
+        """
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": _issue("ספק גדול")},
+        }
+
+        self._post("+972506666666", "10 עגבניות")
+
+        msg = mock_send.call_args[0][1]
+        self.assertNotIn("*א*", msg)
+        self.assertNotIn("*ב*", msg)
+        self.assertIn("ענה *אישור*", msg)
+        self.assertIn("ספק גדול", msg)  # explains what's excluded and why
+
+        data = json.loads(cache.get("whatsapp_order:+972506666666"))
+        self.assertEqual(data["single_scenario"], "cheapest")
+
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    @patch("apps.orders.services.build_order")
+    def test_single_scenario_confirms_on_any_reply(
+        self, mock_build, mock_suggest, mock_parse, mock_send, mock_supplier_task
+    ):
+        """The single offered scenario confirms the same way the same-price shortcut does."""
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": _issue("ספק גדול")},
+        }
+        order = OrderRequest.objects.create(user=self.user, total_price=Decimal("50.00"))
+        mock_build.return_value = (order, [])
+
+        self._post("+972506666666", "10 עגבניות")
+        self._post("+972506666666", "אישור")
+
+        self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
+        mock_build.assert_called_once()
+        self.assertEqual(mock_build.call_args.kwargs["scenario"], "cheapest")
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_both_failing_minimum_offers_nothing_to_confirm(self, mock_suggest, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {
+                "cheapest": _issue("ספק קטן"),
+                "fewest_suppliers": _issue("ספק גדול"),
+            },
+        }
+
+        self._post("+972506666666", "10 עגבניות")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("⛔", msg)
+        self.assertNotIn("*א*", msg)
+        self.assertNotIn("ענה *אישור*", msg)
+        self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
+
+
 # ─────────────────────── Supplier: confirmation flow ───────────────────────
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)

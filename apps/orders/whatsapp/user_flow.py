@@ -123,43 +123,61 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
     cheapest = result["cheapest"]
     fewest = result["fewest_suppliers"]
     minimum_issues = result.get("minimum_issues", {})
+    cheapest_issues = minimum_issues.get("cheapest", [])
+    fewest_issues = minimum_issues.get("fewest_suppliers", [])
+    same = cheapest["total_price"] == fewest["total_price"]
 
-    save_pending_order(
-        phone,
-        cheapest,
-        fewest,
+    pending_kwargs = dict(
         products=[{"product_id": p["product"].id, "quantity": str(p["quantity"])} for p in products],
         user_id=user.id,
         region=profile.region,
         minimum_issues=minimum_issues,
     )
 
-    same = cheapest["total_price"] == fewest["total_price"]
-    if same:
-        msg = _format_scenario("ההזמנה שלך", cheapest)
-        cheapest_issues = minimum_issues.get("cheapest", [])
-        if cheapest_issues:
-            msg += "\n\n" + _format_minimum_warning(cheapest_issues)
-            msg += "\n\nשלח הזמנה מחודשת עם כמויות גדולות יותר."
-        else:
+    if same or (not cheapest_issues and not fewest_issues):
+        # Either there's only one real scenario, or both pass the minimum —
+        # offer the choice (or the single option) exactly as before.
+        save_pending_order(phone, cheapest, fewest, **pending_kwargs)
+        if same:
+            msg = _format_scenario("ההזמנה שלך", cheapest)
             msg += "\n\nענה *אישור* לאישור."
-    else:
-        cheapest_issues = minimum_issues.get("cheapest", [])
-        fewest_issues = minimum_issues.get("fewest_suppliers", [])
-        cheapest_label = "אפשרות א׳ — הזול ביותר"
-        fewest_label = "אפשרות ב׳ — הכי פחות ספקים"
-        if cheapest_issues:
-            cheapest_label += " ⚠️"
-        if fewest_issues:
-            fewest_label += " ⚠️"
+        else:
+            msg = (
+                _format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
+                + "\n\n"
+                + _format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
+                + "\n\nענה *א* לאפשרות הזולה יותר, *ב* לאפשרות עם פחות ספקים."
+            )
+    elif cheapest_issues and fewest_issues:
+        # Neither scenario clears its suppliers' minimums — there is nothing
+        # valid to offer. Show both shortfalls so the customer knows which is
+        # closer, but don't cache anything to confirm into.
         msg = (
-            _format_scenario(cheapest_label, cheapest)
-            + "\n\n"
-            + _format_scenario(fewest_label, fewest)
-            + "\n\nענה *א* לאפשרות הזולה יותר, *ב* לאפשרות עם פחות ספקים."
+            "⛔ אף אחת מהאפשרויות לא עומדת במינימום הזמנה של הספקים:\n\n"
+            + _format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
+            + "\n" + _format_minimum_warning(cheapest_issues)
+            + "\n\n" + _format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
+            + "\n" + _format_minimum_warning(fewest_issues)
+            + "\n\nשלח הזמנה מחודשת עם כמויות גדולות יותר."
         )
-        if cheapest_issues or fewest_issues:
-            msg += "\n\n⚠️ — אפשרות זו אינה עומדת במינימום הזמנה של ספק"
+    else:
+        # Exactly one scenario is actually orderable — offer only that one,
+        # instead of letting the customer pick a dead end and then, on
+        # confirming, lose the whole pending order with no way back to the
+        # option that would have worked.
+        valid_scenario, valid_label, broken_issues, broken_label = (
+            ("cheapest", "הזול ביותר", fewest_issues, "האפשרות עם פחות ספקים")
+            if fewest_issues
+            else ("fewest_suppliers", "עם הכי פחות ספקים", cheapest_issues, "האפשרות הזולה ביותר")
+        )
+        chosen = cheapest if valid_scenario == "cheapest" else fewest
+        save_pending_order(phone, cheapest, fewest, single_scenario=valid_scenario, **pending_kwargs)
+        msg = _format_scenario(f"ההזמנה שלך — {valid_label}", chosen)
+        msg += (
+            f"\n\n({broken_label} לא עומדת במינימום הזמנה של "
+            f"{broken_issues[0]['supplier_name']} — חסר ₪{Decimal(str(broken_issues[0]['missing_amount'])):.2f})"
+        )
+        msg += "\n\nענה *אישור* לאישור."
 
     if unrecognized:
         msg += f"\n\n⚠️ לא זוהה: {', '.join(unrecognized)}"
@@ -328,8 +346,15 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     fewest = data["fewest"]
 
     same = cheapest["total_price"] == fewest["total_price"]
+    single_scenario = data.get("single_scenario")
 
-    if same or body in ("א", "1"):
+    if single_scenario:
+        # Only one scenario was ever offered (the other failed a supplier
+        # minimum) — any reply confirms it, same as the same-price shortcut.
+        chosen = cheapest if single_scenario == "cheapest" else fewest
+        label = "ההזמנה"
+        scenario = single_scenario
+    elif same or body in ("א", "1"):
         chosen = cheapest
         label = "אפשרות א׳ — הזול ביותר" if not same else "ההזמנה"
         scenario = "cheapest"
