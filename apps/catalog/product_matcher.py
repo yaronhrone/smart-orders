@@ -125,13 +125,52 @@ def match_price_items(message: str, known_product_names) -> tuple[list[dict], li
     return resolved, unavailable, ", ".join(leftover)
 
 
-def match_order_items(message: str, known_product_names) -> tuple[list[dict], str]:
+def find_ambiguous_group(name: str, known_product_names) -> list[str] | None:
+    """
+    `name` didn't resolve via exact/alias match — check whether it's the
+    shared root of two or more catalog products (e.g. "תפוח אדמה" is a
+    prefix of both "תפוח אדמה אדום" and "תפוח אדמה לבן"). Requires a space
+    right after the prefix, so "עגבני" doesn't wrongly catch "עגבנייה".
+    Returns the matching canonical names (2+), or None.
+    """
+    norm = _normalize(name)
+    matches = [p for p in known_product_names if _normalize(p).startswith(norm + " ")]
+    return matches if len(matches) >= 2 else None
+
+
+def resolve_clarification(reply: str, ambiguous_items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """
+    Match a customer's answer to an earlier "which one did you mean" question
+    against each pending ambiguous item's candidates, by checking whether the
+    part of the candidate name past the shared prefix (e.g. "אדום") shows up
+    anywhere in the reply. Returns (resolved, still_ambiguous).
+    """
+    norm_reply = _normalize(reply)
+    resolved, still_ambiguous = [], []
+    for item in ambiguous_items:
+        match = next(
+            (
+                c for c in item["candidates"]
+                if _normalize(c[len(item["query"]):]) in norm_reply
+            ),
+            None,
+        )
+        if match:
+            resolved.append({"product_name": match, "quantity": item["quantity"]})
+        else:
+            still_ambiguous.append(item)
+    return resolved, still_ambiguous
+
+
+def match_order_items(message: str, known_product_names) -> tuple[list[dict], list[dict], str]:
     """
     Fast pre-AI pass for customer order messages.
-    Returns (resolved, remaining_message).
+    Returns (resolved, ambiguous, remaining_message). `ambiguous` entries are
+    {"query", "quantity", "candidates"} — when non-empty, the caller should
+    ask the customer to pick one rather than guessing or handing it to the AI.
     """
     known = set(known_product_names)
-    resolved, leftover = [], []
+    resolved, ambiguous, leftover = [], [], []
     for segment in _split_segments(message):
         extracted = _extract_name_and_number(segment)
         if not extracted:
@@ -141,6 +180,10 @@ def match_order_items(message: str, known_product_names) -> tuple[list[dict], st
         canonical = resolve_alias(name_candidate, known)
         if canonical:
             resolved.append({"product_name": canonical, "quantity": number})
+            continue
+        group = find_ambiguous_group(name_candidate, known)
+        if group:
+            ambiguous.append({"query": name_candidate, "quantity": number, "candidates": group})
         else:
             leftover.append(segment)
-    return resolved, ", ".join(leftover)
+    return resolved, ambiguous, ", ".join(leftover)

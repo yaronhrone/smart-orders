@@ -550,6 +550,65 @@ class MinimumScenarioFilteringTests(TestCase):
         self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
 
 
+# ─────────────────────── User: ambiguous product names ──────────────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class AmbiguousProductWebhookTests(TestCase):
+    """
+    "תפוח אדמה" alone matches two catalog products (אדום/לבן) — end-to-end
+    through the real webhook: ask first, compute only after the customer
+    answers. parse_customer_order itself is real here (no OpenAI call
+    needed for these messages — resolves entirely via the fast dict path).
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.red = make_product("תפוח אדמה אדום")
+        self.white = make_product("תפוח אדמה לבן")
+        self.supplier = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.red, price_per_unit="3.00")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.white, price_per_unit="2.50")
+        self.user = make_user_with_profile(phone="+972508888888")
+
+    def _post(self, phone, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{phone}",
+            "Body": body,
+        })
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_ambiguous_name_asks_instead_of_computing(self, mock_send):
+        self._post("+972508888888", "5 קילו תפוח אדמה")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("אדום", msg)
+        self.assertIn("לבן", msg)
+        # No scenario/price was computed — this is a question, not an offer.
+        self.assertNotIn("₪", msg)
+        self.assertIsNotNone(cache.get("whatsapp_clarify:+972508888888"))
+        self.assertIsNone(cache.get("whatsapp_order:+972508888888"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_answering_the_clarification_completes_the_order(self, mock_send):
+        self._post("+972508888888", "5 קילו תפוח אדמה")
+        self._post("+972508888888", "אדום")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("תפוח אדמה אדום", msg)
+        self.assertIn("₪", msg)
+        self.assertIsNone(cache.get("whatsapp_clarify:+972508888888"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_unrecognized_answer_asks_again(self, mock_send):
+        self._post("+972508888888", "5 קילו תפוח אדמה")
+        self._post("+972508888888", "לא יודע")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("אדום", msg)
+        self.assertIn("לבן", msg)
+        self.assertIsNotNone(cache.get("whatsapp_clarify:+972508888888"))
+
+
 # ─────────────────────── User: modifying a SENT order ───────────────────────
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)

@@ -7,7 +7,13 @@ from django.core.cache import cache
 from django.http import HttpResponse
 from django.utils import timezone
 
-from .cache import save_pending_order, DecimalEncoder
+from .cache import (
+    clear_pending_clarification,
+    DecimalEncoder,
+    get_pending_clarification,
+    save_pending_clarification,
+    save_pending_order,
+)
 from .delivery_flow import _handle_delivery_flow
 from .fallback_flow import _handle_fallback_approval
 from . import validators
@@ -68,36 +74,71 @@ def _build_and_send_confirmed_order(data: dict, scenario: str) -> bool:
         return False
 
 
-def _handle_new_order(phone: str, body: str) -> HttpResponse:
-    """Handle an incoming message that has no pending order — treat as a new customer order."""
-    from apps.catalog.models import Product
+def _resolve_profile(phone: str):
+    """Look up a customer Profile by phone; try +972XXXXXXXXX and 0XXXXXXXXX."""
     from apps.users.models import Profile
-    from apps.orders.services import suggest_order
-    from apps.orders.order_parser import parse_customer_order
 
-    # Look up user by phone; try +972XXXXXXXXX and 0XXXXXXXXX
     profile = Profile.objects.filter(phone=phone).select_related("user").first()
     if not profile and phone.startswith("+972"):
         profile = Profile.objects.filter(phone="0" + phone[4:]).select_related("user").first()
+    return profile
 
+
+def _handle_ambiguous_products(phone: str, ambiguous: list, resolved: list) -> HttpResponse:
+    """
+    Ask which specific product was meant instead of guessing or handing an
+    underspecified name to the AI. `resolved` (already-clear items from the
+    same message) rides along in the cache so confirming later doesn't lose
+    them.
+    """
+    lines = ["איזה בדיוק? יש לנו כמה סוגים:"]
+    for item in ambiguous:
+        options = ", ".join(c[len(item["query"]):].strip() for c in item["candidates"])
+        lines.append(f"  • {item['query']} — {options}")
+    lines.append("\nענה עם הסוג (למשל: אדום).")
+    save_pending_clarification(phone, resolved, ambiguous)
+    validators.send_whatsapp_message(phone, "\n".join(lines))
+    return HttpResponse(status=200)
+
+
+def _handle_clarification_reply(phone: str, body: str, raw_state: str) -> HttpResponse:
+    from apps.catalog.product_matcher import resolve_clarification
+
+    state = json.loads(raw_state)
+    newly_resolved, still_ambiguous = resolve_clarification(body, state["ambiguous"])
+    # DecimalEncoder made quantities JSON-safe (str) going into the cache;
+    # nothing decodes them back on the way out, so every quantity here is
+    # currently a plain string — restore Decimal before it reaches pricing.
+    all_resolved = [
+        {"product_name": item["product_name"], "quantity": Decimal(str(item["quantity"]))}
+        for item in state["resolved_items"] + newly_resolved
+    ]
+
+    if still_ambiguous:
+        # Partial or unrecognized answer — clear first so re-asking doesn't
+        # layer state from two different rounds on top of each other.
+        clear_pending_clarification(phone)
+        return _handle_ambiguous_products(phone, still_ambiguous, all_resolved)
+
+    clear_pending_clarification(phone)
+    profile = _resolve_profile(phone)
     if not profile:
         validators.send_whatsapp_message(phone, "מספר הטלפון שלך לא רשום במערכת. פנה למנהל.")
         return HttpResponse(status=200)
+    return _suggest_and_respond(phone, profile.user, profile, all_resolved)
 
-    user = profile.user
-    all_products = list(Product.objects.all())
-    product_names = [p.name for p in all_products]
 
-    try:
-        parsed_items = parse_customer_order(body, product_names)
-    except ValueError:
-        validators.send_whatsapp_message(
-            phone,
-            "לא הצלחתי להבין את ההזמנה.\nנסה לשלוח כגון: 5 קילו עגבניות, 10 קילו גזר",
-        )
-        return HttpResponse(status=200)
+def _suggest_and_respond(phone: str, user, profile, parsed_items: list) -> HttpResponse:
+    """
+    Given fully-resolved {product_name, quantity} items (no ambiguity left to
+    ask about), look them up, price the order, and send the scenario/
+    confirmation message. Shared by a fresh order and by one whose product
+    ambiguity was just cleared up.
+    """
+    from apps.catalog.models import Product
+    from apps.orders.services import suggest_order
 
-    all_products_map = {p.name: p for p in all_products}
+    all_products_map = {p.name: p for p in Product.objects.all()}
     products = []
     unrecognized = []
     for item in parsed_items:
@@ -184,6 +225,32 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
 
     validators.send_whatsapp_message(phone, msg)
     return HttpResponse(status=200)
+
+
+def _handle_new_order(phone: str, body: str) -> HttpResponse:
+    """Handle an incoming message that has no pending order — treat as a new customer order."""
+    from apps.catalog.models import Product
+    from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
+
+    profile = _resolve_profile(phone)
+    if not profile:
+        validators.send_whatsapp_message(phone, "מספר הטלפון שלך לא רשום במערכת. פנה למנהל.")
+        return HttpResponse(status=200)
+
+    product_names = list(Product.objects.values_list("name", flat=True))
+
+    try:
+        parsed_items = parse_customer_order(body, product_names)
+    except AmbiguousProductError as exc:
+        return _handle_ambiguous_products(phone, exc.ambiguous, exc.resolved)
+    except ValueError:
+        validators.send_whatsapp_message(
+            phone,
+            "לא הצלחתי להבין את ההזמנה.\nנסה לשלוח כגון: 5 קילו עגבניות, 10 קילו גזר",
+        )
+        return HttpResponse(status=200)
+
+    return _suggest_and_respond(phone, profile.user, profile, parsed_items)
 
 
 def _handle_order_modification(phone: str, body: str, user, order) -> HttpResponse:
@@ -311,7 +378,6 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
 
 
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
-    from apps.users.models import Profile
     from apps.orders.models import OrderRequest
 
     delivery_response = _handle_delivery_flow(phone, body)
@@ -322,14 +388,16 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     if fallback_response is not None:
         return fallback_response
 
+    clarify_raw = get_pending_clarification(phone)
+    if clarify_raw:
+        return _handle_clarification_reply(phone, body, clarify_raw)
+
     key = f"whatsapp_order:{phone}"
     raw = cache.get(key)
 
     if not raw:
         # Check if user has a SENT order (awaiting supplier confirmation) → offer modification
-        profile = Profile.objects.filter(phone=phone).select_related("user").first()
-        if not profile and phone.startswith("+972"):
-            profile = Profile.objects.filter(phone="0" + phone[4:]).select_related("user").first()
+        profile = _resolve_profile(phone)
 
         if profile:
             sent_order = (

@@ -19,6 +19,38 @@ def _get_client():
     return _client
 
 
+class AmbiguousProductError(Exception):
+    """
+    Raised instead of guessing (or asking the AI to guess) when a segment
+    names a product family rather than a specific catalog item — "תפוח אדמה"
+    when only "תפוח אדמה אדום"/"תפוח אדمה לבן" exist. Carries both what
+    couldn't be resolved and what already was, so the caller can ask about
+    just the ambiguous part without losing the rest of the order.
+    """
+    def __init__(self, ambiguous: list, resolved: list):
+        self.ambiguous = ambiguous
+        self.resolved = resolved
+        super().__init__(f"{len(ambiguous)} ambiguous product(s)")
+
+
+def _to_decimal_items(raw_items: list) -> list:
+    """{'product_name', 'quantity': str} -> same, quantity parsed to Decimal. Drops unparsable/non-positive entries."""
+    result = []
+    for entry in raw_items:
+        name = str(entry.get("product_name", "")).strip()
+        qty_raw = str(entry.get("quantity", "")).strip()
+        if not name or not qty_raw:
+            continue
+        try:
+            qty = Decimal(qty_raw)
+            if qty <= 0:
+                continue
+        except InvalidOperation:
+            continue
+        result.append({"product_name": name, "quantity": qty})
+    return result
+
+
 def parse_modification_intent(message: str, product_names: list) -> dict:
     """
     Detects if message is a modification to an existing order.
@@ -76,12 +108,27 @@ def parse_customer_order(message: str, product_names: list) -> list:
     Returns [{"product_name": str, "quantity": Decimal}].
     Raises ValueError("no_items") if nothing extracted.
     Raises ValueError("AI parsing failed: ...") on OpenAI error.
+    Raises AmbiguousProductError if a segment names a product family rather
+    than a specific catalog item ("תפוח אדמה" when only the אדום/לבן variants
+    exist) — asking which one is cheap and instant; guessing isn't.
 
     Segments that resolve via the exact/alias dictionary (data/product_aliases.json)
     skip the AI entirely — only what's left over goes to OpenAI. If everything
     resolves via the dictionary, no AI call is made at all.
     """
-    dict_resolved, remaining_message = match_order_items(message, product_names)
+    dict_resolved, ambiguous, remaining_message = match_order_items(message, product_names)
+
+    if ambiguous:
+        # Don't also hand remaining_message to the AI here: this message needs
+        # a clarifying answer before it means anything, and mixing an AI guess
+        # for an unrelated leftover segment into that reply would be more
+        # confusing than just asking about the ambiguous part first.
+        raise AmbiguousProductError(
+            ambiguous=[
+                {**item, "quantity": Decimal(item["quantity"])} for item in ambiguous
+            ],
+            resolved=_to_decimal_items(dict_resolved),
+        )
 
     items = list(dict_resolved)
     if remaining_message:
@@ -115,19 +162,7 @@ def parse_customer_order(message: str, product_names: list) -> list:
             logger.error("OpenAI order parsing failed: %s", exc)
             raise ValueError(f"AI parsing failed: {exc}")
 
-    result = []
-    for entry in items:
-        name = entry.get("product_name", "").strip()
-        qty_raw = str(entry.get("quantity", "")).strip()
-        if not name or not qty_raw:
-            continue
-        try:
-            qty = Decimal(qty_raw)
-            if qty <= 0:
-                continue
-        except InvalidOperation:
-            continue
-        result.append({"product_name": name, "quantity": qty})
+    result = _to_decimal_items(items)
 
     if not result:
         raise ValueError("no_items")

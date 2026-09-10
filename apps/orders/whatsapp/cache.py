@@ -59,6 +59,26 @@ def save_pending_order(phone: str, cheapest: dict, fewest: dict,
     cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
 
 
+def save_pending_clarification(phone: str, resolved_items: list, ambiguous_items: list):
+    """
+    Cache an order that's on hold pending a "which one did you mean" answer.
+    `resolved_items`/`ambiguous_items` are the shapes AmbiguousProductError
+    carries — {"product_name", "quantity"} and {"query", "quantity",
+    "candidates"} respectively.
+    """
+    key = f"whatsapp_clarify:{phone}"
+    payload = {"resolved_items": resolved_items, "ambiguous": ambiguous_items}
+    cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
+
+
+def get_pending_clarification(phone: str):
+    return cache.get(f"whatsapp_clarify:{phone}")
+
+
+def clear_pending_clarification(phone: str):
+    cache.delete(f"whatsapp_clarify:{phone}")
+
+
 def _get_delivery_state(phone: str):
     return cache.get(f"whatsapp_delivery:{phone}")
 
