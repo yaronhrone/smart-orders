@@ -252,11 +252,9 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
             )
 
         elif intent == "add":
-            from django.db.models import Q as _Q
             sp = (
                 SupplierProduct.objects
                 .filter(product=product, supplier__region=region)
-                .filter(_Q(supplier__owner__isnull=True) | _Q(supplier__owner=user))
                 .select_related("supplier")
                 .order_by("price_per_unit")
                 .first()
