@@ -71,9 +71,24 @@ def whatsapp_webhook(request):
     from_raw = request.POST.get("From", "")
     phone = _normalize_phone(from_raw.replace("whatsapp:", ""))
 
-    from apps.catalog.models import Supplier
-    supplier = Supplier.objects.filter(whatsapp_number=phone).first()
-    if supplier:
-        return _handle_supplier_flow(phone, supplier, body)
+    try:
+        from apps.catalog.models import Supplier
+        supplier = Supplier.objects.filter(whatsapp_number=phone).first()
+        if supplier:
+            return _handle_supplier_flow(phone, supplier, body)
 
-    return _handle_user_flow(phone, body)
+        return _handle_user_flow(phone, body)
+    except Exception:
+        # An unhandled exception here (most often the outbound Twilio send
+        # itself failing — rate limit, transient network error) used to
+        # surface as a bare 500 with *no* log line at all: everything up to
+        # send_whatsapp_message's own logger.info happens fine, so nothing
+        # printed made it look like the request vanished before reaching
+        # Django at all, sending a debugging session down the wrong path.
+        # Log the full traceback and still return 200: Twilio treats a
+        # non-2xx as delivery failure and retries, which would only repeat
+        # whatever just failed rather than surface it once, clearly.
+        logger.exception(
+            "Unhandled error processing WhatsApp message from %s: %r", phone, body
+        )
+        return HttpResponse(status=200)
