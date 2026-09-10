@@ -17,7 +17,10 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
     """
     from apps.orders.models import OrderRequest
 
-    ARRIVAL_WORDS = ["הגיע", "הגיעה", "נמסר", "נמסרה", "arrived", "received"]
+    # "קיבלתי" is the word a customer actually types to say "it arrived" —
+    # it was missing here, so that exact message fell straight through this
+    # check (returns None) into whatever else was pending, unrecognized.
+    ARRIVAL_WORDS = ["הגיע", "הגיעה", "נמסר", "נמסרה", "קיבלתי", "קיבלנו", "arrived", "received"]
     ALL_WORDS = ["הכל", "כולם", "הכל הגיע", "הכל נמסר", "all", "כן"]
 
     raw = _get_delivery_state(phone)

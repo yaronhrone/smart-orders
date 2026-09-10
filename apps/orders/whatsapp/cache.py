@@ -59,15 +59,19 @@ def save_pending_order(phone: str, cheapest: dict, fewest: dict,
     cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
 
 
-def save_pending_clarification(phone: str, resolved_items: list, ambiguous_items: list):
+def save_pending_clarification(phone: str, resolved_items: list, ambiguous_items: list, extra: dict = None):
     """
     Cache an order that's on hold pending a "which one did you mean" answer.
     `resolved_items`/`ambiguous_items` are the shapes AmbiguousProductError
     carries — {"product_name", "quantity"} and {"query", "quantity",
-    "candidates"} respectively.
+    "candidates"} respectively. `extra` carries context needed to resume
+    afterward — for a modification (as opposed to a fresh order), that's
+    {"context": "modification", "order_id", "intent", "region"}.
     """
     key = f"whatsapp_clarify:{phone}"
     payload = {"resolved_items": resolved_items, "ambiguous": ambiguous_items}
+    if extra:
+        payload.update(extra)
     cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
 
 

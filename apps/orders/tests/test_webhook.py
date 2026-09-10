@@ -732,6 +732,102 @@ class OrderModificationTests(TestCase):
         self.assertIn("תפוח אדמה אדום", body)
         self.assertIn("חסה", body)
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_ambiguous_addition_asks_then_completes_on_reply(self, mock_parse, mock_send):
+        """
+        "בצל" isn't itself a catalog product (only בצל יבש/בצל סגול are) —
+        adding it must ask which one, then actually add it once answered,
+        including sending the supplier a real confirmable message.
+        """
+        onion_dry = make_product("בצל יבש")
+        onion_red = make_product("בצל סגול")
+        SupplierProduct.objects.create(supplier=self.supplier, product=onion_dry, price_per_unit="2.00")
+        SupplierProduct.objects.create(supplier=self.supplier, product=onion_red, price_per_unit="2.50")
+        mock_parse.return_value = {
+            "intent": "add",
+            "items": [{"product_name": "בצל", "quantity": Decimal("3")}],
+        }
+
+        self._post("+972507777777", "תוסיף גם 3 קילו בצל")
+        ask = mock_send.call_args[0][1]
+        self.assertIn("בצל", ask)
+        self.assertIn("יבש", ask)
+        self.assertIn("סגול", ask)
+        self.assertFalse(
+            OrderRequestProduct.objects.filter(order_request=self.order, product=onion_dry).exists()
+        )
+
+        mock_send.reset_mock()
+        self._post("+972507777777", "יבש")
+
+        self.assertTrue(
+            OrderRequestProduct.objects.filter(order_request=self.order, product=onion_dry).exists()
+        )
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("בצל יבש", supplier_calls[0][0][1])
+        pending = cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}")
+        self.assertIsNotNone(pending)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_resolved_items_dispatch_before_asking_about_ambiguous_one(self, mock_parse, mock_send):
+        """A clear item in the same message must not wait on the ambiguous one."""
+        onion_dry = make_product("בצל יבש")
+        onion_red = make_product("בצל סגול")
+        SupplierProduct.objects.create(supplier=self.supplier, product=onion_dry, price_per_unit="2.00")
+        SupplierProduct.objects.create(supplier=self.supplier, product=onion_red, price_per_unit="2.50")
+        mock_parse.return_value = {
+            "intent": "update",
+            "items": [
+                {"product_name": "עגבניה", "quantity": Decimal("20")},
+                {"product_name": "בצל", "quantity": Decimal("3")},
+            ],
+        }
+
+        self._post("+972507777777", "עדכן 20 עגבניה וגם 3 בצל")
+
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.quantity, Decimal("20"))
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("עגבניה", supplier_calls[0][0][1])
+
+
+# ─────────────────────── User: delivery confirmation ─────────────────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class DeliveryConfirmationWordTests(TestCase):
+    """"קיבלתי" is literally the word a customer types to say goods arrived —
+    it was missing from ARRIVAL_WORDS, so that exact message fell straight
+    through delivery-flow detection instead of confirming anything."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = make_user_with_profile(phone="+972509999999")
+        self.tomato = make_product("עגבניה")
+        self.supplier = make_supplier("ספק א")
+        self.order = OrderRequest.objects.create(
+            user=self.user, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
+        )
+        OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.supplier,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_receiving_word_marks_single_supplier_order_delivered(self, mock_send):
+        self.client.post("/whatsapp/webhook/", {
+            "From": "whatsapp:+972509999999",
+            "Body": "קיבלתי",
+        })
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.DELIVERED)
+        mock_send.assert_called_once()
+        self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
+
 
 # ─────────────────────── Supplier: confirmation flow ───────────────────────
 

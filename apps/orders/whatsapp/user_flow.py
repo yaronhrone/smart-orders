@@ -84,19 +84,23 @@ def _resolve_profile(phone: str):
     return profile
 
 
-def _handle_ambiguous_products(phone: str, ambiguous: list, resolved: list) -> HttpResponse:
+def _handle_ambiguous_products(
+    phone: str, ambiguous: list, resolved: list, extra: dict = None
+) -> HttpResponse:
     """
     Ask which specific product was meant instead of guessing or handing an
     underspecified name to the AI. `resolved` (already-clear items from the
     same message) rides along in the cache so confirming later doesn't lose
-    them.
+    them. `extra` carries modification context (order id, intent, region)
+    when this is a change to an existing order rather than a fresh one —
+    see save_pending_clarification.
     """
     lines = ["איזה בדיוק? יש לנו כמה סוגים:"]
     for item in ambiguous:
         options = ", ".join(c[len(item["query"]):].strip() for c in item["candidates"])
         lines.append(f"  • {item['query']} — {options}")
     lines.append("\nענה עם הסוג (למשל: אדום).")
-    save_pending_clarification(phone, resolved, ambiguous)
+    save_pending_clarification(phone, resolved, ambiguous, extra=extra)
     validators.send_whatsapp_message(phone, "\n".join(lines))
     return HttpResponse(status=200)
 
@@ -113,19 +117,167 @@ def _handle_clarification_reply(phone: str, body: str, raw_state: str) -> HttpRe
         {"product_name": item["product_name"], "quantity": Decimal(str(item["quantity"]))}
         for item in state["resolved_items"] + newly_resolved
     ]
+    extra = {
+        k: state[k] for k in ("context", "order_id", "intent", "region") if k in state
+    }
 
     if still_ambiguous:
         # Partial or unrecognized answer — clear first so re-asking doesn't
         # layer state from two different rounds on top of each other.
         clear_pending_clarification(phone)
-        return _handle_ambiguous_products(phone, still_ambiguous, all_resolved)
+        return _handle_ambiguous_products(phone, still_ambiguous, all_resolved, extra=extra)
 
     clear_pending_clarification(phone)
+
+    if extra.get("context") == "modification":
+        return _complete_modification_after_clarification(phone, extra, all_resolved)
+
     profile = _resolve_profile(phone)
     if not profile:
         validators.send_whatsapp_message(phone, "מספר הטלפון שלך לא רשום במערכת. פנה למנהל.")
         return HttpResponse(status=200)
     return _suggest_and_respond(phone, profile.user, profile, all_resolved)
+
+
+def _apply_single_modification(
+    product, quantity: Decimal, intent: str, order, region: str,
+    supplier_batches: dict, changes_made: list,
+) -> bool:
+    """
+    Resolve one already-identified Product + quantity into an add/update on
+    `order`, appending to `supplier_batches` (grouped by supplier, for one
+    consolidated confirmation message each) and `changes_made` in place.
+    Returns False if no supplier in the region carries the product at all.
+    """
+    from apps.catalog.models import SupplierProduct
+    from apps.orders.models import OrderRequestProduct
+
+    existing_orp = OrderRequestProduct.objects.filter(
+        order_request=order, product=product
+    ).select_related("supplier").first()
+
+    # "update" a product that isn't actually in the order yet has no
+    # existing_orp to update — treat it the same as "add" rather than
+    # silently doing nothing for it.
+    if intent == "update" and existing_orp:
+        old_qty = existing_orp.quantity
+        existing_orp.quantity = quantity
+        existing_orp.save(update_fields=["quantity"])
+        order.total_price = sum(p.quantity * p.unit_price for p in order.products.all())
+        order.save(update_fields=["total_price"])
+        supplier_batches[existing_orp.supplier].append({
+            "orp_id": existing_orp.id, "product_name": product.name,
+            "quantity": str(quantity), "unit": product.get_unit_display(),
+            "line": f"🔄 {product.name}: {old_qty} → {quantity} {product.get_unit_display()}",
+        })
+        changes_made.append(
+            f"עודכן: {product.name} {old_qty}→{quantity} {product.get_unit_display()}"
+        )
+        return True
+
+    sp = (
+        SupplierProduct.objects
+        .filter(product=product, supplier__region=region)
+        .select_related("supplier")
+        .order_by("price_per_unit")
+        .first()
+    )
+    if not sp:
+        return False
+
+    orp, created = OrderRequestProduct.objects.get_or_create(
+        order_request=order, product=product, supplier=sp.supplier,
+        defaults={"quantity": quantity, "unit_price": sp.price_per_unit},
+    )
+    if not created:
+        orp.quantity += quantity
+        orp.save(update_fields=["quantity"])
+    order.total_price = sum(p.quantity * p.unit_price for p in order.products.all())
+    order.save(update_fields=["total_price"])
+    supplier_batches[orp.supplier].append({
+        "orp_id": orp.id, "product_name": product.name,
+        "quantity": str(orp.quantity), "unit": product.get_unit_display(),
+        "line": f"➕ {product.name} x{quantity} {product.get_unit_display()}",
+    })
+    changes_made.append(f"נוסף: {product.name} x{quantity} {product.get_unit_display()}")
+    return True
+
+
+def _dispatch_modification_batches(supplier_batches: dict, order, company: str, address: str) -> None:
+    """Send one consolidated confirmation message per supplier and register it as pending."""
+    from .cache import save_supplier_pending_order
+
+    for supplier, batch in supplier_batches.items():
+        msg_lines = [f"📝 *{company}* עדכן הזמנה:"]
+        msg_lines += [entry["line"] for entry in batch]
+        if address:
+            msg_lines.append(f"📍 {address}")
+        msg_lines.append("\nאנא ענה *אישור* לאישור.")
+        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
+
+        save_supplier_pending_order(
+            supplier_phone=supplier.whatsapp_number,
+            order_request_id=order.id,
+            products=[
+                {
+                    "orp_id": entry["orp_id"],
+                    "product_name": entry["product_name"],
+                    "quantity": entry["quantity"],
+                    "unit": entry["unit"],
+                }
+                for entry in batch
+            ],
+        )
+
+
+def _complete_modification_after_clarification(phone: str, extra: dict, resolved_items: list) -> HttpResponse:
+    """
+    The customer just answered "which one did you mean" for a change to an
+    existing order — finish applying it the same way _handle_order_
+    modification would have, had the name been unambiguous from the start.
+    """
+    from collections import defaultdict
+    from apps.catalog.models import Product
+    from apps.orders.models import OrderRequest
+
+    try:
+        order = OrderRequest.objects.get(id=extra["order_id"])
+    except OrderRequest.DoesNotExist:
+        validators.send_whatsapp_message(phone, "לא מצאתי את ההזמנה. נסה שוב.")
+        return HttpResponse(status=200)
+
+    intent = extra.get("intent", "add")
+    region = extra.get("region", "center")
+    profile = getattr(order.user, "profile", None)
+    all_products_map = {p.name: p for p in Product.objects.all()}
+
+    changes_made = []
+    errors = []
+    supplier_batches = defaultdict(list)
+
+    for item in resolved_items:
+        product = all_products_map.get(item["product_name"])
+        if not product or not _apply_single_modification(
+            product, item["quantity"], intent, order, region, supplier_batches, changes_made
+        ):
+            errors.append(item["product_name"])
+
+    _dispatch_modification_batches(
+        supplier_batches, order,
+        profile.company_name if profile else "",
+        profile.company_address if profile else "",
+    )
+
+    reply_lines = []
+    if changes_made:
+        reply_lines.append("✅ השינויים נשלחו לספקים:")
+        reply_lines += [f"  • {c}" for c in changes_made]
+    if errors:
+        reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
+    if not reply_lines:
+        reply_lines = ["לא הצלחתי לזהות שינוי בהזמנה. נסה שוב."]
+    validators.send_whatsapp_message(phone, "\n".join(reply_lines))
+    return HttpResponse(status=200)
 
 
 def _suggest_and_respond(phone: str, user, profile, parsed_items: list) -> HttpResponse:
@@ -256,10 +408,10 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
 def _handle_order_modification(phone: str, body: str, user, order) -> HttpResponse:
     """Handle ADD or UPDATE modification(s) to a SENT order."""
     from collections import defaultdict
-    from apps.catalog.models import Product, SupplierProduct
+    from apps.catalog.models import Product
+    from apps.catalog.product_matcher import find_ambiguous_group
     from apps.orders.models import OrderRequestProduct
     from apps.orders.order_parser import parse_modification_intent
-    from .cache import save_supplier_pending_order
 
     product_names = list(Product.objects.values_list("name", flat=True))
     parsed = parse_modification_intent(body, product_names)
@@ -276,6 +428,7 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
 
     changes_made = []
     errors = []
+    ambiguous = []
     # One batch per supplier: several changes in the same message (or several
     # messages before the supplier gets around to replying) used to fire one
     # standalone "please confirm" per item, and the supplier's single "אישור"
@@ -289,7 +442,16 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
     for item in items:
         product = Product.objects.filter(name=item["product_name"]).first()
         if not product:
-            errors.append(item["product_name"])
+            # "בצל" alone isn't a catalog product — only "בצל יבש"/"בצל
+            # סגול"/... are. Ask which one instead of just reporting it as
+            # not found, same as a fresh order already does.
+            group = find_ambiguous_group(item["product_name"], product_names)
+            if group:
+                ambiguous.append({
+                    "query": item["product_name"], "quantity": item["quantity"], "candidates": group,
+                })
+            else:
+                errors.append(item["product_name"])
             continue
 
         # Check cutoff for the supplier handling this product
@@ -311,95 +473,34 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
                     )
                     continue
 
-        # "update" a product that isn't actually in the order yet has no
-        # existing_orp to update — treat it the same as "add" instead of
-        # silently doing nothing for that item (previously: neither branch
-        # below matched, so it fell straight through unnoticed).
-        if intent == "update" and existing_orp:
-            old_qty = existing_orp.quantity
-            existing_orp.quantity = item["quantity"]
-            existing_orp.save(update_fields=["quantity"])
-            order.total_price = sum(
-                p.quantity * p.unit_price
-                for p in order.products.all()
-            )
-            order.save(update_fields=["total_price"])
+        if not _apply_single_modification(
+            product, item["quantity"], intent, order, region, supplier_batches, changes_made
+        ):
+            errors.append(product.name)
 
-            supplier_batches[existing_orp.supplier].append({
-                "orp_id": existing_orp.id,
-                "product_name": product.name,
-                "quantity": str(item["quantity"]),
-                "unit": product.get_unit_display(),
-                "line": f"🔄 {product.name}: {old_qty} → {item['quantity']} {product.get_unit_display()}",
-            })
-            changes_made.append(
-                f"עודכן: {product.name} {old_qty}→{item['quantity']} {product.get_unit_display()}"
+    if ambiguous:
+        # Anything else in the same message already resolved cleanly and, for
+        # a modification, is already committed to the DB (unlike a fresh
+        # order, which only computes everything after the whole message is
+        # understood) — dispatch those now rather than holding them hostage
+        # to the one ambiguous item.
+        if supplier_batches:
+            _dispatch_modification_batches(supplier_batches, order, company, address)
+        if changes_made:
+            validators.send_whatsapp_message(
+                phone,
+                "✅ השינויים הבאים נשלחו לספקים:\n" + "\n".join(f"  • {c}" for c in changes_made),
             )
-
-        elif intent == "add" or intent == "update":
-            sp = (
-                SupplierProduct.objects
-                .filter(product=product, supplier__region=region)
-                .select_related("supplier")
-                .order_by("price_per_unit")
-                .first()
-            )
-            if not sp:
-                errors.append(product.name)
-                continue
-
-            orp, created = OrderRequestProduct.objects.get_or_create(
-                order_request=order,
-                product=product,
-                supplier=sp.supplier,
-                defaults={"quantity": item["quantity"], "unit_price": sp.price_per_unit},
-            )
-            if not created:
-                orp.quantity += item["quantity"]
-                orp.save(update_fields=["quantity"])
-
-            order.total_price = sum(
-                p.quantity * p.unit_price
-                for p in order.products.all()
-            )
-            order.save(update_fields=["total_price"])
-
-            supplier_batches[orp.supplier].append({
-                "orp_id": orp.id,
-                "product_name": product.name,
-                "quantity": str(orp.quantity),
-                "unit": product.get_unit_display(),
-                "line": f"➕ {product.name} x{item['quantity']} {product.get_unit_display()}",
-            })
-            changes_made.append(
-                f"נוסף: {product.name} x{item['quantity']} {product.get_unit_display()}"
-            )
+        return _handle_ambiguous_products(
+            phone, ambiguous, [],
+            extra={"context": "modification", "order_id": order.id, "intent": intent, "region": region},
+        )
 
     if not changes_made and not errors:
         validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
         return HttpResponse(status=200)
 
-    for supplier, batch in supplier_batches.items():
-        msg_lines = [f"📝 *{company}* עדכן הזמנה:"]
-        msg_lines += [entry["line"] for entry in batch]
-        if address:
-            msg_lines.append(f"📍 {address}")
-        msg_lines.append("\nאנא ענה *אישור* לאישור.")
-        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
-
-        save_supplier_pending_order(
-            supplier_phone=supplier.whatsapp_number,
-            order_request_id=order.id,
-            products=[
-                {
-                    "orp_id": entry["orp_id"],
-                    "product_name": entry["product_name"],
-                    "quantity": entry["quantity"],
-                    "unit": entry["unit"],
-                }
-                for entry in batch
-            ],
-        )
+    _dispatch_modification_batches(supplier_batches, order, company, address)
 
     reply_lines = []
     if changes_made:
