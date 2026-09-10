@@ -550,6 +550,77 @@ class MinimumScenarioFilteringTests(TestCase):
         self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
 
 
+# ─────────────────────── User: modifying a SENT order ───────────────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class OrderModificationTests(TestCase):
+    """
+    A message from a phone with an existing SENT order routes to
+    _handle_order_modification instead of _handle_new_order — these exercise
+    that path directly against a real DB, only parse_modification_intent
+    (the OpenAI call) mocked.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.potato = make_product("תפוח אדמה אדום")
+        self.supplier = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.potato, price_per_unit="3.00")
+        self.user = make_user_with_profile(phone="+972507777777")
+        self.order = OrderRequest.objects.create(
+            user=self.user, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
+        )
+        self.orp = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.supplier,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+
+    def _post(self, phone, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{phone}",
+            "Body": body,
+        })
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_update_intent_for_item_not_in_order_still_adds_it(self, mock_parse, mock_send):
+        """
+        Regression: the AI can classify "I want 5kg of red potatoes" as
+        'update' even though red potatoes aren't in the order yet. That used
+        to match neither the update branch (no existing_orp) nor the add
+        branch (guarded to intent=="add" only), so it silently did nothing —
+        no error, no confirmation, no log. It must now be added.
+        """
+        mock_parse.return_value = {
+            "intent": "update",
+            "items": [{"product_name": "תפוח אדמה אדום", "quantity": Decimal("5")}],
+        }
+
+        self._post("+972507777777", "רוצה גם 5 קילו תפוח אדמה אדום")
+
+        self.assertTrue(
+            OrderRequestProduct.objects.filter(order_request=self.order, product=self.potato).exists()
+        )
+        msg = mock_send.call_args_list[-1][0][1]
+        self.assertNotIn("לא הצלחתי לזהות שינוי", msg)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_update_intent_for_existing_item_updates_quantity(self, mock_parse, mock_send):
+        """Regression guard: real updates to an item already in the order still work."""
+        mock_parse.return_value = {
+            "intent": "update",
+            "items": [{"product_name": "עגבניה", "quantity": Decimal("15")}],
+        }
+
+        self._post("+972507777777", "תעדכן את העגבניות ל-15")
+
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.quantity, Decimal("15"))
+
+
 # ─────────────────────── Supplier: confirmation flow ───────────────────────
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)

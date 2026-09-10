@@ -231,6 +231,10 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
                     )
                     continue
 
+        # "update" a product that isn't actually in the order yet has no
+        # existing_orp to update — treat it the same as "add" instead of
+        # silently doing nothing for that item (previously: neither branch
+        # below matched, so it fell straight through unnoticed).
         if intent == "update" and existing_orp:
             old_qty = existing_orp.quantity
             existing_orp.quantity = item["quantity"]
@@ -251,7 +255,7 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
                 f"עודכן: {product.name} {old_qty}→{item['quantity']} {product.get_unit_display()}"
             )
 
-        elif intent == "add":
+        elif intent == "add" or intent == "update":
             sp = (
                 SupplierProduct.objects
                 .filter(product=product, supplier__region=region)

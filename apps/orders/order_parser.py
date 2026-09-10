@@ -33,7 +33,9 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
         "1. 'add'  — customer wants to add something new to the order.\n"
         "2. 'update' — customer wants to change the quantity of an existing item.\n"
         "3. 'none' — message is not a modification request.\n"
-        "Match product names to known products using fuzzy Hebrew matching.\n"
+        "Match product names to known products using fuzzy Hebrew matching, but always return "
+        "the exact known product name from the list above, never a paraphrase or synonym — "
+        "the caller looks it up by exact string match against the known list.\n"
         "Return ONLY JSON: "
         '{"intent": "add"|"update"|"none", "items": [{"product_name": "...", "quantity": "5.0"}]}\n'
         f"Message: {message}"
