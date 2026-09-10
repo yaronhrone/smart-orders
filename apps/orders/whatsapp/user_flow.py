@@ -254,10 +254,12 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
 
 
 def _handle_order_modification(phone: str, body: str, user, order) -> HttpResponse:
-    """Handle ADD or UPDATE modification to a SENT order."""
+    """Handle ADD or UPDATE modification(s) to a SENT order."""
+    from collections import defaultdict
     from apps.catalog.models import Product, SupplierProduct
     from apps.orders.models import OrderRequestProduct
     from apps.orders.order_parser import parse_modification_intent
+    from .cache import save_supplier_pending_order
 
     product_names = list(Product.objects.values_list("name", flat=True))
     parsed = parse_modification_intent(body, product_names)
@@ -269,9 +271,20 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
 
     profile = getattr(user, "profile", None)
     region = profile.region if profile else "center"
+    company = profile.company_name if profile else ""
+    address = profile.company_address if profile else ""
 
     changes_made = []
     errors = []
+    # One batch per supplier: several changes in the same message (or several
+    # messages before the supplier gets around to replying) used to fire one
+    # standalone "please confirm" per item, and the supplier's single "אישור"
+    # could only ever confirm the last one — worse, *none* of these ever
+    # registered as pending, so "אישור" matched nothing and fell through to
+    # the free-text price-update parser ("המוצר 'אישור' לא קיים בקטלוג").
+    # Collect everything first, then send one consolidated message per
+    # supplier and register it as pending, same contract as a fresh order.
+    supplier_batches = defaultdict(list)
 
     for item in items:
         product = Product.objects.filter(name=item["product_name"]).first()
@@ -312,12 +325,13 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
             )
             order.save(update_fields=["total_price"])
 
-            msg_lines = [f"📝 *{user.profile.company_name if profile else ''}* עדכן הזמנה:"]
-            msg_lines.append(
-                f"- {product.name}: {old_qty} → {item['quantity']} {product.get_unit_display()}"
-            )
-            msg_lines.append("\nאנא ענה *אישור* לאישור השינוי.")
-            validators.send_whatsapp_message(existing_orp.supplier.whatsapp_number, "\n".join(msg_lines))
+            supplier_batches[existing_orp.supplier].append({
+                "orp_id": existing_orp.id,
+                "product_name": product.name,
+                "quantity": str(item["quantity"]),
+                "unit": product.get_unit_display(),
+                "line": f"🔄 {product.name}: {old_qty} → {item['quantity']} {product.get_unit_display()}",
+            })
             changes_made.append(
                 f"עודכן: {product.name} {old_qty}→{item['quantity']} {product.get_unit_display()}"
             )
@@ -350,14 +364,13 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
             )
             order.save(update_fields=["total_price"])
 
-            company = profile.company_name if profile else ""
-            address = profile.company_address if profile else ""
-            msg_lines = [f"📝 *{company}* הוסיף להזמנה:"]
-            msg_lines.append(f"- {product.name} x{item['quantity']} {product.get_unit_display()}")
-            if address:
-                msg_lines.append(f"📍 {address}")
-            msg_lines.append("\nאנא ענה *אישור* לאישור השינוי.")
-            validators.send_whatsapp_message(sp.supplier.whatsapp_number, "\n".join(msg_lines))
+            supplier_batches[orp.supplier].append({
+                "orp_id": orp.id,
+                "product_name": product.name,
+                "quantity": str(orp.quantity),
+                "unit": product.get_unit_display(),
+                "line": f"➕ {product.name} x{item['quantity']} {product.get_unit_display()}",
+            })
             changes_made.append(
                 f"נוסף: {product.name} x{item['quantity']} {product.get_unit_display()}"
             )
@@ -365,6 +378,28 @@ def _handle_order_modification(phone: str, body: str, user, order) -> HttpRespon
     if not changes_made and not errors:
         validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
         return HttpResponse(status=200)
+
+    for supplier, batch in supplier_batches.items():
+        msg_lines = [f"📝 *{company}* עדכן הזמנה:"]
+        msg_lines += [entry["line"] for entry in batch]
+        if address:
+            msg_lines.append(f"📍 {address}")
+        msg_lines.append("\nאנא ענה *אישור* לאישור.")
+        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
+
+        save_supplier_pending_order(
+            supplier_phone=supplier.whatsapp_number,
+            order_request_id=order.id,
+            products=[
+                {
+                    "orp_id": entry["orp_id"],
+                    "product_name": entry["product_name"],
+                    "quantity": entry["quantity"],
+                    "unit": entry["unit"],
+                }
+                for entry in batch
+            ],
+        )
 
     reply_lines = []
     if changes_made:

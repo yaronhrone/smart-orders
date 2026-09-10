@@ -679,6 +679,59 @@ class OrderModificationTests(TestCase):
         self.orp.refresh_from_db()
         self.assertEqual(self.orp.quantity, Decimal("15"))
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_supplier_can_actually_confirm_an_added_item(self, mock_parse, mock_send):
+        """
+        Regression: adding an item sent the supplier a "please confirm"
+        message but never registered it as pending, so their "אישור" reply
+        fell through to the free-text price-update parser and got
+        "המוצר 'אישור' לא קיים בקטלוג" instead of ever confirming anything.
+        """
+        mock_parse.return_value = {
+            "intent": "add",
+            "items": [{"product_name": "תפוח אדמה אדום", "quantity": Decimal("5")}],
+        }
+        self._post("+972507777777", "תוסיף 5 קילו תפוח אדמה אדום")
+        mock_send.reset_mock()
+
+        response = self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier.whatsapp_number}",
+            "Body": "אישור",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        ack = mock_send.call_args_list[0][0][1]
+        self.assertNotIn("לא קיים בקטלוג", ack)
+        self.assertIn("קיבלתי", ack)
+        new_orp = OrderRequestProduct.objects.get(order_request=self.order, product=self.potato)
+        self.assertEqual(SupplierConfirmation.objects.filter(order_request_product=new_orp).count(), 1)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_multiple_additions_to_same_supplier_send_one_message(self, mock_parse, mock_send):
+        """Two items added in one go must reach the supplier as one message, not two."""
+        lettuce = make_product("חסה")
+        SupplierProduct.objects.create(supplier=self.supplier, product=lettuce, price_per_unit="4.00")
+        mock_parse.return_value = {
+            "intent": "add",
+            "items": [
+                {"product_name": "תפוח אדמה אדום", "quantity": Decimal("5")},
+                {"product_name": "חסה", "quantity": Decimal("2")},
+            ],
+        }
+
+        self._post("+972507777777", "תוסיף גם תפוח אדמה אדום וגם חסה")
+
+        supplier_calls = [
+            c for c in mock_send.call_args_list
+            if c[0][0] == self.supplier.whatsapp_number
+        ]
+        self.assertEqual(len(supplier_calls), 1)
+        body = supplier_calls[0][0][1]
+        self.assertIn("תפוח אדמה אדום", body)
+        self.assertIn("חסה", body)
+
 
 # ─────────────────────── Supplier: confirmation flow ───────────────────────
 
