@@ -37,9 +37,17 @@ def _handle_delivery_flow(phone: str, body: str) -> HttpResponse | None:
         if not profile:
             return None
 
+        # A supplier fully confirming an order moves it SENT -> APPROVED (and,
+        # optionally, -> SHIPPED once they mark it out for delivery) — this
+        # used to only look for SENT, so "קיבלתי" found nothing for the most
+        # common case (a supplier who already confirmed) and told the
+        # customer no open order existed at all.
         order = (
             OrderRequest.objects
-            .filter(user=profile.user, status=OrderRequest.Status.SENT)
+            .filter(
+                user=profile.user,
+                status__in=[OrderRequest.Status.APPROVED, OrderRequest.Status.SHIPPED],
+            )
             .order_by("-created_at")
             .first()
         )

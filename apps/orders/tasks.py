@@ -22,6 +22,28 @@ def send_supplier_order_notification_task(self, phone: str, message: str):
 
 
 @shared_task
+def dispatch_draft_order_task(phone: str, generation: int):
+    """
+    Fires DRAFT_DEBOUNCE_SECONDS after a customer's order-building message.
+    If a newer message already bumped the generation, this run is stale —
+    the newer message scheduled its own task with a fresh countdown, so
+    doing nothing here is correct, not a missed dispatch.
+    """
+    from apps.orders.whatsapp.cache import get_draft_order, clear_draft_order
+    from apps.orders.whatsapp.user_flow import _resolve_profile, _suggest_and_respond
+
+    draft = get_draft_order(phone)
+    if not draft or draft["generation"] != generation:
+        return
+
+    clear_draft_order(phone)
+    profile = _resolve_profile(phone)
+    if not profile:
+        return
+    _suggest_and_respond(phone, profile.user, profile, draft["items"])
+
+
+@shared_task
 def handle_fallback_timeout(phone: str, order_request_id: int):
     """
     Fires FALLBACK_TTL seconds after presenting a fallback offer to the customer.

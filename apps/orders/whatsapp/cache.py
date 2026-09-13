@@ -12,6 +12,13 @@ CUTOFF_TTL = 86400
 FALLBACK_TTL = 3600
 DELIVERY_TTL = 86400  # 24 שעות
 
+# How long to wait after a customer's last order-building message before
+# actually pricing and offering it — lets "20 עגבנייה" followed a moment
+# later by "גם 5 חסה" merge into one order instead of the second message
+# landing on an already-cached scenario-choice and getting lost.
+DRAFT_DEBOUNCE_SECONDS = 180
+DRAFT_TTL = 600  # generous vs. the debounce itself; the dispatch task clears it well before this
+
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -81,6 +88,48 @@ def get_pending_clarification(phone: str):
 
 def clear_pending_clarification(phone: str):
     cache.delete(f"whatsapp_clarify:{phone}")
+
+
+def save_draft_order(phone: str, items: list) -> int:
+    """
+    Merge `items` ({"product_name", "quantity": Decimal}) into the customer's
+    in-progress draft order, combining quantities for a product that appears
+    in more than one message. Returns the new generation number, to hand to
+    the debounce task scheduled right after this call.
+    """
+    key = f"whatsapp_draft:{phone}"
+    raw = cache.get(key)
+    existing = json.loads(raw)["items"] if raw else []
+
+    by_name = {i["product_name"]: Decimal(str(i["quantity"])) for i in existing}
+    for item in items:
+        qty = Decimal(str(item["quantity"]))
+        by_name[item["product_name"]] = by_name.get(item["product_name"], Decimal(0)) + qty
+
+    generation = (json.loads(raw)["generation"] + 1) if raw else 1
+    payload = {
+        "items": [{"product_name": name, "quantity": qty} for name, qty in by_name.items()],
+        "generation": generation,
+    }
+    cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=DRAFT_TTL)
+    return generation
+
+
+def get_draft_order(phone: str):
+    raw = cache.get(f"whatsapp_draft:{phone}")
+    if not raw:
+        return None
+    data = json.loads(raw)
+    # DecimalEncoder stringifies quantity for the JSON round-trip — undo
+    # that here so callers (suggest_order's arithmetic) get Decimal back,
+    # not the string that broke `quantity * unit_price` downstream.
+    for item in data["items"]:
+        item["quantity"] = Decimal(item["quantity"])
+    return data
+
+
+def clear_draft_order(phone: str):
+    cache.delete(f"whatsapp_draft:{phone}")
 
 
 def _get_delivery_state(phone: str):

@@ -239,14 +239,58 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
         cache.delete(processing_key)
 
 
+# Words a supplier uses to say goods are on their way — checked only when
+# they have no order awaiting confirmation, so it can never be confused with
+# a reply to a pending "please confirm" message.
+SHIPPING_KEYWORDS = ["יצא למשלוח", "יצאה למשלוח", "בדרך אליכם", "נשלח"]
+
+
+def _handle_mark_shipped(phone: str, supplier, order) -> HttpResponse:
+    """Supplier reports an already-approved order is out for delivery."""
+    from apps.orders.models import OrderRequest
+
+    try:
+        order.transition_to(OrderRequest.Status.SHIPPED)
+    except ValueError as exc:
+        logger.error("Failed to mark order %s shipped: %s", order.id, exc)
+        return HttpResponse(status=200)
+
+    validators.send_whatsapp_message(
+        phone, f"✅ עדכנו שהזמנה #{order.id} יצאה למשלוח."
+    )
+
+    customer_profile = getattr(order.user, "profile", None)
+    customer_phone = (
+        validators._local_to_e164(customer_profile.phone)
+        if customer_profile and customer_profile.phone else None
+    )
+    if customer_phone:
+        validators.send_whatsapp_message(
+            customer_phone, f"📦 ההזמנה שלך #{order.id} יצאה למשלוח מ-{supplier.name}!"
+        )
+    return HttpResponse(status=200)
+
+
 def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse:
     from apps.orders.models import OrderRequestProduct, SupplierConfirmation
 
     key = f"whatsapp_supplier_pending:{phone}"
     raw = cache.get(key)
 
-    # No pending order → treat message as a price update
+    # No pending order → either a shipping notice for something already
+    # approved, or (the common case) a price update.
     if not raw:
+        if any(kw in body for kw in SHIPPING_KEYWORDS):
+            from apps.orders.models import OrderRequest
+            pending_orp = (
+                OrderRequestProduct.objects
+                .filter(supplier=supplier, order_request__status=OrderRequest.Status.APPROVED)
+                .select_related("order_request__user__profile")
+                .order_by("-order_request__created_at")
+                .first()
+            )
+            if pending_orp:
+                return _handle_mark_shipped(phone, supplier, pending_orp.order_request)
         return _handle_supplier_price_update(phone, supplier, body)
 
     data = json.loads(raw)

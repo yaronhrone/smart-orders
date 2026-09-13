@@ -20,6 +20,11 @@ from . import validators
 
 logger = logging.getLogger(__name__)
 
+# After this hour, a message from a customer with an already-SENT order
+# starts a new order instead of tacking onto the old one — without a cutoff,
+# "update" would apply indefinitely, including to an order from days ago.
+DAILY_UPDATE_CUTOFF = dtime(23, 0)
+
 
 def _format_scenario(label, s):
     lines = [f"*{label}*"]
@@ -380,9 +385,17 @@ def _suggest_and_respond(phone: str, user, profile, parsed_items: list) -> HttpR
 
 
 def _handle_new_order(phone: str, body: str) -> HttpResponse:
-    """Handle an incoming message that has no pending order — treat as a new customer order."""
+    """
+    Handle an incoming message that has no pending order — treat as a new
+    customer order. Doesn't price or offer anything itself: merges the
+    parsed items into a short-lived draft and (re)schedules the debounced
+    dispatch, so "20 עגבנייה" followed a moment later by "גם 5 חסה" become
+    one order instead of the second message landing on an already-cached
+    scenario-choice and getting silently dropped.
+    """
     from apps.catalog.models import Product
     from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
+    from .cache import DRAFT_DEBOUNCE_SECONDS, save_draft_order
 
     profile = _resolve_profile(phone)
     if not profile:
@@ -394,6 +407,9 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
     try:
         parsed_items = parse_customer_order(body, product_names)
     except AmbiguousProductError as exc:
+        # A clarification question is a short back-and-forth, not part of
+        # "more of the order is still coming" — answer it immediately,
+        # outside the draft/debounce mechanism.
         return _handle_ambiguous_products(phone, exc.ambiguous, exc.resolved)
     except ValueError:
         validators.send_whatsapp_message(
@@ -402,7 +418,15 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
         )
         return HttpResponse(status=200)
 
-    return _suggest_and_respond(phone, profile.user, profile, parsed_items)
+    generation = save_draft_order(phone, parsed_items)
+    try:
+        from apps.orders.tasks import dispatch_draft_order_task
+        dispatch_draft_order_task.apply_async(
+            args=[phone, generation], countdown=DRAFT_DEBOUNCE_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("Could not schedule draft dispatch task: %s", exc)
+    return HttpResponse(status=200)
 
 
 def _handle_order_modification(phone: str, body: str, user, order) -> HttpResponse:
@@ -543,7 +567,12 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
                 .first()
             )
             if sent_order:
-                return _handle_order_modification(phone, body, profile.user, sent_order)
+                if timezone.localtime().time() < DAILY_UPDATE_CUTOFF:
+                    return _handle_order_modification(phone, body, profile.user, sent_order)
+                validators.send_whatsapp_message(
+                    phone,
+                    f"⏰ חלון העדכון להזמנה #{sent_order.id} נסגר ל-23:00. פותח הזמנה חדשה.",
+                )
 
         return _handle_new_order(phone, body)
 

@@ -9,12 +9,14 @@ External dependencies mocked:
 Cache is overridden to LocMemCache so tests are isolated.
 """
 import json
+from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
+from django.utils import timezone as django_timezone
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
@@ -23,6 +25,7 @@ from apps.orders.whatsapp import (
     save_pending_order,
     save_supplier_pending_order,
 )
+from apps.orders.whatsapp.cache import get_draft_order
 from apps.users.models import Profile
 
 User = get_user_model()
@@ -54,6 +57,22 @@ def make_user_with_profile(email="user@test.com", phone="+972501234567", region=
     user = User.objects.create_user(email=email, password="pass")
     Profile.objects.create(user=user, phone=phone, region=region)
     return user
+
+
+def _flush_draft(phone):
+    """
+    A new order no longer prices/replies inline — it merges into a draft and
+    schedules dispatch_draft_order_task to fire after the debounce window.
+    Tests run with no Celery worker consuming the broker, so simulate "the
+    debounce window elapsed" by invoking the task directly, synchronously,
+    with the draft's current generation.
+    """
+    from apps.orders.tasks import dispatch_draft_order_task
+    from apps.orders.whatsapp.cache import get_draft_order
+
+    draft = get_draft_order(phone)
+    if draft is not None:
+        dispatch_draft_order_task(phone, draft["generation"])
 
 
 # ─────────────────────── _parse_supplier_reply (pure) ───────────────────────
@@ -201,6 +220,7 @@ class UserNewOrderFlowTests(TestCase):
         ]
 
         self._post("+972501111111", "5 עגבניות ו-10 גזר")
+        _flush_draft("+972501111111")
 
         mock_send.assert_called_once()
         msg = mock_send.call_args[0][1]
@@ -238,6 +258,7 @@ class UserNewOrderFlowTests(TestCase):
         ]
 
         self._post("+972503333333", "5 אבטיחים ירחיים")
+        _flush_draft("+972503333333")
 
         mock_send.assert_called_once()
         self.assertIn("לא זיהיתי", mock_send.call_args[0][1])
@@ -253,6 +274,7 @@ class UserNewOrderFlowTests(TestCase):
         ]
 
         self._post("+972504444444", "5 עגבניות ו-3 מוצר_לא_קיים")
+        _flush_draft("+972504444444")
 
         mock_send.assert_called_once()
         msg = mock_send.call_args[0][1]
@@ -269,6 +291,7 @@ class UserNewOrderFlowTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("5")}]
 
         self._post("+972501234567", "5 עגבניות")
+        _flush_draft("+972501234567")
 
         # Should reach suggest_order (not "not registered")
         msg = mock_send.call_args[0][1]
@@ -468,6 +491,7 @@ class MinimumScenarioFilteringTests(TestCase):
         }
 
         self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
 
         msg = mock_send.call_args[0][1]
         self.assertIn("*א*", msg)
@@ -492,6 +516,7 @@ class MinimumScenarioFilteringTests(TestCase):
         }
 
         self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
 
         msg = mock_send.call_args[0][1]
         self.assertNotIn("*א*", msg)
@@ -521,6 +546,7 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_build.return_value = (order, [])
 
         self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
         self._post("+972506666666", "אישור")
 
         self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
@@ -542,6 +568,7 @@ class MinimumScenarioFilteringTests(TestCase):
         }
 
         self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
 
         msg = mock_send.call_args[0][1]
         self.assertIn("⛔", msg)
@@ -635,6 +662,15 @@ class OrderModificationTests(TestCase):
             order_request=self.order, product=self.tomato, supplier=self.supplier,
             quantity=Decimal("10"), unit_price=Decimal("5.00"),
         )
+        # These tests exercise the pre-cutoff modification path — pin the
+        # clock well before DAILY_UPDATE_CUTOFF (23:00) so the suite isn't
+        # flaky depending on what time it's actually run.
+        self.time_patcher = patch(
+            "apps.orders.whatsapp.user_flow.timezone.localtime",
+            return_value=django_timezone.make_aware(datetime(2026, 1, 1, 10, 0)),
+        )
+        self.time_patcher.start()
+        self.addCleanup(self.time_patcher.stop)
 
     def _post(self, phone, body):
         return self.client.post("/whatsapp/webhook/", {
@@ -808,8 +844,12 @@ class DeliveryConfirmationWordTests(TestCase):
         self.user = make_user_with_profile(phone="+972509999999")
         self.tomato = make_product("עגבניה")
         self.supplier = make_supplier("ספק א")
+        # A supplier reply moves the order SENT -> APPROVED before delivery
+        # is ever a question — APPROVED (not SENT) is the realistic starting
+        # status for testing "קיבלתי", and is what the delivery_flow filter
+        # fix now actually looks for.
         self.order = OrderRequest.objects.create(
-            user=self.user, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
+            user=self.user, status=OrderRequest.Status.APPROVED, total_price=Decimal("50.00")
         )
         OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
@@ -976,3 +1016,272 @@ class SupplierPriceUpdateFlowTests(TestCase):
 
         mock_send.assert_called_once()
         self.assertIn("לא זיהיתי", mock_send.call_args[0][1])
+
+
+# ─────────────────────── Component B: draft debounce ───────────────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class DraftDebounceTests(TestCase):
+    """
+    A customer's order-building messages merge into one draft instead of a
+    second message ("גם 5 חסה") landing on an already-cached scenario offer
+    from the first and getting silently dropped. No Celery worker runs
+    during tests, so `_flush_draft` invokes dispatch_draft_order_task
+    directly to simulate the debounce window elapsing.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.lettuce = make_product("חסה")
+        self.supplier = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.lettuce, price_per_unit="2.00")
+        self.phone = "+972510000001"
+        make_user_with_profile(phone=self.phone)
+
+    def _post(self, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.phone}",
+            "Body": body,
+        })
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_two_rapid_messages_merge_into_one_draft(self, mock_parse, mock_send):
+        mock_parse.side_effect = [
+            [{"product_name": "עגבניה", "quantity": Decimal("20")}],
+            [{"product_name": "חסה", "quantity": Decimal("5")}],
+        ]
+
+        self._post("20 עגבניה")
+        self._post("גם 5 חסה")
+
+        # Still inside the debounce window — nothing sent yet, and nothing lost.
+        mock_send.assert_not_called()
+
+        draft = get_draft_order(self.phone)
+        by_name = {i["product_name"]: i["quantity"] for i in draft["items"]}
+        self.assertEqual(by_name["עגבניה"], Decimal("20"))
+        self.assertEqual(by_name["חסה"], Decimal("5"))
+        self.assertEqual(draft["generation"], 2)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_matching_generation_dispatches_and_clears_draft(self, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("20")}]
+
+        self._post("20 עגבניה")
+        _flush_draft(self.phone)
+
+        mock_send.assert_called_once()
+        self.assertIn("עגבניה", mock_send.call_args[0][1])
+        self.assertIsNone(get_draft_order(self.phone))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_stale_generation_task_run_is_noop(self, mock_parse, mock_send):
+        """
+        A task scheduled after the first message fires only after the
+        countdown — by the time it does, a second message already bumped
+        the generation and scheduled its own task. The stale run must do
+        nothing, since acting would price/offer an incomplete order.
+        """
+        mock_parse.side_effect = [
+            [{"product_name": "עגבניה", "quantity": Decimal("20")}],
+            [{"product_name": "חסה", "quantity": Decimal("5")}],
+        ]
+
+        self._post("20 עגבניה")
+        stale_generation = get_draft_order(self.phone)["generation"]
+        self._post("גם 5 חסה")
+
+        from apps.orders.tasks import dispatch_draft_order_task
+        dispatch_draft_order_task(self.phone, stale_generation)
+
+        mock_send.assert_not_called()
+        self.assertIsNotNone(get_draft_order(self.phone))  # untouched by the stale run
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_ambiguous_product_does_not_enter_draft(self, mock_send):
+        """
+        A clarification question ("which one did you mean?") is a short
+        back-and-forth, not part of "more of the order is still coming" —
+        it must answer immediately, outside the draft/debounce mechanism.
+        """
+        red = make_product("תפוח אדמה אדום")
+        white = make_product("תפוח אדמה לבן")
+        SupplierProduct.objects.create(supplier=self.supplier, product=red, price_per_unit="3.00")
+        SupplierProduct.objects.create(supplier=self.supplier, product=white, price_per_unit="2.50")
+
+        self._post("5 קילו תפוח אדמה")
+
+        mock_send.assert_called_once()
+        self.assertIsNone(get_draft_order(self.phone))
+        self.assertIsNotNone(cache.get(f"whatsapp_clarify:{self.phone}"))
+
+
+# ─────────────────────── Component C: daily update cutoff (23:00) ──────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class DailyUpdateCutoffTests(TestCase):
+    """After 23:00, a message to an already-SENT order starts a new order
+    instead of tacking onto the old one — without a cutoff, "update" would
+    apply indefinitely, including to an order from days ago."""
+
+    def setUp(self):
+        cache.clear()
+        self.phone = "+972511111111"
+        self.tomato = make_product("עגבניה")
+        self.supplier = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
+        self.user = make_user_with_profile(phone=self.phone)
+        self.order = OrderRequest.objects.create(
+            user=self.user, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
+        )
+        OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.supplier,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+
+    def _post(self, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.phone}",
+            "Body": body,
+        })
+
+    def _at(self, hour, minute):
+        return patch(
+            "apps.orders.whatsapp.user_flow.timezone.localtime",
+            return_value=django_timezone.make_aware(datetime(2026, 1, 1, hour, minute)),
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_before_cutoff_modifies_existing_order(self, mock_parse, mock_send):
+        mock_parse.return_value = {
+            "intent": "update",
+            "items": [{"product_name": "עגבניה", "quantity": Decimal("15")}],
+        }
+        with self._at(10, 0):
+            self._post("תעדכן את העגבניות ל-15")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        orp = OrderRequestProduct.objects.get(order_request=self.order, product=self.tomato)
+        self.assertEqual(orp.quantity, Decimal("15"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_after_cutoff_sends_window_closed_and_starts_new_order(self, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("5")}]
+        with self._at(23, 30):
+            self._post("5 עגבניה")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("נסגר", msg)
+        self.assertIn(f"#{self.order.id}", msg)
+
+        # Routed through _handle_new_order (the draft/debounce path of
+        # Component B), not a modification of the old SENT order.
+        draft = get_draft_order(self.phone)
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["items"][0]["product_name"], "עגבניה")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+
+
+# ─────────────────────── Component D: shipping + delivery chain ────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class ShippingAndDeliveryChainTests(TestCase):
+    """
+    Closes the chain: supplier marks an approved order shipped, customer
+    confirms receipt — from both APPROVED (SHIPPED is optional) and SHIPPED.
+    Also the direct regression guard for the pre-existing bug where
+    delivery_flow only recognized SENT, so "קיבלתי" found nothing for the
+    single most common case (a supplier who already confirmed).
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.customer_phone = "+972512222222"
+        self.tomato = make_product("עגבניה")
+        self.supplier = make_supplier("ספק א")
+        self.user = make_user_with_profile(phone=self.customer_phone)
+
+    def _make_order(self, status):
+        order = OrderRequest.objects.create(user=self.user, status=status, total_price=Decimal("50.00"))
+        OrderRequestProduct.objects.create(
+            order_request=order, product=self.tomato, supplier=self.supplier,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+        return order
+
+    def _post_customer(self, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.customer_phone}",
+            "Body": body,
+        })
+
+    def _post_supplier(self, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier.whatsapp_number}",
+            "Body": body,
+        })
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_receiving_word_confirms_from_approved_status(self, mock_send):
+        """Regression guard: an APPROVED order (the realistic status once a
+        supplier has fully confirmed) is found by "קיבלתי", where it used
+        to find nothing at all."""
+        order = self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_customer("קיבלתי")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.DELIVERED)
+        self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_receiving_word_confirms_from_shipped_status(self, mock_send):
+        order = self._make_order(OrderRequest.Status.SHIPPED)
+
+        self._post_customer("קיבלתי")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.DELIVERED)
+        self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_supplier_shipping_notice_marks_approved_order_shipped(self, mock_send):
+        """Supplier with no pending confirmation sends a shipping keyword →
+        their most recent APPROVED order moves to SHIPPED, customer notified."""
+        order = self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_supplier("יצא למשלוח")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.SHIPPED)
+
+        supplier_msg = mock_send.call_args_list[0][0][1]
+        self.assertIn("יצאה למשלוח", supplier_msg)
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn(str(order.id), customer_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.catalog.price_parser.update_prices_from_message")
+    def test_supplier_shipping_keyword_without_approved_order_falls_back_to_price_update(
+        self, mock_update, mock_send
+    ):
+        """A supplier with no APPROVED order at all must not crash or
+        false-positive on a shipping keyword — it's ordinary free text to
+        the price-update parser instead."""
+        mock_update.return_value = {"updated": [], "removed": [], "skipped": []}
+
+        self._post_supplier("נשלח")
+
+        mock_update.assert_called_once()

@@ -13,6 +13,7 @@ class OrderRequest(models.Model):
         PENDING = "pending", "ממתין לאישור"
         APPROVED = "approved", "אושר"
         SENT = "sent", "נשלח לספקים"
+        SHIPPED = "shipped", "יצא למשלוח"
         DELIVERED = "delivered", "נמסר"
         CANCELLED = "cancelled", "בוטל"
 
@@ -24,7 +25,11 @@ class OrderRequest(models.Model):
     ALLOWED_TRANSITIONS = {
         Status.PENDING:   [Status.SENT, Status.CANCELLED],
         Status.SENT:      [Status.APPROVED, Status.DELIVERED, Status.CANCELLED],
-        Status.APPROVED:  [Status.DELIVERED, Status.CANCELLED],
+        # DELIVERED direct from APPROVED stays allowed — SHIPPED is an
+        # optional courtesy step, never a required gate a supplier could
+        # forget and strand the customer behind.
+        Status.APPROVED:  [Status.SHIPPED, Status.DELIVERED, Status.CANCELLED],
+        Status.SHIPPED:   [Status.DELIVERED, Status.CANCELLED],
         Status.DELIVERED: [],
         Status.CANCELLED: [],
     }
