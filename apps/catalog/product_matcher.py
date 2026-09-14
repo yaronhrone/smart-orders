@@ -36,8 +36,8 @@ def _normalize(text: str) -> str:
 
 
 @lru_cache(maxsize=1)
-def _load_alias_index() -> dict:
-    """normalized alias (or canonical name itself) -> canonical name."""
+def _load_json_alias_index() -> dict:
+    """normalized alias (or canonical name itself) -> canonical name. Static file, safe to cache."""
     index = {}
     try:
         with open(ALIASES_PATH, encoding="utf-8") as f:
@@ -51,13 +51,31 @@ def _load_alias_index() -> dict:
     return index
 
 
+def _load_db_alias_index() -> dict:
+    """
+    normalized alias -> canonical product name, from the admin-managed
+    ProductAlias table. Queried fresh every time (not lru_cache'd, unlike the
+    JSON file) since this is exactly the part an admin expects to take effect
+    immediately after adding an alias — it's a small table, one query.
+    """
+    from .models import ProductAlias
+
+    return {
+        _normalize(row.alias): row.product.name
+        for row in ProductAlias.objects.select_related("product").all()
+    }
+
+
 def resolve_alias(text: str, known_product_names) -> str | None:
     """
     Exact-match lookup only (no fuzzy matching) — this is what makes it safe to
     skip the AI for. Only returns a name that's actually in `known_product_names`,
-    so a stale/out-of-sync alias file can't resurrect a deleted product.
+    so a stale/out-of-sync alias file (or a DB alias for a since-deleted
+    product) can't resurrect it. The admin-managed DB table is checked first
+    so it can override the static file for the same alias text.
     """
-    canonical = _load_alias_index().get(_normalize(text))
+    normalized = _normalize(text)
+    canonical = _load_db_alias_index().get(normalized) or _load_json_alias_index().get(normalized)
     if canonical and canonical in known_product_names:
         return canonical
     return None

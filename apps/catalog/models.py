@@ -30,6 +30,21 @@ class Product(models.Model):
         return f"{self.name} ({self.get_unit_display()})"
 
 
+class ProductAlias(models.Model):
+    """
+    Admin-managed synonym for a catalog product, e.g. "בצל לבן" -> the
+    canonical "בצל יבש". Consulted by apps/catalog/product_matcher.py
+    alongside the static data/product_aliases.json file (this table wins on
+    a conflict, since it's the one an admin can actually change without a
+    deploy).
+    """
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="aliases")
+    alias = models.CharField(max_length=100, unique=True)
+
+    def __str__(self):
+        return f"{self.alias} -> {self.product.name}"
+
+
 class Supplier(models.Model):
     name = models.CharField(max_length=255)
     phone = models.CharField(max_length=20, unique=True)

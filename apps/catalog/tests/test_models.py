@@ -1,6 +1,6 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
-from apps.catalog.models import Product, Supplier, SupplierProduct, Unit, Region
+from apps.catalog.models import Product, ProductAlias, Supplier, SupplierProduct, Unit, Region
 
 User = get_user_model()
 
@@ -28,6 +28,29 @@ class ProductModelTests(TestCase):
         """__str__ returns name with unit"""
         product = Product.objects.create(name="בצל", unit=Unit.KG)
         self.assertIn("בצל", str(product))
+
+
+class ProductAliasModelTests(TestCase):
+
+    def test_create_alias(self):
+        onion = Product.objects.create(name="בצל יבש", unit=Unit.KG)
+        alias = ProductAlias.objects.create(product=onion, alias="בצל לבן")
+        self.assertEqual(alias.product, onion)
+        self.assertEqual(alias.alias, "בצל לבן")
+
+    def test_alias_text_unique_across_products(self):
+        """The same alias text can't point at two different products at once."""
+        onion = Product.objects.create(name="בצל יבש", unit=Unit.KG)
+        other = Product.objects.create(name="בצל סגול", unit=Unit.KG)
+        ProductAlias.objects.create(product=onion, alias="בצל לבן")
+        with self.assertRaises(Exception):
+            ProductAlias.objects.create(product=other, alias="בצל לבן")
+
+    def test_deleting_product_deletes_its_aliases(self):
+        onion = Product.objects.create(name="בצל יבש", unit=Unit.KG)
+        ProductAlias.objects.create(product=onion, alias="בצל לבן")
+        onion.delete()
+        self.assertEqual(ProductAlias.objects.count(), 0)
 
 
 class SupplierModelTests(TestCase):

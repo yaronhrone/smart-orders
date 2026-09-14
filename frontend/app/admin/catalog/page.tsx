@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { fetchProducts, deleteProduct, createProduct, Product } from "../../lib/api";
+import { Fragment, useEffect, useState, useCallback } from "react";
+import {
+  fetchProducts, deleteProduct, createProduct, createProductAlias, deleteProductAlias, Product,
+} from "../../lib/api";
 import { useAutoError } from "../../lib/useAutoError";
 
 const UNITS = [
@@ -29,6 +31,11 @@ export default function AdminCatalogPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useAutoError(6000);
   const [saving, setSaving] = useState(false);
+
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [aliasInput, setAliasInput] = useState("");
+  const [aliasSaving, setAliasSaving] = useState(false);
+  const [aliasError, setAliasError] = useAutoError(6000);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -94,6 +101,44 @@ export default function AdminCatalogPage() {
     }
   }
 
+  function toggleExpanded(id: number) {
+    setExpandedId((prev) => (prev === id ? null : id));
+    setAliasInput("");
+    setAliasError("");
+  }
+
+  async function handleAddAlias(e: React.FormEvent, productId: number) {
+    e.preventDefault();
+    const alias = aliasInput.trim();
+    if (!alias) return;
+    setAliasError("");
+    setAliasSaving(true);
+    try {
+      const created = await createProductAlias(productId, alias);
+      setProducts((prev) =>
+        prev?.map((p) => (p.id === productId ? { ...p, aliases: [...p.aliases, created] } : p)) ?? null
+      );
+      setAliasInput("");
+    } catch (err: unknown) {
+      setAliasError(err instanceof Error ? err.message : "שגיאה בהוספת הכינוי");
+    } finally {
+      setAliasSaving(false);
+    }
+  }
+
+  async function handleDeleteAlias(productId: number, aliasId: number) {
+    try {
+      await deleteProductAlias(aliasId);
+      setProducts((prev) =>
+        prev?.map((p) =>
+          p.id === productId ? { ...p, aliases: p.aliases.filter((a) => a.id !== aliasId) } : p
+        ) ?? null
+      );
+    } catch {
+      setAliasError("שגיאה במחיקת הכינוי");
+    }
+  }
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -143,24 +188,81 @@ export default function AdminCatalogPage() {
               <tr className="bg-gray-50 text-gray-500 text-xs">
                 <th className="text-right px-4 py-2 font-medium">שם מוצר</th>
                 <th className="text-right px-4 py-2 font-medium">יחידה</th>
+                <th className="text-right px-4 py-2 font-medium">כינויים</th>
                 <th className="px-4 py-2 font-medium"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {products.map((p) => (
-                <tr key={p.id} className="hover:bg-gray-50 transition">
-                  <td className="px-4 py-3 font-medium text-gray-800">{p.name}</td>
-                  <td className="px-4 py-3 text-gray-500">{p.unit_display}</td>
-                  <td className="px-4 py-3 text-left">
-                    <button
-                      onClick={() => handleDelete(p.id, p.name)}
-                      disabled={deletingId === p.id}
-                      className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40 transition"
-                    >
-                      {deletingId === p.id ? "מוחק..." : "מחק"}
-                    </button>
-                  </td>
-                </tr>
+                <Fragment key={p.id}>
+                  <tr
+                    className="hover:bg-gray-50 transition cursor-pointer"
+                    onClick={() => toggleExpanded(p.id)}
+                  >
+                    <td className="px-4 py-3 font-medium text-gray-800">{p.name}</td>
+                    <td className="px-4 py-3 text-gray-500">{p.unit_display}</td>
+                    <td className="px-4 py-3 text-gray-500">
+                      {p.aliases.length > 0 ? p.aliases.length : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-left" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleDelete(p.id, p.name)}
+                        disabled={deletingId === p.id}
+                        className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40 transition"
+                      >
+                        {deletingId === p.id ? "מוחק..." : "מחק"}
+                      </button>
+                    </td>
+                  </tr>
+                  {expandedId === p.id && (
+                    <tr className="bg-gray-50/60">
+                      <td colSpan={4} className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <p className="text-xs text-gray-500 mb-2">
+                          כינויים שיזוהו אוטומטית כ&quot;{p.name}&quot; בהודעות וואטסאפ
+                          (לדוגמה: &quot;בצל לבן&quot; ← &quot;בצל יבש&quot;)
+                        </p>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {p.aliases.map((a) => (
+                            <span
+                              key={a.id}
+                              className="inline-flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-3 py-1 text-xs text-gray-700"
+                            >
+                              {a.alias}
+                              <button
+                                onClick={() => handleDeleteAlias(p.id, a.id)}
+                                className="text-gray-400 hover:text-red-500 leading-none"
+                                title="הסר כינוי"
+                              >
+                                &times;
+                              </button>
+                            </span>
+                          ))}
+                          {p.aliases.length === 0 && (
+                            <span className="text-xs text-gray-400">אין כינויים עדיין</span>
+                          )}
+                        </div>
+                        <form onSubmit={(e) => handleAddAlias(e, p.id)} className="flex gap-2 max-w-sm">
+                          <input
+                            type="text"
+                            value={aliasInput}
+                            onChange={(e) => setAliasInput(e.target.value)}
+                            placeholder="הוסף כינוי חדש..."
+                            className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            dir="rtl"
+                          />
+                          <button
+                            type="submit"
+                            disabled={aliasSaving || !aliasInput.trim()}
+                            className="bg-blue-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition"
+                          >
+                            {aliasSaving ? "מוסיף..." : "הוסף"}
+                          </button>
+                        </form>
+                        {aliasError && <p className="text-red-600 text-xs mt-2">{aliasError}</p>}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>

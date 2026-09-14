@@ -308,11 +308,18 @@ export async function placeOrder(
 
 // ─────────────── Catalog ───────────────
 
+export interface ProductAlias {
+  id: number;
+  product: number;
+  alias: string;
+}
+
 export interface Product {
   id: number;
   name: string;
   unit: string;
   unit_display: string;
+  aliases: ProductAlias[];
 }
 
 export async function fetchProducts(
@@ -429,4 +436,15 @@ export async function createProduct(data: CreateProductPayload): Promise<Product
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+export async function createProductAlias(productId: number, alias: string): Promise<ProductAlias> {
+  return request<ProductAlias>("/api/catalog/product-aliases/", {
+    method: "POST",
+    body: JSON.stringify({ product: productId, alias }),
+  });
+}
+
+export async function deleteProductAlias(id: number): Promise<void> {
+  return request<void>(`/api/catalog/product-aliases/${id}/`, { method: "DELETE" });
 }

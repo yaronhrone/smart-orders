@@ -7,9 +7,9 @@ from .price_parser import update_prices_from_message
 from core.cache_utils import get_cache_version
 from core.pagination import paginate, LoadMorePagination
 from drf_spectacular.utils import extend_schema
-from .models import Product, Supplier, SupplierProduct
+from .models import Product, ProductAlias, Supplier, SupplierProduct
 from .serializers import (
-    ProductSerializer, SupplierSerializer, SupplierCreateSerializer,
+    ProductSerializer, ProductAliasSerializer, SupplierSerializer, SupplierCreateSerializer,
     PriceMessageSerializer, PriceUpdateResultSerializer, SupplierPriceUpdateSerializer,
     SupplierWithProductsSerializer,
 )
@@ -28,7 +28,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
         return [permissions.IsAuthenticated()]
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = ProductSerializer
-    queryset = Product.objects.all().order_by("name")
+    queryset = Product.objects.all().order_by("name").prefetch_related("aliases")
     pagination_class = LoadMorePagination
 
     def get_queryset(self):
@@ -75,6 +75,33 @@ class ProductBulkCreateView(APIView):
             "created_names": created,
             "skipped_names": skipped,
         }, status=status.HTTP_201_CREATED)
+
+
+class ProductAliasListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /api/catalog/product-aliases/?product=<id>  — list aliases (admin only)
+    POST /api/catalog/product-aliases/                — add an alias for a product (admin only)
+
+    Lets the admin teach the matcher synonyms customers/suppliers actually
+    type (e.g. "בצל לבן" -> canonical "בצל יבש") without touching
+    data/product_aliases.json or redeploying — see apps/catalog/product_matcher.py.
+    """
+    permission_classes = [permissions.IsAdminUser]
+    serializer_class = ProductAliasSerializer
+    queryset = ProductAlias.objects.select_related("product").all()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        product_id = self.request.query_params.get("product")
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+        return queryset
+
+
+class ProductAliasDestroyView(generics.DestroyAPIView):
+    """DELETE /api/catalog/product-aliases/{id}/ — admin only"""
+    permission_classes = [permissions.IsAdminUser]
+    queryset = ProductAlias.objects.all()
 
 
 class SupplierUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):

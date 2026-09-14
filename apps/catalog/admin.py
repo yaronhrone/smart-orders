@@ -1,11 +1,17 @@
 from django.contrib import admin
-from .models import Product, Supplier, SupplierProduct
+from .models import Product, ProductAlias, Supplier, SupplierProduct
+
+
+class ProductAliasInline(admin.TabularInline):
+    model = ProductAlias
+    extra = 1
 
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "unit")
     search_fields = ("name",)
+    inlines = [ProductAliasInline]
 
 
 class SupplierProductInline(admin.TabularInline):
