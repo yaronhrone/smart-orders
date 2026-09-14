@@ -1424,6 +1424,101 @@ class ShippingAndDeliveryChainTests(TestCase):
         self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_not_arrived_is_not_misread_as_arrived(self, mock_send):
+        """
+        Regression: "לא הגיע" contains the bare word "הגיע", so this used to
+        be silently read as confirming delivery — the opposite of what the
+        customer said. It must not touch the order's status at all.
+        """
+        order = self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_customer("לא הגיע")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.APPROVED)
+        for call in mock_send.call_args_list:
+            self.assertNotIn("אושרה כנמסרה", call[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_not_arrived_single_supplier_asks_for_eta_directly(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_customer("לא הגיע")
+
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("עדיין לא הגיעה", supplier_calls[0][0][1])
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn(self.supplier.name, customer_calls[0][0][1])
+
+        from apps.orders.whatsapp.cache import get_eta_request
+        eta_request = get_eta_request(self.supplier.whatsapp_number)
+        self.assertIsNotNone(eta_request)
+        self.assertEqual(eta_request["customer_phone"], self.customer_phone)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_not_arrived_multi_supplier_asks_which_one_then_notifies_it(self, mock_send):
+        carrot = make_product("גזר")
+        supplier_b = make_supplier("ספק ב")
+        order = self._make_order(OrderRequest.Status.APPROVED)
+        OrderRequestProduct.objects.create(
+            order_request=order, product=carrot, supplier=supplier_b,
+            quantity=Decimal("5"), unit_price=Decimal("3.00"),
+        )
+
+        self._post_customer("לא הגיע")
+        ask_msg = mock_send.call_args[0][1]
+        self.assertIn(self.supplier.name, ask_msg)
+        self.assertIn(supplier_b.name, ask_msg)
+        mock_send.reset_mock()
+
+        self._post_customer("1")
+
+        supplier_a_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        supplier_b_calls = [c for c in mock_send.call_args_list if c[0][0] == supplier_b.whatsapp_number]
+        self.assertEqual(len(supplier_a_calls), 1)
+        self.assertEqual(len(supplier_b_calls), 0)
+
+        from apps.orders.whatsapp.cache import get_eta_request
+        self.assertIsNotNone(get_eta_request(self.supplier.whatsapp_number))
+        self.assertIsNone(get_eta_request(supplier_b.whatsapp_number))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_supplier_eta_reply_updates_customer_and_clears_request(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+        self._post_customer("לא הגיע")
+        mock_send.reset_mock()
+
+        self._post_supplier("מצטער, יגיע עד 18:00")
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn("18:00", customer_calls[0][0][1])
+        self.assertIn(self.supplier.name, customer_calls[0][0][1])
+
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("18:00", supplier_calls[0][0][1])
+
+        from apps.orders.whatsapp.cache import get_eta_request
+        self.assertIsNone(get_eta_request(self.supplier.whatsapp_number))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_supplier_reply_without_a_time_is_asked_again(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+        self._post_customer("לא הגיע")
+        mock_send.reset_mock()
+
+        self._post_supplier("בודק ומחזיר תשובה")
+
+        self.assertEqual(mock_send.call_args_list[0][0][0], self.supplier.whatsapp_number)
+        self.assertNotIn("18:00", mock_send.call_args_list[0][0][1])
+        from apps.orders.whatsapp.cache import get_eta_request
+        self.assertIsNotNone(get_eta_request(self.supplier.whatsapp_number))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_supplier_shipping_notice_marks_approved_order_shipped(self, mock_send):
         """Supplier with no pending confirmation sends a shipping keyword →
         their most recent APPROVED order moves to SHIPPED, customer notified."""

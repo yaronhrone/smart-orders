@@ -10,7 +10,9 @@ from django.http import HttpResponse
 from django.utils import timezone
 
 from apps.catalog.product_matcher import MISSING_KEYWORDS, resolve_alias
-from .cache import save_supplier_pending_order, CUTOFF_TTL
+from .cache import (
+    clear_eta_request, get_eta_request, save_supplier_pending_order, CUTOFF_TTL,
+)
 from .fallback_flow import _handle_missing_items, _recalculate_order_total
 from . import validators
 
@@ -308,8 +310,43 @@ def _handle_mark_shipped(phone: str, supplier, order, body: str = "") -> HttpRes
     return HttpResponse(status=200)
 
 
+def _handle_eta_update_reply(phone: str, supplier, body: str, eta_request: dict) -> HttpResponse:
+    """
+    Supplier's reply to a "customer says it hasn't arrived, when will it?"
+    prompt (see delivery_flow._notify_supplier_not_arrived). Takes priority
+    over everything else this supplier could send — same tradeoff the
+    existing whatsapp_supplier_pending confirmation state already makes,
+    and for the same reason: a delivery problem is urgent, and a supplier
+    who wants out can still let ETA_REQUEST_TTL lapse.
+    """
+    order_id = eta_request["order_id"]
+    eta_time = _parse_delivery_eta(body)
+    if not eta_time:
+        validators.send_whatsapp_message(
+            phone,
+            f"מחכים לעדכון שעת הגעה להזמנה #{order_id}. "
+            "השב עם שעה, לדוגמה: \"עד 16:00\" או \"תוך שעה\".",
+        )
+        return HttpResponse(status=200)
+
+    clear_eta_request(phone)
+    eta_str = eta_time.strftime("%H:%M")
+    validators.send_whatsapp_message(
+        phone, f"✅ תודה, עדכנו את הלקוח שהזמנה #{order_id} צפויה להגיע עד {eta_str}."
+    )
+    validators.send_whatsapp_message(
+        eta_request["customer_phone"],
+        f"🕐 עדכון מ-{supplier.name}: הזמנה #{order_id} צפויה להגיע עד {eta_str}.",
+    )
+    return HttpResponse(status=200)
+
+
 def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse:
     from apps.orders.models import OrderRequestProduct, SupplierConfirmation
+
+    eta_request = get_eta_request(phone)
+    if eta_request is not None:
+        return _handle_eta_update_reply(phone, supplier, body, eta_request)
 
     key = f"whatsapp_supplier_pending:{phone}"
     raw = cache.get(key)

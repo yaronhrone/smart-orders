@@ -155,6 +155,30 @@ def _clear_delivery_state(phone: str):
     cache.delete(f"whatsapp_delivery:{phone}")
 
 
+ETA_REQUEST_TTL = 86400  # supplier has a day to reply with an updated ETA before this just expires
+
+
+def save_eta_request(supplier_phone: str, order_id: int, customer_phone: str):
+    """
+    Cache that `supplier_phone` owes an updated delivery ETA for `order_id`,
+    after the customer reported it hadn't arrived yet (see delivery_flow's
+    not-arrived report). The supplier's next reply is checked against this
+    before anything else — see _handle_supplier_flow_inner.
+    """
+    key = f"whatsapp_eta_request:{supplier_phone}"
+    payload = {"order_id": order_id, "customer_phone": customer_phone}
+    cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=ETA_REQUEST_TTL)
+
+
+def get_eta_request(supplier_phone: str):
+    raw = cache.get(f"whatsapp_eta_request:{supplier_phone}")
+    return json.loads(raw) if raw else None
+
+
+def clear_eta_request(supplier_phone: str):
+    cache.delete(f"whatsapp_eta_request:{supplier_phone}")
+
+
 def _save_fallback_state(phone: str, state: dict):
     cache.set(f"whatsapp_fallback:{phone}", json.dumps(state, cls=DecimalEncoder), timeout=FALLBACK_TTL)
     try:
