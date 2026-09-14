@@ -5,11 +5,45 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 
 
-def _openai_response(items: list) -> MagicMock:
+def _openai_response(items: list, intent: str | None = None) -> MagicMock:
     """Build a mock OpenAI response that returns the given items list."""
+    payload = {"items": items}
+    if intent is not None:
+        payload["intent"] = intent
     mock_resp = MagicMock()
-    mock_resp.choices[0].message.content = json.dumps({"items": items})
+    mock_resp.choices[0].message.content = json.dumps(payload)
     return mock_resp
+
+
+class ParseModificationIntentTests(TestCase):
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_prompt_warns_about_ambiguous_family_roots(self, mock_get_client):
+        """
+        Regression: the AI used to be told to "always return the exact known
+        product name" with no notion of family roots like "פלפל" (which isn't
+        itself a product — only "פלפל אדום"/"פלפל ירוק"/... are), so it just
+        picked a variant on its own instead of the caller ever getting a
+        chance to ask which one was meant. The prompt must spell the family
+        out and tell the model to return the bare root instead of guessing.
+        """
+        client = MagicMock()
+        mock_get_client.return_value = client
+        client.chat.completions.create.return_value = _openai_response(
+            [{"product_name": "פלפל", "quantity": "2"}], intent="add",
+        )
+
+        from apps.orders.order_parser import parse_modification_intent
+        parse_modification_intent(
+            "תוסיף גם 2 קילו פלפל",
+            ["פלפל אדום", "פלפל ירוק", "פלפל צהוב", "עגבנייה"],
+        )
+
+        sent_prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("פלפל", sent_prompt)
+        self.assertIn("do NOT guess", sent_prompt)
+        self.assertIn("פלפל אדום", sent_prompt)
+        self.assertIn("פלפל ירוק", sent_prompt)
 
 
 class ParseCustomerOrderTests(TestCase):

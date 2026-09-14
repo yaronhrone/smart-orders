@@ -2,7 +2,12 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.catalog.product_matcher import find_ambiguous_group, match_order_items, resolve_clarification
+from apps.catalog.product_matcher import (
+    find_ambiguous_group,
+    list_ambiguous_families,
+    match_order_items,
+    resolve_clarification,
+)
 
 
 class OrderSegmentUnitWordTests(TestCase):
@@ -102,3 +107,16 @@ class AmbiguousProductTests(TestCase):
         resolved, still_ambiguous = resolve_clarification("לא יודע", ambiguous)
         self.assertEqual(resolved, [])
         self.assertEqual(still_ambiguous, ambiguous)
+
+    def test_list_ambiguous_families_groups_by_shared_root(self):
+        families = list_ambiguous_families(self.KNOWN)
+        self.assertEqual(
+            set(families["תפוח אדמה"]), {"תפוח אדמה אדום", "תפוח אדמה לבן"}
+        )
+        self.assertEqual(
+            set(families["תפוח עץ"]), {"תפוח עץ אדום", "תפוח עץ ירוק"}
+        )
+        self.assertNotIn("עגבנייה", families)
+
+    def test_list_ambiguous_families_empty_when_no_shared_roots(self):
+        self.assertEqual(list_ambiguous_families(["עגבנייה", "מלפפון"]), {})

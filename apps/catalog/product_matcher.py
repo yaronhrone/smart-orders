@@ -138,6 +138,30 @@ def find_ambiguous_group(name: str, known_product_names) -> list[str] | None:
     return matches if len(matches) >= 2 else None
 
 
+def list_ambiguous_families(known_product_names) -> dict[str, list[str]]:
+    """
+    All "family root" -> variants pairs in the catalog, e.g.
+    "פלפל" -> ["פלפל אדום", "פלפל ירוק", ...] or "תפוח אדמה" -> ["תפוח אדמה
+    אדום", "תפוח אדמה לבן"]. A root is a product name with its last word
+    dropped; it only counts if 2+ catalog products actually share it (same
+    rule as find_ambiguous_group). Used to warn an AI-based parser away from
+    silently picking a variant when the customer named only the family.
+    """
+    known = list(known_product_names)
+    families: dict[str, list[str]] = {}
+    for name in known:
+        words = name.split(" ")
+        if len(words) < 2:
+            continue
+        root = " ".join(words[:-1])
+        if root in families:
+            continue
+        group = find_ambiguous_group(root, known)
+        if group:
+            families[root] = sorted(group)
+    return families
+
+
 def resolve_clarification(reply: str, ambiguous_items: list[dict]) -> tuple[list[dict], list[dict]]:
     """
     Match a customer's answer to an earlier "which one did you mean" question
