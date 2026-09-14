@@ -11,6 +11,9 @@ from .cache import (
     clear_pending_clarification,
     DecimalEncoder,
     get_pending_clarification,
+    MINIMUM_GRACE_SECONDS,
+    MINIMUM_GRACE_TTL,
+    save_draft_order,
     save_pending_clarification,
     save_pending_order,
 )
@@ -285,12 +288,21 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
     return HttpResponse(status=200)
 
 
-def _suggest_and_respond(phone: str, user, profile, parsed_items: list) -> HttpResponse:
+def _suggest_and_respond(
+    phone: str, user, profile, parsed_items: list, is_grace_retry: bool = False
+) -> HttpResponse:
     """
     Given fully-resolved {product_name, quantity} items (no ambiguity left to
     ask about), look them up, price the order, and send the scenario/
     confirmation message. Shared by a fresh order and by one whose product
     ambiguity was just cleared up.
+
+    `is_grace_retry` marks the one re-entry that isn't a customer message: the
+    MINIMUM_GRACE_SECONDS follow-up scheduled after a basket first failed
+    every supplier's minimum (see the cheapest_issues/fewest_issues branch
+    below). It decides what happens if the basket *still* doesn't clear a
+    minimum — start a fresh grace window (first time) vs. give up and drop it
+    (second time), so a customer who never tops up doesn't get held forever.
     """
     from apps.catalog.models import Product
     from apps.orders.services import suggest_order
@@ -348,16 +360,47 @@ def _suggest_and_respond(phone: str, user, profile, parsed_items: list) -> HttpR
             )
     elif cheapest_issues and fewest_issues:
         # Neither scenario clears its suppliers' minimums — there is nothing
-        # valid to offer. Show both shortfalls so the customer knows which is
-        # closer, but don't cache anything to confirm into.
-        msg = (
+        # valid to offer right now.
+        shortfalls = (
             "⛔ אף אחת מהאפשרויות לא עומדת במינימום הזמנה של הספקים:\n\n"
             + _format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
             + "\n" + _format_minimum_warning(cheapest_issues)
             + "\n\n" + _format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
             + "\n" + _format_minimum_warning(fewest_issues)
-            + "\n\nשלח הזמנה מחודשת עם כמויות גדולות יותר."
         )
+        if is_grace_retry:
+            # Already got one grace window and still doesn't clear a minimum —
+            # stop holding it open. clear_draft_order isn't needed here: the
+            # dispatch task that called us already cleared this generation's
+            # draft before calling _suggest_and_respond.
+            msg = shortfalls + "\n\nההזמנה בוטלה. שלח הזמנה חדשה כדי לנסות שוב."
+        else:
+            # Instead of dropping the basket and making the customer start
+            # over, hold it as a draft for MINIMUM_GRACE_SECONDS — a follow-up
+            # message ("גם 5 חסה") merges into it via the same debounce path a
+            # brand-new order uses (save_draft_order), so topping up the
+            # quantity or adding a product is enough to clear the minimum
+            # without retyping everything already sent.
+            generation = save_draft_order(
+                phone,
+                [{"product_name": p["product"].name, "quantity": p["quantity"]} for p in products],
+                ttl=MINIMUM_GRACE_TTL,
+            )
+            try:
+                from apps.orders.tasks import dispatch_draft_order_task
+                dispatch_draft_order_task.apply_async(
+                    args=[phone, generation], kwargs={"is_grace_retry": True},
+                    countdown=MINIMUM_GRACE_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning("Could not schedule minimum-grace dispatch task: %s", exc)
+            hours = MINIMUM_GRACE_SECONDS // 3600
+            msg = (
+                shortfalls
+                + f"\n\nההזמנה נשמרת — יש לך {hours} שעות להוסיף עוד מוצרים או כמות כדי "
+                "לעמוד במינימום (שלח הודעה נוספת, היא תתווסף להזמנה זו). "
+                "אם לא תעדכן, ההזמנה תבוטל אוטומטית."
+            )
     else:
         # Exactly one scenario is actually orderable — offer only that one,
         # instead of letting the customer pick a dead end and then, on
@@ -395,7 +438,7 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
     """
     from apps.catalog.models import Product
     from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
-    from .cache import DRAFT_DEBOUNCE_SECONDS, save_draft_order
+    from .cache import DRAFT_DEBOUNCE_SECONDS
 
     profile = _resolve_profile(phone)
     if not profile:

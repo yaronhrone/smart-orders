@@ -22,9 +22,12 @@ def send_supplier_order_notification_task(self, phone: str, message: str):
 
 
 @shared_task
-def dispatch_draft_order_task(phone: str, generation: int):
+def dispatch_draft_order_task(phone: str, generation: int, is_grace_retry: bool = False):
     """
-    Fires DRAFT_DEBOUNCE_SECONDS after a customer's order-building message.
+    Fires DRAFT_DEBOUNCE_SECONDS after a customer's order-building message —
+    or MINIMUM_GRACE_SECONDS later, with is_grace_retry=True, when the last
+    attempt didn't clear a supplier's minimum and was held open for a top-up
+    instead of dropped (see _suggest_and_respond's minimum-issues branch).
     If a newer message already bumped the generation, this run is stale —
     the newer message scheduled its own task with a fresh countdown, so
     doing nothing here is correct, not a missed dispatch.
@@ -40,7 +43,7 @@ def dispatch_draft_order_task(phone: str, generation: int):
     profile = _resolve_profile(phone)
     if not profile:
         return
-    _suggest_and_respond(phone, profile.user, profile, draft["items"])
+    _suggest_and_respond(phone, profile.user, profile, draft["items"], is_grace_retry=is_grace_retry)
 
 
 @shared_task
