@@ -456,8 +456,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         cutoff_str = cutoff_time.strftime("%H:%M")
         cache.set(f"supplier_cutoff:{phone}:{order_request_id}", cutoff_str, timeout=CUTOFF_TTL)
 
-    # Acknowledge supplier
-    ack_lines = ["✅ תודה! קיבלתי:"]
+    # Acknowledge supplier. Used to open with "תודה! קיבלתי:", which read as
+    # if the goods had arrived and didn't say which order was being confirmed.
+    ack_lines = [f"✅ אישור הזמנה #{order_request_id} נקלט:"]
     for p in products:
         orp_id = p["orp_id"]
         if orp_id in confirmed:

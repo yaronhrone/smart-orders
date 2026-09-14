@@ -739,7 +739,7 @@ class OrderModificationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         ack = mock_send.call_args_list[0][0][1]
         self.assertNotIn("לא קיים בקטלוג", ack)
-        self.assertIn("קיבלתי", ack)
+        self.assertIn(f"#{self.order.id}", ack)
         new_orp = OrderRequestProduct.objects.get(order_request=self.order, product=self.potato)
         self.assertEqual(SupplierConfirmation.objects.filter(order_request_product=new_orp).count(), 1)
 
