@@ -1,14 +1,31 @@
 from rest_framework import serializers
-from .models import Product, Supplier, SupplierProduct, Unit
+from .models import Product, ProductAlias, Supplier, SupplierProduct, Unit
 
+
+
+class ProductAliasSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductAlias
+        fields = ("id", "product", "alias")
+        # Model-level unique=True would otherwise get DRF's auto-generated
+        # UniqueValidator, whose English error runs (and wins) before
+        # validate_alias below ever gets a chance to raise a Hebrew one.
+        extra_kwargs = {"alias": {"validators": []}}
+
+    def validate_alias(self, value):
+        value = value.strip()
+        if ProductAlias.objects.filter(alias__iexact=value).exists():
+            raise serializers.ValidationError("הכינוי הזה כבר קיים במערכת.")
+        return value
 
 
 class ProductSerializer(serializers.ModelSerializer):
     unit_display = serializers.CharField(source="get_unit_display", read_only=True)
+    aliases = ProductAliasSerializer(many=True, read_only=True)
 
     class Meta:
         model = Product
-        fields = ("id", "name", "unit", "unit_display")
+        fields = ("id", "name", "unit", "unit_display", "aliases")
 
 
 class SupplierProductSerializer(serializers.ModelSerializer):

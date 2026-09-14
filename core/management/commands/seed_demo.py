@@ -141,9 +141,14 @@ class Command(BaseCommand):
 
         products = {}
         for entry in catalog["products"]:
-            product, _ = Product.objects.get_or_create(
+            product, created = Product.objects.get_or_create(
                 name=entry["name"], defaults={"unit": entry["unit"]},
             )
+            # An existing row left on the default "kg" would otherwise keep
+            # showing ק"ג for a bundle/pack product forever (see catalog 0013).
+            if not created and product.unit == "kg" and entry["unit"] != "kg":
+                product.unit = entry["unit"]
+                product.save(update_fields=["unit"])
             products[product.name] = product
         return products
 

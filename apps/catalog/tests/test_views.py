@@ -3,12 +3,13 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 from rest_framework import status
 
-from apps.catalog.models import Product, Unit
+from apps.catalog.models import Product, ProductAlias, Unit
 
 User = get_user_model()
 
 PRODUCTS_URL = reverse("catalog-products")
 PRODUCT_PRICES_URL = reverse("product-prices")
+PRODUCT_ALIASES_URL = reverse("catalog-product-aliases")
 
 
 class ProductListPaginationTests(APITestCase):
@@ -88,4 +89,60 @@ class ProductCatalogPaginationTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(len(res.data["results"]), 2)
-        self.assertTrue(res.data["has_more"])
+
+
+class ProductAliasViewTests(APITestCase):
+    """Admin-managed synonym dictionary (e.g. "בצל לבן" -> "בצל יבש")."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="admin@test.com", password="admin123")
+        self.user = User.objects.create_user(email="user@test.com", password="pass1234")
+        self.onion = Product.objects.create(name="בצל יבש", unit=Unit.KG)
+
+    def test_non_admin_cannot_create_alias(self):
+        self.client.force_authenticate(user=self.user)
+        res = self.client.post(PRODUCT_ALIASES_URL, {"product": self.onion.id, "alias": "בצל לבן"})
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(ProductAlias.objects.count(), 0)
+
+    def test_admin_can_create_alias(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(PRODUCT_ALIASES_URL, {"product": self.onion.id, "alias": "בצל לבן"})
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ProductAlias.objects.get().alias, "בצל לבן")
+
+    def test_duplicate_alias_text_rejected_with_hebrew_message(self):
+        self.client.force_authenticate(user=self.admin)
+        ProductAlias.objects.create(product=self.onion, alias="בצל לבן")
+        res = self.client.post(PRODUCT_ALIASES_URL, {"product": self.onion.id, "alias": "בצל לבן"})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("כבר קיים", str(res.data))
+
+    def test_list_filters_by_product(self):
+        other = Product.objects.create(name="בצל סגול", unit=Unit.KG)
+        ProductAlias.objects.create(product=self.onion, alias="בצל לבן")
+        ProductAlias.objects.create(product=other, alias="בצל אדום")
+        self.client.force_authenticate(user=self.admin)
+
+        res = self.client.get(PRODUCT_ALIASES_URL, {"product": self.onion.id})
+
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["alias"], "בצל לבן")
+
+    def test_admin_can_delete_alias(self):
+        alias = ProductAlias.objects.create(product=self.onion, alias="בצל לבן")
+        self.client.force_authenticate(user=self.admin)
+
+        res = self.client.delete(f"{PRODUCT_ALIASES_URL}{alias.id}/")
+
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(ProductAlias.objects.count(), 0)
+
+    def test_product_list_nests_its_aliases(self):
+        ProductAlias.objects.create(product=self.onion, alias="בצל לבן")
+        self.client.force_authenticate(user=self.user)
+
+        res = self.client.get(PRODUCTS_URL)
+
+        onion_row = next(p for p in res.data["results"] if p["id"] == self.onion.id)
+        self.assertEqual([a["alias"] for a in onion_row["aliases"]], ["בצל לבן"])

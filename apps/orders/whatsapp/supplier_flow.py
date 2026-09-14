@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from datetime import time as dtime
+from datetime import time as dtime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.core.cache import cache
@@ -10,7 +10,9 @@ from django.http import HttpResponse
 from django.utils import timezone
 
 from apps.catalog.product_matcher import MISSING_KEYWORDS, resolve_alias
-from .cache import save_supplier_pending_order, CUTOFF_TTL
+from .cache import (
+    clear_eta_request, get_eta_request, save_supplier_pending_order, CUTOFF_TTL,
+)
 from .fallback_flow import _handle_missing_items, _recalculate_order_total
 from . import validators
 
@@ -91,6 +93,40 @@ def _parse_supplier_cutoff(body: str):
         return dtime(int(h), int(mi))
     except (ValueError, AttributeError):
         return None
+
+
+# Requires an explicit arrival verb, never bare "עד HH:MM" — that phrasing
+# already means something else entirely in _parse_supplier_cutoff ("changes
+# accepted until HH:MM"), and a supplier confirming with both in one message
+# ("אישור, ניתן לשנות עד 14:00") must not have the cutoff time misread as a
+# delivery ETA.
+_ETA_ABSOLUTE_RE = re.compile(r"(?:יגיע|יגיעו|מגיע|תגיע|הגעה|משלוח)\D{0,15}?(\d{1,2}:\d{2})")
+_ETA_RELATIVE_RE = re.compile(r"תוך\s+(שעה|שעתיים|\d+\s*שעות)")
+_ETA_RELATIVE_HOURS = {"שעה": 1, "שעתיים": 2}
+
+
+def _parse_delivery_eta(body: str):
+    """
+    Best-effort extraction of a delivery ETA from a supplier's own
+    confirmation message — e.g. "אישור, יגיע עד 14:00" or "אישור, תוך שעתיים".
+    Optional: most confirmations won't mention one at all. Returns a
+    datetime.time (today, local) or None.
+    """
+    m = _ETA_ABSOLUTE_RE.search(body)
+    if m:
+        try:
+            h, mi = m.group(1).split(":")
+            return dtime(int(h), int(mi))
+        except ValueError:
+            return None
+
+    m = _ETA_RELATIVE_RE.search(body)
+    if m:
+        token = m.group(1)
+        hours = _ETA_RELATIVE_HOURS.get(token) or int(re.search(r"\d+", token).group())
+        return (timezone.localtime() + timedelta(hours=hours)).time()
+
+    return None
 
 
 def _parse_supplier_reply(body: str, products: list) -> tuple[dict, list]:
@@ -245,7 +281,7 @@ def _handle_supplier_flow(phone: str, supplier, body: str) -> HttpResponse:
 SHIPPING_KEYWORDS = ["יצא למשלוח", "יצאה למשלוח", "בדרך אליכם", "נשלח"]
 
 
-def _handle_mark_shipped(phone: str, supplier, order) -> HttpResponse:
+def _handle_mark_shipped(phone: str, supplier, order, body: str = "") -> HttpResponse:
     """Supplier reports an already-approved order is out for delivery."""
     from apps.orders.models import OrderRequest
 
@@ -255,8 +291,10 @@ def _handle_mark_shipped(phone: str, supplier, order) -> HttpResponse:
         logger.error("Failed to mark order %s shipped: %s", order.id, exc)
         return HttpResponse(status=200)
 
+    eta_time = _parse_delivery_eta(body)
+    eta_suffix = f" צפויה להגיע עד {eta_time.strftime('%H:%M')}." if eta_time else ""
     validators.send_whatsapp_message(
-        phone, f"✅ עדכנו שהזמנה #{order.id} יצאה למשלוח."
+        phone, f"✅ עדכנו שהזמנה #{order.id} יצאה למשלוח.{eta_suffix}"
     )
 
     customer_profile = getattr(order.user, "profile", None)
@@ -265,14 +303,50 @@ def _handle_mark_shipped(phone: str, supplier, order) -> HttpResponse:
         if customer_profile and customer_profile.phone else None
     )
     if customer_phone:
+        msg = f"📦 ההזמנה שלך #{order.id} יצאה למשלוח מ-{supplier.name}!"
+        if eta_time:
+            msg += f"\n🕐 צפויה להגיע עד השעה {eta_time.strftime('%H:%M')}"
+        validators.send_whatsapp_message(customer_phone, msg)
+    return HttpResponse(status=200)
+
+
+def _handle_eta_update_reply(phone: str, supplier, body: str, eta_request: dict) -> HttpResponse:
+    """
+    Supplier's reply to a "customer says it hasn't arrived, when will it?"
+    prompt (see delivery_flow._notify_supplier_not_arrived). Takes priority
+    over everything else this supplier could send — same tradeoff the
+    existing whatsapp_supplier_pending confirmation state already makes,
+    and for the same reason: a delivery problem is urgent, and a supplier
+    who wants out can still let ETA_REQUEST_TTL lapse.
+    """
+    order_id = eta_request["order_id"]
+    eta_time = _parse_delivery_eta(body)
+    if not eta_time:
         validators.send_whatsapp_message(
-            customer_phone, f"📦 ההזמנה שלך #{order.id} יצאה למשלוח מ-{supplier.name}!"
+            phone,
+            f"מחכים לעדכון שעת הגעה להזמנה #{order_id}. "
+            "השב עם שעה, לדוגמה: \"עד 16:00\" או \"תוך שעה\".",
         )
+        return HttpResponse(status=200)
+
+    clear_eta_request(phone)
+    eta_str = eta_time.strftime("%H:%M")
+    validators.send_whatsapp_message(
+        phone, f"✅ תודה, עדכנו את הלקוח שהזמנה #{order_id} צפויה להגיע עד {eta_str}."
+    )
+    validators.send_whatsapp_message(
+        eta_request["customer_phone"],
+        f"🕐 עדכון מ-{supplier.name}: הזמנה #{order_id} צפויה להגיע עד {eta_str}.",
+    )
     return HttpResponse(status=200)
 
 
 def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse:
     from apps.orders.models import OrderRequestProduct, SupplierConfirmation
+
+    eta_request = get_eta_request(phone)
+    if eta_request is not None:
+        return _handle_eta_update_reply(phone, supplier, body, eta_request)
 
     key = f"whatsapp_supplier_pending:{phone}"
     raw = cache.get(key)
@@ -290,7 +364,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 .first()
             )
             if pending_orp:
-                return _handle_mark_shipped(phone, supplier, pending_orp.order_request)
+                return _handle_mark_shipped(phone, supplier, pending_orp.order_request, body)
         return _handle_supplier_price_update(phone, supplier, body)
 
     data = json.loads(raw)
@@ -298,6 +372,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
     order_request_id = data["order_request_id"]
 
     confirmed, missing = _parse_supplier_reply(body, products)
+    eta_time = _parse_delivery_eta(body)
 
     CANCEL_KEYWORDS = ["ביטול", "לא מאשר", "מבטל", "cancel", "לא רוצה"]
     if any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS):
@@ -456,8 +531,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         cutoff_str = cutoff_time.strftime("%H:%M")
         cache.set(f"supplier_cutoff:{phone}:{order_request_id}", cutoff_str, timeout=CUTOFF_TTL)
 
-    # Acknowledge supplier
-    ack_lines = ["✅ תודה! קיבלתי:"]
+    # Acknowledge supplier. Used to open with "תודה! קיבלתי:", which read as
+    # if the goods had arrived and didn't say which order was being confirmed.
+    ack_lines = [f"✅ אישור הזמנה #{order_request_id} נקלט:"]
     for p in products:
         orp_id = p["orp_id"]
         if orp_id in confirmed:
@@ -476,6 +552,8 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         )
     if cutoff_time:
         ack_lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
+    if eta_time:
+        ack_lines.append(f"\n🚚 עדכנו את הלקוח שההזמנה צפויה להגיע עד {eta_time.strftime('%H:%M')}")
     validators.send_whatsapp_message(phone, "\n".join(ack_lines))
 
     # Notify customer about confirmed items
@@ -501,6 +579,8 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                             customer_lines.append(f"  • {p['product_name']} {c_qty}/{r_qty} {p['unit']} (חלקי)")
                         else:
                             customer_lines.append(f"  • {p['product_name']} x{c_qty} {p['unit']}")
+                if eta_time:
+                    customer_lines.append(f"\n🕐 צפוי להגיע עד השעה {eta_time.strftime('%H:%M')}")
                 customer_lines.append(f"\nמספר הזמנה: #{order_request_id}")
                 validators.send_whatsapp_message(customer_phone, "\n".join(customer_lines))
     except Exception as exc:

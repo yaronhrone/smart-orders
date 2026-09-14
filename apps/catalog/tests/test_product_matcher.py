@@ -2,7 +2,14 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.catalog.product_matcher import find_ambiguous_group, match_order_items, resolve_clarification
+from apps.catalog.models import Product, ProductAlias, Unit
+from apps.catalog.product_matcher import (
+    find_ambiguous_group,
+    list_ambiguous_families,
+    match_order_items,
+    resolve_alias,
+    resolve_clarification,
+)
 
 
 class OrderSegmentUnitWordTests(TestCase):
@@ -102,3 +109,48 @@ class AmbiguousProductTests(TestCase):
         resolved, still_ambiguous = resolve_clarification("לא יודע", ambiguous)
         self.assertEqual(resolved, [])
         self.assertEqual(still_ambiguous, ambiguous)
+
+    def test_list_ambiguous_families_groups_by_shared_root(self):
+        families = list_ambiguous_families(self.KNOWN)
+        self.assertEqual(
+            set(families["תפוח אדמה"]), {"תפוח אדמה אדום", "תפוח אדמה לבן"}
+        )
+        self.assertEqual(
+            set(families["תפוח עץ"]), {"תפוח עץ אדום", "תפוח עץ ירוק"}
+        )
+        self.assertNotIn("עגבנייה", families)
+
+    def test_list_ambiguous_families_empty_when_no_shared_roots(self):
+        self.assertEqual(list_ambiguous_families(["עגבנייה", "מלפפון"]), {})
+
+
+class DbAliasResolutionTests(TestCase):
+    """
+    resolve_alias() must also check the admin-managed ProductAlias table
+    (not just the static data/product_aliases.json file), and let a DB
+    alias take precedence when the same text is defined in both places.
+    """
+
+    def test_resolves_alias_from_db(self):
+        onion = Product.objects.create(name="בצל יבש", unit=Unit.KG)
+        ProductAlias.objects.create(product=onion, alias="בצל לבן")
+
+        self.assertEqual(resolve_alias("בצל לבן", ["בצל יבש"]), "בצל יבש")
+
+    def test_db_alias_for_unknown_product_is_ignored(self):
+        """A DB alias pointing at a product not in known_product_names must not resurrect it."""
+        onion = Product.objects.create(name="בצל יבש", unit=Unit.KG)
+        ProductAlias.objects.create(product=onion, alias="בצל לבן")
+
+        self.assertIsNone(resolve_alias("בצל לבן", ["מלפפון"]))
+
+    def test_db_alias_overrides_json_file_for_same_text(self):
+        """"בצל לבן" is already a JSON alias for "בצל יבש" - a DB alias should be able to redirect it."""
+        red_onion = Product.objects.create(name="בצל סגול", unit=Unit.KG)
+        ProductAlias.objects.create(product=red_onion, alias="בצל לבן")
+
+        self.assertEqual(resolve_alias("בצל לבן", ["בצל יבש", "בצל סגול"]), "בצל סגול")
+
+    def test_falls_back_to_json_file_when_no_db_alias(self):
+        """No DB row for this text at all - the static file still resolves it as before."""
+        self.assertEqual(resolve_alias("בצל לבן", ["בצל יבש"]), "בצל יבש")

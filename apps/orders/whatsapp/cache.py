@@ -19,6 +19,12 @@ DELIVERY_TTL = 86400  # 24 שעות
 DRAFT_DEBOUNCE_SECONDS = 180
 DRAFT_TTL = 600  # generous vs. the debounce itself; the dispatch task clears it well before this
 
+# When an order doesn't clear a supplier's minimum, hold it as a draft instead
+# of dropping it outright - gives the customer a window to top up the same
+# basket (more quantity, more products) rather than having to start over.
+MINIMUM_GRACE_SECONDS = 7200  # 2 hours
+MINIMUM_GRACE_TTL = 7500  # generous vs. the grace window itself, same reasoning as DRAFT_TTL above
+
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -90,12 +96,17 @@ def clear_pending_clarification(phone: str):
     cache.delete(f"whatsapp_clarify:{phone}")
 
 
-def save_draft_order(phone: str, items: list) -> int:
+def save_draft_order(phone: str, items: list, ttl: int = DRAFT_TTL) -> int:
     """
     Merge `items` ({"product_name", "quantity": Decimal}) into the customer's
     in-progress draft order, combining quantities for a product that appears
     in more than one message. Returns the new generation number, to hand to
     the debounce task scheduled right after this call.
+
+    `ttl` defaults to the short post-message debounce window, but is also
+    reused with MINIMUM_GRACE_TTL to hold a basket that failed a supplier's
+    minimum open for a couple of hours instead of dropping it outright — same
+    merge behavior either way, a later message just tops up the same draft.
     """
     key = f"whatsapp_draft:{phone}"
     raw = cache.get(key)
@@ -111,7 +122,7 @@ def save_draft_order(phone: str, items: list) -> int:
         "items": [{"product_name": name, "quantity": qty} for name, qty in by_name.items()],
         "generation": generation,
     }
-    cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=DRAFT_TTL)
+    cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=ttl)
     return generation
 
 
@@ -142,6 +153,30 @@ def _save_delivery_state(phone: str, state: dict):
 
 def _clear_delivery_state(phone: str):
     cache.delete(f"whatsapp_delivery:{phone}")
+
+
+ETA_REQUEST_TTL = 86400  # supplier has a day to reply with an updated ETA before this just expires
+
+
+def save_eta_request(supplier_phone: str, order_id: int, customer_phone: str):
+    """
+    Cache that `supplier_phone` owes an updated delivery ETA for `order_id`,
+    after the customer reported it hadn't arrived yet (see delivery_flow's
+    not-arrived report). The supplier's next reply is checked against this
+    before anything else — see _handle_supplier_flow_inner.
+    """
+    key = f"whatsapp_eta_request:{supplier_phone}"
+    payload = {"order_id": order_id, "customer_phone": customer_phone}
+    cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=ETA_REQUEST_TTL)
+
+
+def get_eta_request(supplier_phone: str):
+    raw = cache.get(f"whatsapp_eta_request:{supplier_phone}")
+    return json.loads(raw) if raw else None
+
+
+def clear_eta_request(supplier_phone: str):
+    cache.delete(f"whatsapp_eta_request:{supplier_phone}")
 
 
 def _save_fallback_state(phone: str, state: dict):

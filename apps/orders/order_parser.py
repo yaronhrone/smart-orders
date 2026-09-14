@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 from openai import OpenAI
 
-from apps.catalog.product_matcher import match_order_items
+from apps.catalog.product_matcher import list_ambiguous_families, match_order_items
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,28 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
     Returns {"intent": "add"|"update"|"none", "items": [{"product_name": str, "quantity": Decimal}]}.
     """
     known = ", ".join(product_names) if product_names else "—"
+
+    # "פלפל" isn't itself a catalog product — only "פלפל אדום"/"פלפל ירוק"/...
+    # are (same family-root ambiguity parse_customer_order asks about for a
+    # fresh order, via find_ambiguous_group). Told only to match against known
+    # names, the model used to just pick a variant on its own — spell the
+    # families out and require it to hand back the bare root instead, so the
+    # caller's own find_ambiguous_group check (which only fires when the
+    # returned name ISN'T an existing product) actually gets a chance to ask.
+    families = list_ambiguous_families(product_names)
+    families_note = ""
+    if families:
+        family_lines = "\n".join(
+            f"  - \"{root}\" could mean: {', '.join(variants)}" for root, variants in families.items()
+        )
+        families_note = (
+            "\nSome names above are ambiguous family roots covering several specific variants:\n"
+            f"{family_lines}\n"
+            "If the customer used one of these root terms WITHOUT naming a specific variant, "
+            "return the root text itself as product_name — do NOT guess or default to one of "
+            "the variants.\n"
+        )
+
     prompt = (
         "You are an order-modification parser for a Hebrew vegetable ordering system.\n"
         "Determine if the customer wants to ADD new products or UPDATE existing quantities.\n"
@@ -68,6 +90,7 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
         "Match product names to known products using fuzzy Hebrew matching, but always return "
         "the exact known product name from the list above, never a paraphrase or synonym — "
         "the caller looks it up by exact string match against the known list.\n"
+        f"{families_note}"
         "Return ONLY JSON: "
         '{"intent": "add"|"update"|"none", "items": [{"product_name": "...", "quantity": "5.0"}]}\n'
         f"Message: {message}"

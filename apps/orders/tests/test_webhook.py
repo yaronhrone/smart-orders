@@ -9,7 +9,7 @@ External dependencies mocked:
 Cache is overridden to LocMemCache so tests are isolated.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +21,7 @@ from django.utils import timezone as django_timezone
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
 from apps.orders.whatsapp import (
+    _parse_delivery_eta,
     _parse_supplier_reply,
     save_pending_order,
     save_supplier_pending_order,
@@ -59,7 +60,7 @@ def make_user_with_profile(email="user@test.com", phone="+972501234567", region=
     return user
 
 
-def _flush_draft(phone):
+def _flush_draft(phone, is_grace_retry=False):
     """
     A new order no longer prices/replies inline — it merges into a draft and
     schedules dispatch_draft_order_task to fire after the debounce window.
@@ -72,7 +73,7 @@ def _flush_draft(phone):
 
     draft = get_draft_order(phone)
     if draft is not None:
-        dispatch_draft_order_task(phone, draft["generation"])
+        dispatch_draft_order_task(phone, draft["generation"], is_grace_retry=is_grace_retry)
 
 
 # ─────────────────────── _parse_supplier_reply (pure) ───────────────────────
@@ -147,6 +148,41 @@ class ParseSupplierReplyTests(TestCase):
         confirmed, missing = _parse_supplier_reply("אין בצלים, השאר אישור", products)
         self.assertEqual([p["orp_id"] for p in missing], [1])
         self.assertEqual(confirmed[2], Decimal("15"))
+
+
+# ─────────────────────── _parse_delivery_eta (pure) ───────────────────────
+
+class ParseDeliveryEtaTests(TestCase):
+
+    def test_absolute_time_with_arrival_verb(self):
+        self.assertEqual(_parse_delivery_eta("אישור, יגיע עד 14:00").strftime("%H:%M"), "14:00")
+
+    def test_absolute_time_with_different_phrasing(self):
+        self.assertEqual(
+            _parse_delivery_eta("אישור, המשלוח יגיע בסביבות השעה 09:30").strftime("%H:%M"), "09:30"
+        )
+
+    def test_no_eta_mentioned_returns_none(self):
+        self.assertIsNone(_parse_delivery_eta("אישור"))
+
+    def test_bare_cutoff_phrasing_is_not_mistaken_for_an_eta(self):
+        """"ניתן לשנות עד 14:00" is a change-cutoff (_parse_supplier_cutoff's job), not an ETA."""
+        self.assertIsNone(_parse_delivery_eta("אישור, ניתן לשנות עד 14:00"))
+
+    def test_relative_hour_word(self):
+        eta = _parse_delivery_eta("אישור, תוך שעה")
+        expected = (django_timezone.localtime() + timedelta(hours=1)).time()
+        self.assertEqual(eta.strftime("%H:%M"), expected.strftime("%H:%M"))
+
+    def test_relative_two_hours_word(self):
+        eta = _parse_delivery_eta("אישור, תוך שעתיים")
+        expected = (django_timezone.localtime() + timedelta(hours=2)).time()
+        self.assertEqual(eta.strftime("%H:%M"), expected.strftime("%H:%M"))
+
+    def test_relative_numeric_hours(self):
+        eta = _parse_delivery_eta("אישור, תוך 3 שעות")
+        expected = (django_timezone.localtime() + timedelta(hours=3)).time()
+        self.assertEqual(eta.strftime("%H:%M"), expected.strftime("%H:%M"))
 
 
 # ─────────────────────── Webhook routing ───────────────────────
@@ -576,6 +612,117 @@ class MinimumScenarioFilteringTests(TestCase):
         self.assertNotIn("ענה *אישור*", msg)
         self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
 
+    @patch("apps.orders.tasks.dispatch_draft_order_task.apply_async")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_both_failing_minimum_holds_a_grace_draft_instead_of_dropping(
+        self, mock_suggest, mock_parse, mock_send, mock_apply_async
+    ):
+        """
+        Regression: a basket that clears no supplier's minimum used to be
+        dropped outright, forcing the customer to retype the whole order.
+        It should instead be held as a draft so a top-up message can merge
+        into it, with a follow-up task scheduled to give up later if nobody does.
+        """
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {
+                "cheapest": _issue("ספק קטן"),
+                "fewest_suppliers": _issue("ספק גדול"),
+            },
+        }
+
+        self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("נשמרת", msg)
+        self.assertIn("2 שעות", msg)
+
+        from apps.orders.whatsapp.cache import get_draft_order, MINIMUM_GRACE_SECONDS
+        draft = get_draft_order("+972506666666")
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["items"][0]["product_name"], "עגבניה")
+
+        # apply_async was also called once already for the normal short
+        # debounce (_handle_new_order, on the way in) — the grace scheduling
+        # is the second, distinguishable by its own countdown/kwargs.
+        grace_call = mock_apply_async.call_args_list[-1]
+        self.assertEqual(grace_call.kwargs["countdown"], MINIMUM_GRACE_SECONDS)
+        self.assertEqual(grace_call.kwargs["kwargs"], {"is_grace_retry": True})
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_topup_message_during_grace_period_merges_into_the_held_draft(
+        self, mock_suggest, mock_parse, mock_send
+    ):
+        """A follow-up message while the grace draft is open adds to the same basket, not a separate one."""
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {
+                "cheapest": _issue("ספק קטן"),
+                "fewest_suppliers": _issue("ספק גדול"),
+            },
+        }
+        self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
+
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("40")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("500.00"),
+            "fewest_suppliers": _scenario("550.00"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+        }
+        self._post("+972506666666", "עוד 40 עגבניות")
+        _flush_draft("+972506666666")
+
+        from apps.orders.whatsapp.cache import get_draft_order
+        self.assertIsNone(get_draft_order("+972506666666"))  # cleared once it actually dispatched
+        msg = mock_send.call_args[0][1]
+        self.assertIn("*א*", msg)
+        self.assertIn("*ב*", msg)
+        # Proves the top-up actually merged into the held draft (10 + 40),
+        # rather than the second message replacing or ignoring the first.
+        priced_items = mock_suggest.call_args.kwargs["products"]
+        self.assertEqual(priced_items[0]["quantity"], Decimal("50"))
+
+    @patch("apps.orders.tasks.dispatch_draft_order_task.apply_async")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_grace_retry_still_failing_cancels_for_good(
+        self, mock_suggest, mock_parse, mock_send, mock_apply_async
+    ):
+        """After the grace window, still under minimum -> cancel outright, no second grace period."""
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {
+                "cheapest": _issue("ספק קטן"),
+                "fewest_suppliers": _issue("ספק גדול"),
+            },
+        }
+        self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
+        mock_apply_async.reset_mock()
+        mock_send.reset_mock()
+
+        _flush_draft("+972506666666", is_grace_retry=True)
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("בוטלה", msg)
+        mock_apply_async.assert_not_called()  # no second grace period
+
+        from apps.orders.whatsapp.cache import get_draft_order
+        self.assertIsNone(get_draft_order("+972506666666"))
+
 
 # ─────────────────────── User: ambiguous product names ──────────────────────
 
@@ -739,7 +886,7 @@ class OrderModificationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         ack = mock_send.call_args_list[0][0][1]
         self.assertNotIn("לא קיים בקטלוג", ack)
-        self.assertIn("קיבלתי", ack)
+        self.assertIn(f"#{self.order.id}", ack)
         new_orp = OrderRequestProduct.objects.get(order_request=self.order, product=self.potato)
         self.assertEqual(SupplierConfirmation.objects.filter(order_request_product=new_orp).count(), 1)
 
@@ -958,6 +1105,28 @@ class SupplierConfirmationFlowTests(TestCase):
         msg = mock_send.call_args_list[0][0][1]
         self.assertIn("✅", msg)
         self.assertIn("עגבניה", msg)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirmation_with_eta_reaches_both_supplier_ack_and_customer(self, mock_send):
+        """A supplier who mentions an arrival time while confirming gets it
+        echoed back, and the customer's notification carries it too."""
+        self._post_supplier("אישור, יגיע עד 13:45")
+
+        supplier_msg = mock_send.call_args_list[0][0][1]
+        self.assertIn("13:45", supplier_msg)
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972501234567"]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn("13:45", customer_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirmation_without_eta_mentions_none(self, mock_send):
+        """No ETA phrasing at all -> no ETA line anywhere, same messages as before this feature."""
+        self._post_supplier("אישור")
+
+        for call in mock_send.call_args_list:
+            self.assertNotIn("צפוי", call[0][1])
+            self.assertNotIn("צפויה", call[0][1])
 
 
 # ─────────────────────── Supplier: price update flow ───────────────────────
@@ -1255,6 +1424,101 @@ class ShippingAndDeliveryChainTests(TestCase):
         self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_not_arrived_is_not_misread_as_arrived(self, mock_send):
+        """
+        Regression: "לא הגיע" contains the bare word "הגיע", so this used to
+        be silently read as confirming delivery — the opposite of what the
+        customer said. It must not touch the order's status at all.
+        """
+        order = self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_customer("לא הגיע")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.APPROVED)
+        for call in mock_send.call_args_list:
+            self.assertNotIn("אושרה כנמסרה", call[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_not_arrived_single_supplier_asks_for_eta_directly(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_customer("לא הגיע")
+
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("עדיין לא הגיעה", supplier_calls[0][0][1])
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn(self.supplier.name, customer_calls[0][0][1])
+
+        from apps.orders.whatsapp.cache import get_eta_request
+        eta_request = get_eta_request(self.supplier.whatsapp_number)
+        self.assertIsNotNone(eta_request)
+        self.assertEqual(eta_request["customer_phone"], self.customer_phone)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_not_arrived_multi_supplier_asks_which_one_then_notifies_it(self, mock_send):
+        carrot = make_product("גזר")
+        supplier_b = make_supplier("ספק ב")
+        order = self._make_order(OrderRequest.Status.APPROVED)
+        OrderRequestProduct.objects.create(
+            order_request=order, product=carrot, supplier=supplier_b,
+            quantity=Decimal("5"), unit_price=Decimal("3.00"),
+        )
+
+        self._post_customer("לא הגיע")
+        ask_msg = mock_send.call_args[0][1]
+        self.assertIn(self.supplier.name, ask_msg)
+        self.assertIn(supplier_b.name, ask_msg)
+        mock_send.reset_mock()
+
+        self._post_customer("1")
+
+        supplier_a_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        supplier_b_calls = [c for c in mock_send.call_args_list if c[0][0] == supplier_b.whatsapp_number]
+        self.assertEqual(len(supplier_a_calls), 1)
+        self.assertEqual(len(supplier_b_calls), 0)
+
+        from apps.orders.whatsapp.cache import get_eta_request
+        self.assertIsNotNone(get_eta_request(self.supplier.whatsapp_number))
+        self.assertIsNone(get_eta_request(supplier_b.whatsapp_number))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_supplier_eta_reply_updates_customer_and_clears_request(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+        self._post_customer("לא הגיע")
+        mock_send.reset_mock()
+
+        self._post_supplier("מצטער, יגיע עד 18:00")
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn("18:00", customer_calls[0][0][1])
+        self.assertIn(self.supplier.name, customer_calls[0][0][1])
+
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("18:00", supplier_calls[0][0][1])
+
+        from apps.orders.whatsapp.cache import get_eta_request
+        self.assertIsNone(get_eta_request(self.supplier.whatsapp_number))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_supplier_reply_without_a_time_is_asked_again(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+        self._post_customer("לא הגיע")
+        mock_send.reset_mock()
+
+        self._post_supplier("בודק ומחזיר תשובה")
+
+        self.assertEqual(mock_send.call_args_list[0][0][0], self.supplier.whatsapp_number)
+        self.assertNotIn("18:00", mock_send.call_args_list[0][0][1])
+        from apps.orders.whatsapp.cache import get_eta_request
+        self.assertIsNotNone(get_eta_request(self.supplier.whatsapp_number))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_supplier_shipping_notice_marks_approved_order_shipped(self, mock_send):
         """Supplier with no pending confirmation sends a shipping keyword →
         their most recent APPROVED order moves to SHIPPED, customer notified."""
@@ -1268,9 +1532,15 @@ class ShippingAndDeliveryChainTests(TestCase):
         supplier_msg = mock_send.call_args_list[0][0][1]
         self.assertIn("יצאה למשלוח", supplier_msg)
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_shipping_notice_with_eta_forwards_it_to_customer(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_supplier("יצא למשלוח, יגיע עד 16:30")
+
         customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
         self.assertEqual(len(customer_calls), 1)
-        self.assertIn(str(order.id), customer_calls[0][0][1])
+        self.assertIn("16:30", customer_calls[0][0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.catalog.price_parser.update_prices_from_message")
