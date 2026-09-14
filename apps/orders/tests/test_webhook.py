@@ -9,7 +9,7 @@ External dependencies mocked:
 Cache is overridden to LocMemCache so tests are isolated.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +21,7 @@ from django.utils import timezone as django_timezone
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
 from apps.orders.whatsapp import (
+    _parse_delivery_eta,
     _parse_supplier_reply,
     save_pending_order,
     save_supplier_pending_order,
@@ -147,6 +148,41 @@ class ParseSupplierReplyTests(TestCase):
         confirmed, missing = _parse_supplier_reply("אין בצלים, השאר אישור", products)
         self.assertEqual([p["orp_id"] for p in missing], [1])
         self.assertEqual(confirmed[2], Decimal("15"))
+
+
+# ─────────────────────── _parse_delivery_eta (pure) ───────────────────────
+
+class ParseDeliveryEtaTests(TestCase):
+
+    def test_absolute_time_with_arrival_verb(self):
+        self.assertEqual(_parse_delivery_eta("אישור, יגיע עד 14:00").strftime("%H:%M"), "14:00")
+
+    def test_absolute_time_with_different_phrasing(self):
+        self.assertEqual(
+            _parse_delivery_eta("אישור, המשלוח יגיע בסביבות השעה 09:30").strftime("%H:%M"), "09:30"
+        )
+
+    def test_no_eta_mentioned_returns_none(self):
+        self.assertIsNone(_parse_delivery_eta("אישור"))
+
+    def test_bare_cutoff_phrasing_is_not_mistaken_for_an_eta(self):
+        """"ניתן לשנות עד 14:00" is a change-cutoff (_parse_supplier_cutoff's job), not an ETA."""
+        self.assertIsNone(_parse_delivery_eta("אישור, ניתן לשנות עד 14:00"))
+
+    def test_relative_hour_word(self):
+        eta = _parse_delivery_eta("אישור, תוך שעה")
+        expected = (django_timezone.localtime() + timedelta(hours=1)).time()
+        self.assertEqual(eta.strftime("%H:%M"), expected.strftime("%H:%M"))
+
+    def test_relative_two_hours_word(self):
+        eta = _parse_delivery_eta("אישור, תוך שעתיים")
+        expected = (django_timezone.localtime() + timedelta(hours=2)).time()
+        self.assertEqual(eta.strftime("%H:%M"), expected.strftime("%H:%M"))
+
+    def test_relative_numeric_hours(self):
+        eta = _parse_delivery_eta("אישור, תוך 3 שעות")
+        expected = (django_timezone.localtime() + timedelta(hours=3)).time()
+        self.assertEqual(eta.strftime("%H:%M"), expected.strftime("%H:%M"))
 
 
 # ─────────────────────── Webhook routing ───────────────────────
@@ -1070,6 +1106,28 @@ class SupplierConfirmationFlowTests(TestCase):
         self.assertIn("✅", msg)
         self.assertIn("עגבניה", msg)
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirmation_with_eta_reaches_both_supplier_ack_and_customer(self, mock_send):
+        """A supplier who mentions an arrival time while confirming gets it
+        echoed back, and the customer's notification carries it too."""
+        self._post_supplier("אישור, יגיע עד 13:45")
+
+        supplier_msg = mock_send.call_args_list[0][0][1]
+        self.assertIn("13:45", supplier_msg)
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972501234567"]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn("13:45", customer_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirmation_without_eta_mentions_none(self, mock_send):
+        """No ETA phrasing at all -> no ETA line anywhere, same messages as before this feature."""
+        self._post_supplier("אישור")
+
+        for call in mock_send.call_args_list:
+            self.assertNotIn("צפוי", call[0][1])
+            self.assertNotIn("צפויה", call[0][1])
+
 
 # ─────────────────────── Supplier: price update flow ───────────────────────
 
@@ -1379,9 +1437,15 @@ class ShippingAndDeliveryChainTests(TestCase):
         supplier_msg = mock_send.call_args_list[0][0][1]
         self.assertIn("יצאה למשלוח", supplier_msg)
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_shipping_notice_with_eta_forwards_it_to_customer(self, mock_send):
+        self._make_order(OrderRequest.Status.APPROVED)
+
+        self._post_supplier("יצא למשלוח, יגיע עד 16:30")
+
         customer_calls = [c for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
         self.assertEqual(len(customer_calls), 1)
-        self.assertIn(str(order.id), customer_calls[0][0][1])
+        self.assertIn("16:30", customer_calls[0][0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.catalog.price_parser.update_prices_from_message")
