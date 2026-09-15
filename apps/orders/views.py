@@ -1,3 +1,4 @@
+from rest_framework import generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -7,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 
 from core.cache_utils import get_cache_version
-from core.pagination import paginate, paginated_response_serializer
+from core.pagination import LoadMorePagination, paginate, paginated_response_serializer
 from .models import OrderRequest
 
 ORDERS_CACHE_TTL = 300  # safety-net TTL; real invalidation happens via signals.py on any write
@@ -20,6 +21,7 @@ from .serializers import (
     OrderDetailSerializer,
     OrderStatusUpdateSerializer,
     OrderStatsSerializer,
+    AdminOrderListSerializer,
 )
 from decimal import Decimal
 from collections import defaultdict
@@ -157,7 +159,12 @@ class OrderStatusUpdateView(APIView):
         responses={200: OrderStatusUpdateSerializer},
     )
     def patch(self, request, pk):
-        order = get_object_or_404(OrderRequest, pk=pk, user=request.user)
+        # Staff can unstick any customer's order (e.g. a test order with no
+        # real supplier to confirm it) — everyone else only their own.
+        if request.user.is_staff:
+            order = get_object_or_404(OrderRequest, pk=pk)
+        else:
+            order = get_object_or_404(OrderRequest, pk=pk, user=request.user)
 
         serializer = OrderStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -169,6 +176,33 @@ class OrderStatusUpdateView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({"id": order.id, "status": order.status})
+
+
+class AdminOrderListView(generics.ListAPIView):
+    """
+    GET /api/orders/admin/ — admin-only, cross-customer order list. Defaults
+    to orders still open (not DELIVERED/CANCELLED) so a stuck test order —
+    one whose supplier has no real WhatsApp number to confirm from — is easy
+    to find and close via OrderStatusUpdateView above. ?status=<value> shows
+    just that status instead.
+    """
+    permission_classes = [permissions.IsAdminUser]
+    serializer_class = AdminOrderListSerializer
+    pagination_class = LoadMorePagination
+
+    def get_queryset(self):
+        qs = (
+            OrderRequest.objects
+            .select_related("user", "user__profile")
+            .annotate(product_count=Count("products"))
+            .order_by("-created_at")
+        )
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param)
+        else:
+            qs = qs.exclude(status__in=[OrderRequest.Status.DELIVERED, OrderRequest.Status.CANCELLED])
+        return qs
 class OrderStatsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 

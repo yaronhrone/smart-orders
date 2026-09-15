@@ -6,10 +6,12 @@ from .views import (
     OrderDetailView,
     OrderStatusUpdateView,
     OrderStatsView,
+    AdminOrderListView,
 )
 urlpatterns = [
     path("suggest/", SuggestOrderView.as_view(), name="orders-suggest"),
     path("place/", PlaceOrderView.as_view(), name="orders-place"),
+    path("admin/", AdminOrderListView.as_view(), name="orders-admin-list"),
     path("", OrderListView.as_view(), name="orders-list"),
     path("<int:pk>/", OrderDetailView.as_view(), name="orders-detail"),
     path("<int:pk>/status/", OrderStatusUpdateView.as_view(), name="orders-status"),

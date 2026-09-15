@@ -131,6 +131,19 @@ class OrderListSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
     product_count = serializers.IntegerField()
 
+
+class AdminOrderListSerializer(serializers.ModelSerializer):
+    """Cross-customer order list for the admin dashboard — mainly for manually
+    unsticking a test order (see AdminOrderStatusUpdateView) without going
+    through Django's own /django-admin/."""
+    customer_email = serializers.EmailField(source="user.email", read_only=True)
+    company_name = serializers.CharField(source="user.profile.company_name", read_only=True, default="")
+    product_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = OrderRequest
+        fields = ("id", "status", "total_price", "created_at", "customer_email", "company_name", "product_count")
+
 # ---------------------------------------------------------------------------
 # Input — status update
 # ---------------------------------------------------------------------------

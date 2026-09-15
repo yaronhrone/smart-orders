@@ -225,3 +225,62 @@ class OrderStatusUpdateViewTests(APITestCase):
             {"status": "approved"},
         )
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_staff_can_update_any_users_order(self):
+        """A stuck test order (no real supplier to confirm it) must be unstickable by an admin."""
+        staff = User.objects.create_user(email="staff@test.com", password="pass1234", is_staff=True)
+        self.client.force_authenticate(user=staff)
+        order = make_order(self.other)
+        order.status = OrderRequest.Status.SENT
+        order.save(update_fields=["status"])
+
+        res = self.client.patch(
+            reverse("orders-status", args=[order.id]),
+            {"status": "delivered"},
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.DELIVERED)
+
+
+class AdminOrderListViewTests(APITestCase):
+
+    def setUp(self):
+        self.staff = User.objects.create_user(email="staff@test.com", password="pass1234", is_staff=True)
+        self.customer = make_user("customer@test.com")
+
+    def test_non_staff_forbidden(self):
+        self.client.force_authenticate(user=self.customer)
+        res = self.client.get(reverse("orders-admin-list"))
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_sees_orders_across_customers(self):
+        make_order(self.customer, status_val=OrderRequest.Status.SENT)
+        self.client.force_authenticate(user=self.staff)
+
+        res = self.client.get(reverse("orders-admin-list"))
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data["results"]), 1)
+        self.assertEqual(res.data["results"][0]["customer_email"], "customer@test.com")
+
+    def test_default_excludes_delivered_and_cancelled(self):
+        make_order(self.customer, status_val=OrderRequest.Status.SENT)
+        make_order(self.customer, status_val=OrderRequest.Status.DELIVERED)
+        make_order(self.customer, status_val=OrderRequest.Status.CANCELLED)
+        self.client.force_authenticate(user=self.staff)
+
+        res = self.client.get(reverse("orders-admin-list"))
+
+        statuses = [o["status"] for o in res.data["results"]]
+        self.assertEqual(statuses, ["sent"])
+
+    def test_status_filter_overrides_default(self):
+        make_order(self.customer, status_val=OrderRequest.Status.DELIVERED)
+        self.client.force_authenticate(user=self.staff)
+
+        res = self.client.get(reverse("orders-admin-list"), {"status": "delivered"})
+
+        self.assertEqual(len(res.data["results"]), 1)
+        self.assertEqual(res.data["results"][0]["status"], "delivered")
