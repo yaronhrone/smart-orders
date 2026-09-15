@@ -386,14 +386,7 @@ def _suggest_and_respond(
                 [{"product_name": p["product"].name, "quantity": p["quantity"]} for p in products],
                 ttl=MINIMUM_GRACE_TTL,
             )
-            try:
-                from apps.orders.tasks import dispatch_draft_order_task
-                dispatch_draft_order_task.apply_async(
-                    args=[phone, generation], kwargs={"is_grace_retry": True},
-                    countdown=MINIMUM_GRACE_SECONDS,
-                )
-            except Exception as exc:
-                logger.warning("Could not schedule minimum-grace dispatch task: %s", exc)
+            _schedule_draft_dispatch(phone, generation, MINIMUM_GRACE_SECONDS, is_grace_retry=True)
             hours = MINIMUM_GRACE_SECONDS // 3600
             msg = (
                 shortfalls
@@ -450,10 +443,16 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
     try:
         parsed_items = parse_customer_order(body, product_names)
     except AmbiguousProductError as exc:
-        # A clarification question is a short back-and-forth, not part of
-        # "more of the order is still coming" — answer it immediately,
-        # outside the draft/debounce mechanism.
-        return _handle_ambiguous_products(phone, exc.ambiguous, exc.resolved)
+        # Used to answer this immediately, outside the draft/debounce
+        # mechanism entirely — but that meant a message sent moments before
+        # or after, in the same debounce window, landed in a SEPARATE draft
+        # and became a second order. Merge what already resolved into the
+        # draft same as usual, stash the ambiguous part alongside it, and
+        # let the same debounce dispatch ask about it once the window
+        # closes — against the fully-merged basket, not just this message.
+        generation = save_draft_order(phone, exc.resolved, ambiguous=exc.ambiguous)
+        _schedule_draft_dispatch(phone, generation, DRAFT_DEBOUNCE_SECONDS)
+        return HttpResponse(status=200)
     except ValueError:
         validators.send_whatsapp_message(
             phone,
@@ -462,14 +461,18 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     generation = save_draft_order(phone, parsed_items)
+    _schedule_draft_dispatch(phone, generation, DRAFT_DEBOUNCE_SECONDS)
+    return HttpResponse(status=200)
+
+
+def _schedule_draft_dispatch(phone: str, generation: int, countdown: int, is_grace_retry: bool = False):
     try:
         from apps.orders.tasks import dispatch_draft_order_task
         dispatch_draft_order_task.apply_async(
-            args=[phone, generation], countdown=DRAFT_DEBOUNCE_SECONDS,
+            args=[phone, generation], kwargs={"is_grace_retry": is_grace_retry}, countdown=countdown,
         )
     except Exception as exc:
         logger.warning("Could not schedule draft dispatch task: %s", exc)
-    return HttpResponse(status=200)
 
 
 def _handle_order_modification(phone: str, body: str, user, order) -> HttpResponse:

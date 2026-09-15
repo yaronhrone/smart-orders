@@ -33,13 +33,24 @@ def dispatch_draft_order_task(phone: str, generation: int, is_grace_retry: bool 
     doing nothing here is correct, not a missed dispatch.
     """
     from apps.orders.whatsapp.cache import get_draft_order, clear_draft_order
-    from apps.orders.whatsapp.user_flow import _resolve_profile, _suggest_and_respond
+    from apps.orders.whatsapp.user_flow import (
+        _handle_ambiguous_products, _resolve_profile, _suggest_and_respond,
+    )
 
     draft = get_draft_order(phone)
     if not draft or draft["generation"] != generation:
         return
 
     clear_draft_order(phone)
+
+    if draft.get("ambiguous"):
+        # A message inside the debounce window named a product family
+        # ("בצל", "תפוח אדמה") without a variant — held in the draft instead
+        # of interrupting it (see save_draft_order). Ask about it now, once
+        # the window has closed, against the fully-merged basket.
+        _handle_ambiguous_products(phone, draft["ambiguous"], draft["items"])
+        return
+
     profile = _resolve_profile(phone)
     if not profile:
         return

@@ -730,9 +730,14 @@ class MinimumScenarioFilteringTests(TestCase):
 class AmbiguousProductWebhookTests(TestCase):
     """
     "תפוח אדמה" alone matches two catalog products (אדום/לבן) — end-to-end
-    through the real webhook: ask first, compute only after the customer
-    answers. parse_customer_order itself is real here (no OpenAI call
-    needed for these messages — resolves entirely via the fast dict path).
+    through the real webhook. An ambiguous item rides along in the draft
+    like any other message (see cache.save_draft_order's `ambiguous` param)
+    and is only asked about once the debounce window closes — never
+    mid-message, so it can no longer split one customer's intent into two
+    separate orders when another message lands in the same window (see
+    test_clean_message_before_ambiguous_one_merges_into_one_order below).
+    parse_customer_order itself is real here (no OpenAI call needed for
+    these messages — resolves entirely via the fast dict path).
     """
 
     def setUp(self):
@@ -751,8 +756,19 @@ class AmbiguousProductWebhookTests(TestCase):
         })
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_ambiguous_name_asks_instead_of_computing(self, mock_send):
+    def test_ambiguous_name_does_not_ask_until_debounce_fires(self, mock_send):
+        """The ambiguous item is held, not answered immediately — nothing sent yet."""
         self._post("+972508888888", "5 קילו תפוח אדמה")
+
+        mock_send.assert_not_called()
+        draft = get_draft_order("+972508888888")
+        self.assertEqual(len(draft["ambiguous"]), 1)
+        self.assertEqual(draft["ambiguous"][0]["query"], "תפוח אדמה")
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_debounce_asks_about_the_ambiguous_item(self, mock_send):
+        self._post("+972508888888", "5 קילו תפוח אדמה")
+        _flush_draft("+972508888888")
 
         msg = mock_send.call_args[0][1]
         self.assertIn("אדום", msg)
@@ -765,6 +781,7 @@ class AmbiguousProductWebhookTests(TestCase):
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_answering_the_clarification_completes_the_order(self, mock_send):
         self._post("+972508888888", "5 קילו תפוח אדמה")
+        _flush_draft("+972508888888")
         self._post("+972508888888", "אדום")
 
         msg = mock_send.call_args[0][1]
@@ -775,12 +792,39 @@ class AmbiguousProductWebhookTests(TestCase):
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_unrecognized_answer_asks_again(self, mock_send):
         self._post("+972508888888", "5 קילו תפוח אדמה")
+        _flush_draft("+972508888888")
         self._post("+972508888888", "לא יודע")
 
         msg = mock_send.call_args[0][1]
         self.assertIn("אדום", msg)
         self.assertIn("לבן", msg)
         self.assertIsNotNone(cache.get("whatsapp_clarify:+972508888888"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_clean_message_before_ambiguous_one_merges_into_one_order(self, mock_send):
+        """
+        Regression: an ambiguous item used to be asked about immediately,
+        outside the draft entirely — a clean message sent moments before or
+        after in the same debounce window ended up building a SEPARATE
+        order instead of merging into one basket with everything else.
+        """
+        self._post("+972508888888", "10 קילו תפוח אדמה אדום")  # resolves cleanly
+        self._post("+972508888888", "5 קילו תפוח אדמה")         # ambiguous
+        _flush_draft("+972508888888")
+
+        ask = mock_send.call_args[0][1]
+        self.assertIn("אדום", ask)
+        self.assertIn("לבן", ask)
+        mock_send.reset_mock()
+
+        self._post("+972508888888", "לבן")
+
+        final = mock_send.call_args[0][1]
+        # Both the already-clean item and the newly-resolved one land in ONE
+        # scenario — not two separate orders from two separate timers.
+        self.assertIn("תפוח אדמה אדום", final)
+        self.assertIn("תפוח אדמה לבן", final)
+        self.assertIn("₪", final)
 
 
 # ─────────────────────── User: modifying a SENT order ───────────────────────
@@ -1272,11 +1316,12 @@ class DraftDebounceTests(TestCase):
         self.assertIsNotNone(get_draft_order(self.phone))  # untouched by the stale run
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_ambiguous_product_does_not_enter_draft(self, mock_send):
+    def test_ambiguous_product_enters_the_draft_instead_of_asking_immediately(self, mock_send):
         """
-        A clarification question ("which one did you mean?") is a short
-        back-and-forth, not part of "more of the order is still coming" —
-        it must answer immediately, outside the draft/debounce mechanism.
+        An ambiguous item rides along in the draft (cache.save_draft_order's
+        `ambiguous` param) instead of being answered immediately — asking
+        right away used to let it escape the debounce window and become a
+        separate order from whatever else the customer was mid-typing.
         """
         red = make_product("תפוח אדמה אדום")
         white = make_product("תפוח אדמה לבן")
@@ -1285,9 +1330,11 @@ class DraftDebounceTests(TestCase):
 
         self._post("5 קילו תפוח אדמה")
 
-        mock_send.assert_called_once()
-        self.assertIsNone(get_draft_order(self.phone))
-        self.assertIsNotNone(cache.get(f"whatsapp_clarify:{self.phone}"))
+        mock_send.assert_not_called()
+        draft = get_draft_order(self.phone)
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["ambiguous"][0]["query"], "תפוח אדמה")
+        self.assertIsNone(cache.get(f"whatsapp_clarify:{self.phone}"))
 
 
 # ─────────────────────── Component C: daily update cutoff (23:00) ──────────
