@@ -289,7 +289,12 @@ def update_prices_from_message(supplier, message: str) -> dict:
         original = u.get("original", "")
         skipped.append({
             "product_name": original,
-            "reason": f"המוצר '{original}' לא קיים בקטלוג — האדמין קיבל התראה",
+            # Used to always say "האדמין קיבל התראה" (the admin was
+            # notified) — untrue whenever ADMIN_WHATSAPP_NUMBER isn't set
+            # (_notify_admin_unmatched just logs a warning and returns) or
+            # the send itself fails. Don't assert an action this reason
+            # text has no way to actually confirm happened.
+            "reason": f"המוצר '{original}' לא קיים בקטלוג",
         })
 
     # Alert admin once for all unmatched items in this message
