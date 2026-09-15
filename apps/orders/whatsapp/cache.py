@@ -96,12 +96,23 @@ def clear_pending_clarification(phone: str):
     cache.delete(f"whatsapp_clarify:{phone}")
 
 
-def save_draft_order(phone: str, items: list, ttl: int = DRAFT_TTL) -> int:
+def save_draft_order(phone: str, items: list, ambiguous: list = None, ttl: int = DRAFT_TTL) -> int:
     """
     Merge `items` ({"product_name", "quantity": Decimal}) into the customer's
     in-progress draft order, combining quantities for a product that appears
     in more than one message. Returns the new generation number, to hand to
     the debounce task scheduled right after this call.
+
+    `ambiguous` ({"query", "quantity", "candidates"}, the shape
+    AmbiguousProductError carries) is APPENDED, not merged like `items` —
+    each entry is its own "which one did you mean" question, not a quantity
+    to sum. A message with an unresolved product family (e.g. "בצל" instead
+    of a specific variant) used to interrupt the draft entirely and ask about
+    it right away, which split one customer's intent into two orders when
+    another message landed in the same debounce window. Now it rides along
+    in the draft and dispatch_draft_order_task asks about it once the window
+    closes, against the fully-merged basket — see AmbiguousProductError's
+    docstring and _handle_new_order.
 
     `ttl` defaults to the short post-message debounce window, but is also
     reused with MINIMUM_GRACE_TTL to hold a basket that failed a supplier's
@@ -110,16 +121,19 @@ def save_draft_order(phone: str, items: list, ttl: int = DRAFT_TTL) -> int:
     """
     key = f"whatsapp_draft:{phone}"
     raw = cache.get(key)
-    existing = json.loads(raw)["items"] if raw else []
+    existing = json.loads(raw) if raw else {}
+    existing_items = existing.get("items", [])
+    existing_ambiguous = existing.get("ambiguous", [])
 
-    by_name = {i["product_name"]: Decimal(str(i["quantity"])) for i in existing}
+    by_name = {i["product_name"]: Decimal(str(i["quantity"])) for i in existing_items}
     for item in items:
         qty = Decimal(str(item["quantity"]))
         by_name[item["product_name"]] = by_name.get(item["product_name"], Decimal(0)) + qty
 
-    generation = (json.loads(raw)["generation"] + 1) if raw else 1
+    generation = (existing["generation"] + 1) if existing else 1
     payload = {
         "items": [{"product_name": name, "quantity": qty} for name, qty in by_name.items()],
+        "ambiguous": existing_ambiguous + (ambiguous or []),
         "generation": generation,
     }
     cache.set(key, json.dumps(payload, cls=DecimalEncoder), timeout=ttl)
@@ -135,6 +149,9 @@ def get_draft_order(phone: str):
     # that here so callers (suggest_order's arithmetic) get Decimal back,
     # not the string that broke `quantity * unit_price` downstream.
     for item in data["items"]:
+        item["quantity"] = Decimal(item["quantity"])
+    data.setdefault("ambiguous", [])
+    for item in data["ambiguous"]:
         item["quantity"] = Decimal(item["quantity"])
     return data
 
