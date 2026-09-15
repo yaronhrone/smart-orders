@@ -183,6 +183,22 @@ export async function fetchOrders(params: PageParams = {}): Promise<Paginated<Or
   return request<Paginated<OrderSummary>>(`/api/orders/${toQueryString(params)}`);
 }
 
+export interface AdminOrderSummary {
+  id: number;
+  status: string;
+  total_price: string;
+  created_at: string;
+  customer_email: string;
+  company_name: string;
+  product_count: number;
+}
+
+export async function fetchAdminOrders(
+  params: PageParams & { status?: string } = {}
+): Promise<Paginated<AdminOrderSummary>> {
+  return request<Paginated<AdminOrderSummary>>(`/api/orders/admin/${toQueryString(params)}`);
+}
+
 export interface SupplierSpending {
   supplier_id: number;
   supplier_name: string;
