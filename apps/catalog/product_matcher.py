@@ -180,27 +180,54 @@ def list_ambiguous_families(known_product_names) -> dict[str, list[str]]:
     return families
 
 
+def _match_candidate(item: dict, normalized_haystack: str) -> str | None:
+    """Which of item's candidates has its post-prefix part (e.g. "אדום") appearing in the haystack."""
+    return next(
+        (c for c in item["candidates"] if _normalize(c[len(item["query"]):]) in normalized_haystack),
+        None,
+    )
+
+
 def resolve_clarification(reply: str, ambiguous_items: list[dict]) -> tuple[list[dict], list[dict]]:
     """
     Match a customer's answer to an earlier "which one did you mean" question
-    against each pending ambiguous item's candidates, by checking whether the
-    part of the candidate name past the shared prefix (e.g. "אדום") shows up
-    anywhere in the reply. Returns (resolved, still_ambiguous).
+    against each pending ambiguous item's candidates. Returns (resolved,
+    still_ambiguous).
+
+    When the reply splits (by comma/newline) into exactly as many parts as
+    there are ambiguous items, each part is matched ONLY against that one
+    item's own candidates, in order — positional pairing, one answer per
+    question. Without this, a multi-item reply was matched by searching the
+    WHOLE reply for every item's candidates: variant words are reused across
+    unrelated product families (e.g. "ירוק" is both a valid onion AND a
+    valid pepper variant), so an answer meant for one question ("ירוק" for
+    the onion) could get wrongly matched to a DIFFERENT question too (the
+    pepper's own "פלפל ירוק"), since nothing scoped the search to the part
+    of the reply actually meant for each one.
+
+    Falls back to the old whole-reply search when the part count doesn't
+    line up one-to-one with the questions (free-form phrasing that doesn't
+    segment cleanly) — best effort, same as before, rather than leaving an
+    otherwise-resolvable multi-item reply stuck as still-ambiguous.
     """
     norm_reply = _normalize(reply)
+    parts = [p.strip() for p in re.split(r"[,\n]", reply) if p.strip()]
+
     resolved, still_ambiguous = [], []
-    for item in ambiguous_items:
-        match = next(
-            (
-                c for c in item["candidates"]
-                if _normalize(c[len(item["query"]):]) in norm_reply
-            ),
-            None,
-        )
-        if match:
-            resolved.append({"product_name": match, "quantity": item["quantity"]})
-        else:
-            still_ambiguous.append(item)
+    if len(parts) == len(ambiguous_items):
+        for item, part in zip(ambiguous_items, parts):
+            match = _match_candidate(item, _normalize(part))
+            if match:
+                resolved.append({"product_name": match, "quantity": item["quantity"]})
+            else:
+                still_ambiguous.append(item)
+    else:
+        for item in ambiguous_items:
+            match = _match_candidate(item, norm_reply)
+            if match:
+                resolved.append({"product_name": match, "quantity": item["quantity"]})
+            else:
+                still_ambiguous.append(item)
     return resolved, still_ambiguous
 
 

@@ -416,6 +416,46 @@ class SuggestOrderShapeTests(TestCase):
         )
         self.assertEqual(len(result["minimum_issues"]["fewest_suppliers"]), 1)
 
+    def test_unavailable_product_reported_but_does_not_block_the_rest(self):
+        """
+        Regression: one product with zero suppliers used to raise ValueError
+        for the WHOLE basket (_build_initial_assignments), losing every other
+        perfectly orderable item along with it. It must instead be dropped
+        and reported via unavailable_products, with everything else priced.
+        """
+        s = make_supplier("s", minimum_order=0)
+        set_price(s, self.tomato, "1.00")
+        onion = make_product("onion, no supplier")
+
+        result = suggest_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+            {"product": onion, "quantity": Decimal("3")},
+        ])
+
+        self.assertEqual(result["unavailable_products"], ["onion, no supplier"])
+        cheapest_names = [p["product_name"] for p in result["cheapest"]["products"]]
+        self.assertEqual(cheapest_names, ["tomato"])
+        fewest_names = [p["product_name"] for p in result["fewest_suppliers"]["products"]]
+        self.assertEqual(fewest_names, ["tomato"])
+
+    def test_all_products_unavailable_still_raises(self):
+        """No product at all can be priced -> still a hard error, nothing to offer."""
+        onion = make_product("onion, no supplier")
+        with self.assertRaises(ValueError):
+            suggest_order(self.user, Region.CENTER, [
+                {"product": onion, "quantity": Decimal("3")},
+            ])
+
+    def test_available_products_key_present_and_empty_when_nothing_missing(self):
+        s = make_supplier("s", minimum_order=0)
+        set_price(s, self.tomato, "1.00")
+
+        result = suggest_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("5")},
+        ])
+
+        self.assertEqual(result["unavailable_products"], [])
+
 
 class ModelValidatorTests(TestCase):
     """Tests for model-level MinValueValidator constraints."""

@@ -333,6 +333,39 @@ class UserNewOrderFlowTests(TestCase):
         msg = mock_send.call_args[0][1]
         self.assertNotIn("לא רשום", msg)
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_one_unavailable_product_does_not_block_the_rest(self, mock_parse, mock_send):
+        """
+        Regression: a single product with zero suppliers in the region used
+        to fail the ENTIRE order (suggest_order -> ValueError), losing every
+        other perfectly orderable item along with it. The rest must still
+        be offered, with the unavailable one reported alongside it.
+        """
+        onion = make_product("בצל")  # deliberately no SupplierProduct at all
+        make_user_with_profile(phone="+972505555555")
+        mock_parse.return_value = [
+            {"product_name": "עגבניה", "quantity": Decimal("5")},
+            {"product_name": "בצל", "quantity": Decimal("3")},
+            {"product_name": "גזר", "quantity": Decimal("10")},
+        ]
+
+        self._post("+972505555555", "5 עגבניה, 3 בצל, 10 גזר")
+        _flush_draft("+972505555555")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("עגבניה", msg)
+        self.assertIn("גזר", msg)
+        self.assertIn("בצל", msg)
+        self.assertIn("אין ספק שיכול לספק", msg)
+        # The rest still priced and offered — not the generic hard-fail message.
+        self.assertIn("₪", msg)
+
+        cached = json.loads(cache.get("whatsapp_order:+972505555555"))
+        cached_product_ids = {p["product_id"] for p in cached["products"]}
+        self.assertNotIn(onion.id, cached_product_ids)
+        self.assertEqual(cached_product_ids, {self.tomato.id, self.carrot.id})
+
 
 # ─────────────────────── User: confirmation flow ───────────────────────
 
@@ -562,6 +595,41 @@ class MinimumScenarioFilteringTests(TestCase):
 
         data = json.loads(cache.get("whatsapp_order:+972506666666"))
         self.assertEqual(data["single_scenario"], "cheapest")
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_same_price_scenarios_still_checked_for_minimum(self, mock_suggest, mock_parse, mock_send):
+        """
+        Regression: cheapest and fewest_suppliers ending up at the exact same
+        total price (the common case — one dominant supplier for everything)
+        used to take the single-confirm shortcut unconditionally, without
+        ever checking whether that shared total actually clears its
+        supplier's minimum. The customer got a bare "✅ ... ענה אישור" and
+        only found out it would be rejected after replying, losing the whole
+        basket with no grace period — see _handle_user_flow's dead-code-ish
+        scenario_issues safety net, which this bug is what actually reached.
+        """
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("20.00", supplier_name="ספק גדול"),
+            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
+            "minimum_issues": {
+                "cheapest": _issue("ספק גדול"),
+                "fewest_suppliers": _issue("ספק גדול"),
+            },
+        }
+
+        self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("⛔", msg)
+        self.assertNotIn("ענה *אישור*", msg)
+        # Same as the "both fail minimum" path elsewhere — held as a draft
+        # with a grace window, not silently confirmable, and no stale
+        # whatsapp_order cache waiting to fool the old scenario_issues check.
+        self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
 
     @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")

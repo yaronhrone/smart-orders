@@ -333,9 +333,28 @@ def _suggest_and_respond(
     cheapest = result["cheapest"]
     fewest = result["fewest_suppliers"]
     minimum_issues = result.get("minimum_issues", {})
+    unavailable_products = result.get("unavailable_products", [])
     cheapest_issues = minimum_issues.get("cheapest", [])
     fewest_issues = minimum_issues.get("fewest_suppliers", [])
-    same = cheapest["total_price"] == fewest["total_price"]
+    both_ok = not cheapest_issues and not fewest_issues
+    # same_price used to gate the single-confirm shortcut on its own —
+    # true whenever the two scenarios end up identical (the common case:
+    # one dominant supplier), which said nothing about whether that shared
+    # total actually clears its supplier(s)' minimum. That let the shortcut
+    # hand the customer a bare "✅ ... ענה אישור" even when it wouldn't
+    # clear, discovering + dropping the whole thing (no grace period,
+    # old-style) only once they replied — see _handle_user_flow's
+    # scenario_issues check. Now only takes the shortcut when it's also
+    # actually orderable.
+    same_price = cheapest["total_price"] == fewest["total_price"]
+    same = same_price and both_ok
+
+    # A product with no supplier at all doesn't kill the rest of a perfectly
+    # orderable basket — suggest_order already dropped it from both
+    # scenarios; drop it here too so a later "אישור" doesn't try to build an
+    # order against a product no supplier can actually fulfill.
+    if unavailable_products:
+        products = [p for p in products if p["product"].name not in unavailable_products]
 
     pending_kwargs = dict(
         products=[{"product_id": p["product"].id, "quantity": str(p["quantity"])} for p in products],
@@ -344,9 +363,9 @@ def _suggest_and_respond(
         minimum_issues=minimum_issues,
     )
 
-    if same or (not cheapest_issues and not fewest_issues):
-        # Either there's only one real scenario, or both pass the minimum —
-        # offer the choice (or the single option) exactly as before.
+    if both_ok:
+        # Both scenarios clear their suppliers' minimums — offer the choice
+        # (or, if the prices happen to be identical, the single option).
         save_pending_order(phone, cheapest, fewest, **pending_kwargs)
         if same:
             msg = _format_scenario("ההזמנה שלך", cheapest)
@@ -415,6 +434,8 @@ def _suggest_and_respond(
 
     if unrecognized:
         msg += f"\n\n⚠️ לא זוהה: {', '.join(unrecognized)}"
+    if unavailable_products:
+        msg += f"\n\n⚠️ אין ספק שיכול לספק: {', '.join(unavailable_products)} (לא נכלל בהזמנה)"
 
     validators.send_whatsapp_message(phone, msg)
     return HttpResponse(status=200)
