@@ -523,7 +523,24 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         except Exception as exc:
             logger.error("Failed to update order status after supplier confirmation: %s", exc)
 
-    cache.delete(key)
+    # A product neither confirmed nor reported missing - e.g. a shortage
+    # report with no confirm word in the same message ("אין תירס ואבוקדו",
+    # no "שאר אישור") - used to just vanish: has_general_confirm was False,
+    # so it was never in `confirmed`, and the pending cache got cleared
+    # unconditionally below regardless, leaving no way to ever confirm it
+    # afterward. Found live: an order stuck on SENT forever with most of its
+    # items silently unaddressed, no error, no sign anything was wrong.
+    missing_ids = {p["orp_id"] for p in missing}
+    unaddressed = [p for p in products if p["orp_id"] not in confirmed and p["orp_id"] not in missing_ids]
+    if unaddressed:
+        # Keep the pending state alive - trimmed to just what's left - so a
+        # follow-up reply only needs to address the remainder, not repeat
+        # confirming what's already done.
+        save_supplier_pending_order(
+            supplier_phone=phone, order_request_id=order_request_id, products=unaddressed,
+        )
+    else:
+        cache.delete(key)
 
     # Parse optional cutoff time
     cutoff_time = _parse_supplier_cutoff(body)
@@ -545,15 +562,32 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 ack_lines.append(f"  ✅ {p['product_name']} x{c_qty} {p['unit']}")
         elif p in missing:
             ack_lines.append(f"  ❌ {p['product_name']} — חסר")
+        else:
+            # Neither confirmed nor reported missing — used to just vanish
+            # from the ack entirely, with no way to confirm it afterward
+            # (the pending cache was always cleared below regardless). See
+            # the `unaddressed` handling above.
+            ack_lines.append(f"  ⏳ {p['product_name']} — טרם אושר")
     if missing:
         ack_lines.append(
             "\n🚫 סימנו את המוצרים החסרים כלא זמינים אצלך — הם לא יוצעו בהזמנות חדשות. "
             "שלח לנו מחיר מעודכן כשהם חוזרים למלאי."
         )
+    if unaddressed:
+        unaddressed_names = ", ".join(p["product_name"] for p in unaddressed)
+        ack_lines.append(
+            f"\n❓ עדיין לא ענית לגבי: {unaddressed_names}. שלח *אישור* לאישור שלהם, "
+            f"או *חסר {unaddressed[0]['product_name']}* אם משהו מהם לא זמין."
+        )
     if cutoff_time:
         ack_lines.append(f"\n⏰ שינויים מתקבלים עד {cutoff_time.strftime('%H:%M')}")
     if eta_time:
         ack_lines.append(f"\n🚚 עדכנו את הלקוח שההזמנה צפויה להגיע עד {eta_time.strftime('%H:%M')}")
+    if not missing and not unaddressed and not partial_products:
+        # Nothing left to do on this order right now — let the supplier know
+        # the "shipped" update exists at all; SHIPPING_KEYWORDS is otherwise
+        # a completely undocumented feature nobody would discover on their own.
+        ack_lines.append('\n📦 כשההזמנה יוצאת אליכם לדרך, אפשר לשלוח "יצא למשלוח" ונעדכן את הלקוח.')
     validators.send_whatsapp_message(phone, "\n".join(ack_lines))
 
     # Notify customer about confirmed items
