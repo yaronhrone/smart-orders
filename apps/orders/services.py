@@ -6,10 +6,27 @@ from apps.orders.models import OrderRequest, OrderRequestProduct
 
 
 def suggest_order(user, region, products):
+    """
+    Raises ValueError only when NOTHING requested can be priced at all. A
+    product with no supplier in the region is instead dropped and reported
+    back via "unavailable_products" — one bad item used to take the whole
+    basket down with it (_build_initial_assignments raising for the full
+    `products` list), losing every other perfectly orderable item along
+    with it. suggest_order itself never saw a partial list before; it
+    computes availability once here and only ever hands _assign_suppliers /
+    _assign_fewest_suppliers the products that can actually be priced, so
+    neither of those (or their own tested behavior) needs to change.
+    """
     suppliers = _get_available_suppliers(user, region)
     price_options = _get_price_options(products, suppliers)
-    cheapest = _assign_suppliers(products, user, region, suppliers, price_options)
-    fewest = _assign_fewest_suppliers(products, user, region, suppliers, price_options)
+
+    unavailable = [p["product"].name for p in products if not price_options.get(p["product"].id)]
+    available = [p for p in products if price_options.get(p["product"].id)]
+    if not available:
+        raise ValueError(f"אין ספק שיכול לספק: {', '.join(unavailable)}")
+
+    cheapest = _assign_suppliers(available, user, region, suppliers, price_options)
+    fewest = _assign_fewest_suppliers(available, user, region, suppliers, price_options)
     return {
         "cheapest": _assignments_to_scenario(cheapest, "cheapest"),
         "fewest_suppliers": _assignments_to_scenario(fewest, "fewest_suppliers"),
@@ -17,6 +34,7 @@ def suggest_order(user, region, products):
             "cheapest": _check_missing_minimum(cheapest),
             "fewest_suppliers": _check_missing_minimum(fewest),
         },
+        "unavailable_products": unavailable,
     }
 
 
