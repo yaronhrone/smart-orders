@@ -110,6 +110,58 @@ class AmbiguousProductTests(TestCase):
         self.assertEqual(resolved, [])
         self.assertEqual(still_ambiguous, ambiguous)
 
+    def test_resolve_clarification_positional_pairing_avoids_cross_match(self):
+        """
+        Regression, found live: "ירוק" is a valid variant for BOTH onion and
+        pepper. Answering two questions in one reply ("ירוק, כתום" - green
+        onion, orange pepper) used to search the WHOLE reply for each item's
+        candidates independently, so the pepper's own search also found
+        "ירוק" (meant for the onion) and matched "פלפל ירוק" instead of the
+        intended "פלפל כתום". Positional pairing scopes each answer to its
+        own question.
+        """
+        ambiguous = [
+            {
+                "query": "בצל", "quantity": "30",
+                "candidates": ["בצל סגול קלוף", "בצל שאלוט", "בצל סגול", "בצל לבן קלוף", "בצל ירוק", "בצל לבן"],
+            },
+            {
+                "query": "פלפל", "quantity": "20",
+                "candidates": ["פלפל צ'ילי", "פלפל חריף", "פלפל צהוב", "פלפל ירוק", "פלפל אדום", "פלפל כתום"],
+            },
+        ]
+        resolved, still_ambiguous = resolve_clarification("ירוק, כתום", ambiguous)
+        self.assertEqual(still_ambiguous, [])
+        self.assertEqual(
+            {r["product_name"] for r in resolved}, {"בצל ירוק", "פלפל כתום"}
+        )
+
+    def test_resolve_clarification_positional_pairing_three_items_in_order(self):
+        ambiguous = [
+            {"query": "פלפל", "quantity": "20", "candidates": ["פלפל אדום", "פלפל כתום"]},
+            {"query": "בצל", "quantity": "30", "candidates": ["בצל לבן", "בצל ירוק"]},
+            {"query": "חסה", "quantity": "40", "candidates": ["חסה קיסר", "חסה רומית"]},
+        ]
+        resolved, still_ambiguous = resolve_clarification("כתום, לבן, קיסר", ambiguous)
+        self.assertEqual(still_ambiguous, [])
+        names_by_quantity = {r["quantity"]: r["product_name"] for r in resolved}
+        self.assertEqual(names_by_quantity["20"], "פלפל כתום")
+        self.assertEqual(names_by_quantity["30"], "בצל לבן")
+        self.assertEqual(names_by_quantity["40"], "חסה קיסר")
+
+    def test_resolve_clarification_falls_back_to_whole_reply_when_part_count_differs(self):
+        """A reply that doesn't segment into exactly one part per question still resolves via the old best-effort search."""
+        ambiguous = [
+            {"query": "בצל", "quantity": "30", "candidates": ["בצל לבן", "בצל ירוק"]},
+            {"query": "פלפל", "quantity": "20", "candidates": ["פלפל אדום", "פלפל כתום"]},
+        ]
+        # One combined phrase, no comma/newline separator -> single part, count mismatch.
+        resolved, still_ambiguous = resolve_clarification("לבן ואדום", ambiguous)
+        self.assertEqual(still_ambiguous, [])
+        self.assertEqual(
+            {r["product_name"] for r in resolved}, {"בצל לבן", "פלפל אדום"}
+        )
+
     def test_list_ambiguous_families_groups_by_shared_root(self):
         families = list_ambiguous_families(self.KNOWN)
         self.assertEqual(
