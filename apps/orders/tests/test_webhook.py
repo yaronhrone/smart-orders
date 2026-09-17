@@ -1188,6 +1188,63 @@ class SupplierConfirmationFlowTests(TestCase):
         self.assertIsNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_shortage_report_without_confirm_word_keeps_the_rest_pending(self, mock_send):
+        """
+        Regression, found live: a supplier reporting a shortage with no
+        explicit confirm word in the same message ("חסר גזר", no "שאר
+        אישור") used to leave the OTHER item neither confirmed nor missing —
+        and since the pending cache was cleared unconditionally regardless,
+        there was no way to ever confirm it afterward. The order stayed
+        SENT forever with no sign anything was still needed.
+        """
+        self._post_supplier("חסר גזר")
+
+        # Tomato is neither confirmed nor missing yet.
+        self.assertFalse(
+            SupplierConfirmation.objects.filter(order_request_product=self.orp1).exists()
+        )
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+
+        ack = mock_send.call_args_list[0][0][1]
+        self.assertIn("טרם אושר", ack)
+        self.assertIn("עגבניה", ack)
+
+        # The pending state must still be alive, trimmed to just the tomato,
+        # so a follow-up reply can actually confirm it.
+        pending = cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}")
+        self.assertIsNotNone(pending)
+        self.assertEqual(json.loads(pending)["products"], [
+            {"orp_id": self.orp1.id, "product_name": "עגבניה", "quantity": "20", "unit": 'ק"ג'}
+        ])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_shortage_then_followup_confirm_completes_the_order(self, mock_send):
+        """The follow-up reply left possible by the fix above actually finishes the order."""
+        self._post_supplier("חסר גזר")
+
+        self._post_supplier("אישור")
+
+        self.assertTrue(
+            SupplierConfirmation.objects.filter(order_request_product=self.orp1).exists()
+        )
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+        self.assertIsNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_full_confirmation_mentions_shipping_keyword(self, mock_send):
+        """
+        Nothing told a supplier the "יצא למשלוח" feature exists at all once
+        an order is fully confirmed — it's otherwise a completely
+        undocumented keyword.
+        """
+        self._post_supplier("אישור")
+
+        ack = mock_send.call_args_list[0][0][1]
+        self.assertIn("יצא למשלוח", ack)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_partial_confirmation_by_name(self, mock_send):
         """Partial reply (name: quantity) creates SupplierConfirmation only for matched products."""
         self._post_supplier("עגבניה: 18")
