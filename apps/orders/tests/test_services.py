@@ -5,8 +5,8 @@ from django.contrib.auth import get_user_model
 
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import OrderRequest
-from apps.orders.services import build_order, suggest_order
+from apps.orders.models import OrderRequest, OrderRequestProduct
+from apps.orders.services import build_order, find_fallback_for_product, suggest_order
 
 User = get_user_model()
 
@@ -493,3 +493,62 @@ class ModelValidatorTests(TestCase):
         )
         with self.assertRaises(ValidationError):
             s.full_clean()
+
+
+class FindFallbackForProductTests(TestCase):
+    """
+    find_fallback_for_product picks an alternative supplier for one product
+    a supplier reported missing/short on. Prefers a supplier already
+    carrying other items on this same order over the single cheapest
+    candidate overall.
+    """
+
+    def setUp(self):
+        self.user = make_user()
+        self.tomato = make_product("tomato")
+        self.other_product = make_product("carrot")
+        self.failing = make_supplier("failing", minimum_order=0)
+        self.order = OrderRequest.objects.create(user=self.user, total_price="0", status=OrderRequest.Status.SENT)
+
+    def test_picks_cheapest_when_none_already_on_order(self):
+        cheap = make_supplier("cheap")
+        pricier = make_supplier("pricier")
+        set_price(cheap, self.tomato, "5.00")
+        set_price(pricier, self.tomato, "6.00")
+
+        result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
+
+        self.assertEqual(result["supplier"], cheap)
+
+    def test_prefers_supplier_already_on_the_order_over_cheaper_stranger(self):
+        """
+        Regression: used to always take the single cheapest candidate,
+        opening a brand-new supplier relationship for one item even when a
+        supplier already carrying other items on this order could carry it
+        too, just slightly pricier.
+        """
+        already_on_order = make_supplier("already on order")
+        cheaper_stranger = make_supplier("cheaper stranger")
+        set_price(already_on_order, self.tomato, "6.00")
+        set_price(cheaper_stranger, self.tomato, "5.00")
+        OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.other_product, supplier=already_on_order,
+            quantity="1", unit_price="1.00",
+        )
+
+        result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
+
+        self.assertEqual(result["supplier"], already_on_order)
+
+    def test_no_candidates_returns_none(self):
+        result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
+        self.assertIsNone(result)
+
+    def test_excludes_the_failing_supplier_itself(self):
+        set_price(self.failing, self.tomato, "1.00")  # would be cheapest if not excluded
+        other = make_supplier("other")
+        set_price(other, self.tomato, "9.00")
+
+        result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
+
+        self.assertEqual(result["supplier"], other)
