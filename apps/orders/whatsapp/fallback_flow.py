@@ -227,12 +227,33 @@ def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
 
 def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
     """Customer declined fallback — remove the missing products and check remaining minimums."""
+    from apps.catalog.models import Supplier
     from apps.orders.models import OrderRequestProduct
 
     _clear_fallback_state(phone)
 
     order_request_id = state["order_request_id"]
     redirects = state["redirects"]
+
+    # The supplier who reported the shortage in the first place never heard
+    # back at all before - they confirmed what they had and then silence,
+    # whichever way the customer's decision went. Tell them what the
+    # customer settled for, grouped per supplier in case more than one
+    # reported something in the same round.
+    by_original_supplier = defaultdict(list)
+    for r in redirects:
+        by_original_supplier[r["original_supplier_id"]].append(r)
+    for supplier_id, items in by_original_supplier.items():
+        supplier = Supplier.objects.filter(id=supplier_id).first()
+        if not supplier:
+            continue
+        lines = [f"עדכון להזמנה #{order_request_id} — הלקוח החליט שלא להעביר לספק חלופי:"]
+        for r in items:
+            if r.get("type") == "partial":
+                lines.append(f"  • {r['product_name']} — נשאר על הכמות שאישרת, היתרה לא תוזמן.")
+            else:
+                lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} — הוסר מההזמנה.")
+        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(lines))
 
     removed_lines = []
     affected_supplier_ids = set()
@@ -372,8 +393,6 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     from apps.catalog.models import Supplier
     from apps.orders.models import OrderRequest, OrderRequestProduct
 
-    _clear_fallback_state(phone)
-
     order_request_id = state["order_request_id"]
     redirects = state["redirects"]
 
@@ -383,6 +402,17 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
 
     success_lines = []
     below_minimum_msgs = []
+    # Redirects that couldn't actually be transferred this round (their
+    # target's minimum still isn't met) — used to just vanish along with
+    # the state clear below, regardless of outcome. Found live: a customer
+    # who answered "כן" to a fallback offer that still didn't clear minimum
+    # got told so, but the pending state was already gone by then — no way
+    # left to retry "כן" after adding more products, or to say "לא" and
+    # settle for what the original supplier could provide. The item's
+    # shortfall then had NO record anywhere: no ORP for it, no cancellation
+    # line, nothing — the order went on to silently auto-approve at the
+    # reduced quantity as if that had been the whole order all along.
+    unresolved_redirects = []
 
     for supplier_id, items in by_supplier.items():
         try:
@@ -408,6 +438,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
                 f"⛔ {supplier.name}: סה\"כ {new_total:.2f}₪, חסר {missing_amount:.2f}₪ למינימום ({supplier.minimum_order}₪)\n"
                 f"   הוסף מוצרים נוספים מ-{supplier.name} כדי לעמוד במינימום."
             )
+            unresolved_redirects.extend(items)
             continue  # Skip this supplier — don't update DB or send message
 
         # Update DB and collect items for supplier message
@@ -483,12 +514,26 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     # Edge case 1: recalculate total after all redirect changes
     _recalculate_order_total(order_request_id)
 
+    if unresolved_redirects:
+        # Keep the pending state alive — trimmed to just what's still
+        # unresolved — so a later "כן" (after adding more products) or "לא"
+        # (settle for the original supplier's partial quantity / drop the
+        # item) still has something to act on. _save_fallback_state also
+        # reschedules handle_fallback_timeout, restoring the same
+        # eventually-auto-resolves safety net the FIRST offer already had.
+        _save_fallback_state(phone, {**state, "redirects": unresolved_redirects})
+    else:
+        _clear_fallback_state(phone)
+
     reply_parts = []
     if success_lines:
         reply_parts.append("\n".join(["✅ ההעברה בוצעה:"] + success_lines))
     if below_minimum_msgs:
         reply_parts.append(
             "\n".join(["⛔ ההעברה לא בוצעה — הפריט טרם נפתר:"] + below_minimum_msgs)
+        )
+        reply_parts.append(
+            "אפשר לענות שוב *כן* אחרי שתוסיף עוד מוצרים מהספק החלופי, או *לא* לוותר על הפריטים האלה."
         )
     validators.send_whatsapp_message(phone, "\n\n".join(reply_parts))
     return HttpResponse(status=200)

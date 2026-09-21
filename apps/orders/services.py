@@ -552,8 +552,18 @@ def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int)
 
 def find_fallback_for_product(product, excluded_supplier_id: int, order_request_id: int, quantity: Decimal):
     """
-    Find the cheapest alternative supplier for a product a supplier can't fulfill.
+    Find an alternative supplier for a product a supplier can't fulfill.
     Returns {"supplier", "price", "minimum_met", "missing_amount"} or None.
+
+    Prefers a supplier already carrying other items on this SAME order, even
+    at a slightly higher price, over the single cheapest candidate overall —
+    avoids opening a brand-new supplier relationship (another minimum to
+    clear, another WhatsApp contact) for one redirected item when an
+    existing one could just absorb it. Used to always take candidates[0]
+    (cheapest, full stop) regardless of who was already involved in the
+    order — found live: a supplier already on the order carried the missing
+    product too, just ₪1.23 pricier, and got skipped entirely in favor of a
+    supplier with no other relationship to this order at all.
     """
     from apps.orders.models import OrderRequestProduct
 
@@ -569,27 +579,29 @@ def find_fallback_for_product(product, excluded_supplier_id: int, order_request_
     )
     if customer_region:
         sp_qs = sp_qs.filter(supplier__region=customer_region)
-    candidates = sp_qs
+    candidates = list(sp_qs)
 
-    if not candidates.exists():
+    if not candidates:
         return None
 
     existing_totals = defaultdict(Decimal)
     for orp in OrderRequestProduct.objects.filter(order_request_id=order_request_id).select_related("supplier"):
         existing_totals[orp.supplier_id] += orp.quantity * orp.unit_price
 
-    for sp in candidates:
-        supplier = sp.supplier
-        price = sp.price_per_unit
-        existing = existing_totals.get(supplier.id, Decimal(0))
-        new_total = existing + quantity * price
-        minimum_met = new_total >= supplier.minimum_order
-        missing_amount = max(Decimal(0), supplier.minimum_order - new_total)
-        return {
-            "supplier": supplier,
-            "price": price,
-            "minimum_met": minimum_met,
-            "missing_amount": missing_amount,
-        }
+    already_on_order = [sp for sp in candidates if existing_totals.get(sp.supplier_id, Decimal(0)) > 0]
+    sp = (already_on_order or candidates)[0]  # already price-ordered by the query
+
+    supplier = sp.supplier
+    price = sp.price_per_unit
+    existing = existing_totals.get(supplier.id, Decimal(0))
+    new_total = existing + quantity * price
+    minimum_met = new_total >= supplier.minimum_order
+    missing_amount = max(Decimal(0), supplier.minimum_order - new_total)
+    return {
+        "supplier": supplier,
+        "price": price,
+        "minimum_met": minimum_met,
+        "missing_amount": missing_amount,
+    }
 
     return None

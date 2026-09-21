@@ -1727,3 +1727,105 @@ class ShippingAndDeliveryChainTests(TestCase):
         self._post_supplier("נשלח")
 
         mock_update.assert_called_once()
+
+
+# ─────────────────────── Fallback flow (missing/partial items) ─────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class FallbackFlowTests(TestCase):
+    """
+    A supplier reports a product missing/partial -> the system offers a
+    fallback supplier -> customer answers כן/לא. `_handle_missing_items` is
+    called directly (bypassing `_parse_supplier_reply`) since these tests
+    are about what happens AFTER a shortage is detected, not about
+    detecting one.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.supplier_a = make_supplier("ספק א", minimum_order=0)
+        self.supplier_b = make_supplier("ספק ב", minimum_order=1000)
+        SupplierProduct.objects.create(supplier=self.supplier_a, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.supplier_b, product=self.tomato, price_per_unit="6.00")
+        self.customer_phone = "+972509999999"
+        self.user = make_user_with_profile(phone=self.customer_phone)
+        self.order = OrderRequest.objects.create(
+            user=self.user, status=OrderRequest.Status.SENT, total_price="50.00"
+        )
+        self.orp = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.supplier_a,
+            quantity="10", unit_price="5.00",
+        )
+
+    def _report_missing(self):
+        from apps.orders.whatsapp.fallback_flow import _handle_missing_items
+        _handle_missing_items(
+            self.supplier_a,
+            [{"orp_id": self.orp.id, "product_name": "עגבניה", "quantity": "10", "unit": 'ק"ג'}],
+            self.order.id,
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_missing_item_offers_fallback_and_saves_state(self, mock_send):
+        self._report_missing()
+
+        self.assertIsNotNone(cache.get(f"whatsapp_fallback:{self.customer_phone}"))
+        msg = mock_send.call_args[0][1]
+        self.assertIn("ספק ב", msg)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_failed_transfer_keeps_state_alive_for_retry(self, mock_send):
+        """
+        Regression, found live: the fallback pending state used to be
+        cleared unconditionally regardless of whether the transfer actually
+        succeeded — a customer whose "כן" failed on minimum had no way back
+        to retry or answer "לא" afterward, and the shortfall silently had
+        no record anywhere while the order went on to auto-approve as if
+        the reduced quantity had been the whole order all along.
+        """
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        self._report_missing()
+
+        resp = _handle_fallback_approval(self.customer_phone, "כן")
+
+        self.assertIsNotNone(resp)
+        msg = mock_send.call_args[0][1]
+        self.assertIn("לא בוצעה", msg)
+        # The actual regression check — state must still be alive.
+        self.assertIsNotNone(cache.get(f"whatsapp_fallback:{self.customer_phone}"))
+        # Nothing moved — still assigned to the original supplier.
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.supplier, self.supplier_a)
+
+        # A second reply must still be recognized — not return None like live.
+        resp2 = _handle_fallback_approval(self.customer_phone, "לא")
+        self.assertIsNotNone(resp2)
+        self.assertFalse(OrderRequestProduct.objects.filter(id=self.orp.id).exists())
+        self.assertIsNone(cache.get(f"whatsapp_fallback:{self.customer_phone}"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_declining_notifies_original_supplier(self, mock_send):
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        self._report_missing()
+        mock_send.reset_mock()
+
+        _handle_fallback_approval(self.customer_phone, "לא")
+
+        supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier_a.whatsapp_number]
+        self.assertEqual(len(supplier_calls), 1)
+        self.assertIn("עגבניה", supplier_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_successful_transfer_still_clears_state(self, mock_send):
+        """Regression guard the other way — a genuinely successful transfer must still clear state as before."""
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        self.supplier_b.minimum_order = Decimal("10.00")
+        self.supplier_b.save(update_fields=["minimum_order"])
+        self._report_missing()
+
+        _handle_fallback_approval(self.customer_phone, "כן")
+
+        self.assertIsNone(cache.get(f"whatsapp_fallback:{self.customer_phone}"))
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.supplier, self.supplier_b)
