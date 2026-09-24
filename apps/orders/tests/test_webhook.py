@@ -1298,6 +1298,143 @@ class SupplierConfirmationFlowTests(TestCase):
             self.assertNotIn("צפויה", call[0][1])
 
 
+# ─────────────────────── Supplier: cancellation flow ───────────────────────
+
+@override_settings(
+    CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True,
+    ADMIN_WHATSAPP_NUMBER="+972500000000",
+)
+class SupplierCancellationFlowTests(TestCase):
+    """
+    A supplier replying with a cancel keyword ("ביטול" etc.) to its pending
+    order must: (1) get rerouted onto whichever other supplier(s) are
+    cheapest, split across more than one if that's what it takes — not just
+    a single all-or-nothing replacement; (2) block the cancelling supplier
+    from new assignments for 10 days; (3) alert the admin; and only when
+    NOTHING can be rerouted, cancel the order outright.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.user = make_user_with_profile()
+        self.tomato = make_product("עגבניה")
+        self.carrot = make_product("גזר")
+        self.supplier = make_supplier("ספק א")
+        self.order = OrderRequest.objects.create(
+            user=self.user, total_price="100.00", status=OrderRequest.Status.SENT,
+        )
+        self.orp1 = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.supplier,
+            quantity="20", unit_price="5.00",
+        )
+        self.orp2 = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.carrot, supplier=self.supplier,
+            quantity="15", unit_price="3.00",
+        )
+        save_supplier_pending_order(
+            supplier_phone=self.supplier.whatsapp_number,
+            order_request_id=self.order.id,
+            products=[
+                {"orp_id": self.orp1.id, "product_name": "עגבניה", "quantity": "20", "unit": 'ק"ג'},
+                {"orp_id": self.orp2.id, "product_name": "גזר", "quantity": "15", "unit": 'ק"ג'},
+            ],
+        )
+
+    def _post_supplier(self, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier.whatsapp_number}",
+            "Body": body,
+        })
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_single_replacement_supplier_gets_everything(self, mock_send):
+        replacement = make_supplier("מחליף")
+        SupplierProduct.objects.create(supplier=replacement, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=replacement, product=self.carrot, price_per_unit="4.00")
+
+        self._post_supplier("ביטול")
+
+        self.orp1.refresh_from_db()
+        self.orp2.refresh_from_db()
+        self.assertEqual(self.orp1.supplier, replacement)
+        self.assertEqual(self.orp2.supplier, replacement)
+        self.order.refresh_from_db()
+        self.assertNotEqual(self.order.status, OrderRequest.Status.CANCELLED)
+
+        # New supplier got its own order message + pending state.
+        replacement_calls = [c for c in mock_send.call_args_list if c[0][0] == replacement.whatsapp_number]
+        self.assertEqual(len(replacement_calls), 1)
+        self.assertIsNotNone(cache.get(f"whatsapp_supplier_pending:{replacement.whatsapp_number}"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_splits_across_two_suppliers_when_no_single_one_covers_both(self, mock_send):
+        tomato_only = make_supplier("רק עגבניה")
+        carrot_only = make_supplier("רק גזר")
+        SupplierProduct.objects.create(supplier=tomato_only, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=carrot_only, product=self.carrot, price_per_unit="4.00")
+
+        self._post_supplier("ביטול")
+
+        self.orp1.refresh_from_db()
+        self.orp2.refresh_from_db()
+        self.assertEqual(self.orp1.supplier, tomato_only)
+        self.assertEqual(self.orp2.supplier, carrot_only)
+
+        self.assertIsNotNone(cache.get(f"whatsapp_supplier_pending:{tomato_only.whatsapp_number}"))
+        self.assertIsNotNone(cache.get(f"whatsapp_supplier_pending:{carrot_only.whatsapp_number}"))
+
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972501234567"]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn(tomato_only.name, customer_calls[0][0][1])
+        self.assertIn(carrot_only.name, customer_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_no_replacement_at_all_cancels_the_order(self, mock_send):
+        self._post_supplier("ביטול")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972501234567"]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn("לא נמצא ספק חלופי", customer_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_cancelling_supplier_is_blocked_for_ten_days(self, mock_send):
+        before = django_timezone.now()
+        self._post_supplier("ביטול")
+
+        self.supplier.refresh_from_db()
+        self.assertIsNotNone(self.supplier.blocked_until)
+        self.assertGreater(self.supplier.blocked_until, before + timedelta(days=9))
+        self.assertLess(self.supplier.blocked_until, before + timedelta(days=11))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_admin_is_notified(self, mock_send):
+        self._post_supplier("ביטול")
+
+        admin_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972500000000"]
+        self.assertEqual(len(admin_calls), 1)
+        self.assertIn(self.supplier.name, admin_calls[0][0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_blocked_supplier_is_not_chosen_as_replacement_even_if_cheapest(self, mock_send):
+        blocked = make_supplier("חסום")
+        SupplierProduct.objects.create(supplier=blocked, product=self.tomato, price_per_unit="1.00")
+        SupplierProduct.objects.create(supplier=blocked, product=self.carrot, price_per_unit="1.00")
+        blocked.blocked_until = django_timezone.now() + timedelta(days=3)
+        blocked.save(update_fields=["blocked_until"])
+        pricier_available = make_supplier("זמין")
+        SupplierProduct.objects.create(supplier=pricier_available, product=self.tomato, price_per_unit="9.00")
+        SupplierProduct.objects.create(supplier=pricier_available, product=self.carrot, price_per_unit="9.00")
+
+        self._post_supplier("ביטול")
+
+        self.orp1.refresh_from_db()
+        self.orp2.refresh_from_db()
+        self.assertEqual(self.orp1.supplier, pricier_available)
+        self.assertEqual(self.orp2.supplier, pricier_available)
+
+
 # ─────────────────────── Supplier: price update flow ───────────────────────
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)

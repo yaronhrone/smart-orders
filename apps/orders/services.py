@@ -1,6 +1,8 @@
 from decimal import Decimal
 from collections import defaultdict
 from urllib.parse import quote
+from django.db.models import Q
+from django.utils import timezone
 from apps.catalog.models import SupplierProduct, Supplier
 from apps.orders.models import OrderRequest, OrderRequestProduct
 
@@ -104,8 +106,17 @@ def _validate_all_products_present(assignments, products):
         raise ValueError("חלק מהמוצרים לא שובצו לספק")
 
 
-def _get_available_suppliers(user, region):
-    return Supplier.objects.filter(region=region)
+def _get_available_suppliers(user, region, exclude_supplier_ids=None):
+    """Suppliers eligible for a NEW assignment: right region, not currently
+    blocked (see `blocked_until` — set for 10 days after a supplier cancels
+    an order), and not explicitly excluded by the caller (e.g. the supplier
+    that just cancelled, on top of its own block)."""
+    qs = Supplier.objects.filter(region=region).filter(
+        Q(blocked_until__isnull=True) | Q(blocked_until__lt=timezone.now())
+    )
+    if exclude_supplier_ids:
+        qs = qs.exclude(id__in=exclude_supplier_ids)
+    return qs
 
 
 def _get_price_options(products, suppliers):
@@ -548,6 +559,51 @@ def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int)
 
     scored.sort(key=lambda x: (not x["minimum_met"], x["redirect_total"]))
     return scored[0]
+
+
+def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_id: int):
+    """
+    A supplier cancelled its whole share of an order. Re-run the same
+    cheapest-assignment algorithm used at order placement (`_assign_suppliers`)
+    on just that supplier's items, with it excluded from the candidate pool
+    (on top of its own 10-day `blocked_until`, set by the caller before this
+    runs) — so, unlike `find_full_coverage_fallback`, this is NOT all-or-nothing
+    against a single replacement supplier: if the cheapest solution splits the
+    items across two or more suppliers, that's what comes back.
+
+    Returns {"assignments": [...], "unavailable": [names...]}. Each assignment
+    is the same dict shape _assign_suppliers produces, plus the original `orp`
+    it replaces. "unavailable" lists product names no other supplier in the
+    region carries at all — left untouched by the caller (still pointing at
+    the failing supplier) since there's nowhere to move them.
+    """
+    order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+    region = getattr(getattr(order.user, "profile", None), "region", None)
+
+    orps = list(
+        OrderRequestProduct.objects
+        .filter(order_request_id=order_request_id, supplier_id=failing_supplier_id)
+        .select_related("product")
+    )
+    if not orps:
+        return {"assignments": [], "unavailable": []}
+
+    products = [{"product": orp.product, "quantity": orp.quantity} for orp in orps]
+    suppliers = _get_available_suppliers(order.user, region, exclude_supplier_ids=[failing_supplier_id])
+    price_options = _get_price_options(products, suppliers)
+
+    unavailable = [p["product"].name for p in products if not price_options.get(p["product"].id)]
+    available = [p for p in products if price_options.get(p["product"].id)]
+    if not available:
+        return {"assignments": [], "unavailable": unavailable}
+
+    assignments = _assign_suppliers(available, order.user, region, suppliers, price_options)
+
+    orp_by_product_id = {orp.product_id: orp for orp in orps}
+    for a in assignments:
+        a["orp"] = orp_by_product_id[a["product"].id]
+
+    return {"assignments": assignments, "unavailable": unavailable}
 
 
 def find_fallback_for_product(product, excluded_supplier_id: int, order_request_id: int, quantity: Decimal):

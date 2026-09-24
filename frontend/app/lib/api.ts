@@ -389,6 +389,7 @@ export interface SupplierWithProducts {
   whatsapp_number: string;
   region: string;
   minimum_order: string;
+  blocked_until: string | null;
   products: SupplierProduct[];
 }
 
@@ -419,6 +420,16 @@ export async function updateSupplier(id: number, data: Partial<CreateSupplierPay
   return request<SupplierWithProducts>(`/api/catalog/suppliers/${id}/`, {
     method: "PATCH",
     body: JSON.stringify(data),
+  });
+}
+
+// Lifts the 10-day block set automatically when a supplier cancels an order
+// (see find_reroute_for_cancelled_supplier) — an admin override for when the
+// cancellation turns out to be a one-off, not something to hold against them.
+export async function unblockSupplier(id: number): Promise<SupplierWithProducts> {
+  return request<SupplierWithProducts>(`/api/catalog/suppliers/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ blocked_until: null }),
   });
 }
 

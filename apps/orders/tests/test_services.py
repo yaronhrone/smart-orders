@@ -4,9 +4,15 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 
 
+from django.utils import timezone
+from datetime import timedelta
+
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
+from apps.users.models import Profile
 from apps.orders.models import OrderRequest, OrderRequestProduct
-from apps.orders.services import build_order, find_fallback_for_product, suggest_order
+from apps.orders.services import (
+    build_order, find_fallback_for_product, find_reroute_for_cancelled_supplier, suggest_order,
+)
 
 User = get_user_model()
 
@@ -552,3 +558,109 @@ class FindFallbackForProductTests(TestCase):
         result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
 
         self.assertEqual(result["supplier"], other)
+
+
+class FindRerouteForCancelledSupplierTests(TestCase):
+    """
+    find_reroute_for_cancelled_supplier re-runs the real cheapest-assignment
+    algorithm on a cancelling supplier's items, excluding it — unlike
+    find_full_coverage_fallback (single replacement supplier, all-or-nothing),
+    this can split the items across several suppliers.
+    """
+
+    def setUp(self):
+        self.user = make_user()
+        Profile.objects.create(user=self.user, region=Region.CENTER)
+        self.tomato = make_product("tomato")
+        self.cucumber = make_product("cucumber")
+        self.failing = make_supplier("failing", minimum_order=0)
+        self.order = OrderRequest.objects.create(user=self.user, total_price="0", status=OrderRequest.Status.SENT)
+
+    def _give_failing_supplier(self, product, quantity):
+        set_price(self.failing, product, "1.00")  # price doesn't matter, only presence
+        return OrderRequestProduct.objects.create(
+            order_request=self.order, product=product, supplier=self.failing,
+            quantity=quantity, unit_price="1.00",
+        )
+
+    def test_single_replacement_covers_everything(self):
+        self._give_failing_supplier(self.tomato, "10")
+        self._give_failing_supplier(self.cucumber, "5")
+        replacement = make_supplier("replacement")
+        set_price(replacement, self.tomato, "2.00")
+        set_price(replacement, self.cucumber, "3.00")
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        self.assertEqual(result["unavailable"], [])
+        suppliers_used = {a["supplier"].id for a in result["assignments"]}
+        self.assertEqual(suppliers_used, {replacement.id})
+
+    def test_splits_across_two_suppliers_when_no_single_one_covers_both(self):
+        self._give_failing_supplier(self.tomato, "10")
+        self._give_failing_supplier(self.cucumber, "5")
+        tomato_only = make_supplier("tomato only")
+        cucumber_only = make_supplier("cucumber only")
+        set_price(tomato_only, self.tomato, "2.00")
+        set_price(cucumber_only, self.cucumber, "3.00")
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        self.assertEqual(result["unavailable"], [])
+        by_product = {a["product"].id: a["supplier"] for a in result["assignments"]}
+        self.assertEqual(by_product[self.tomato.id], tomato_only)
+        self.assertEqual(by_product[self.cucumber.id], cucumber_only)
+
+    def test_excludes_the_failing_supplier_even_if_cheapest(self):
+        self._give_failing_supplier(self.tomato, "10")  # sets failing's own price to 1.00
+        other = make_supplier("other")
+        set_price(other, self.tomato, "9.00")
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        suppliers_used = {a["supplier"].id for a in result["assignments"]}
+        self.assertEqual(suppliers_used, {other.id})
+
+    def test_excludes_a_currently_blocked_supplier(self):
+        self._give_failing_supplier(self.tomato, "10")
+        blocked = make_supplier("blocked")
+        set_price(blocked, self.tomato, "1.00")  # cheapest, but blocked
+        blocked.blocked_until = timezone.now() + timedelta(days=5)
+        blocked.save(update_fields=["blocked_until"])
+        available = make_supplier("available")
+        set_price(available, self.tomato, "9.00")
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        suppliers_used = {a["supplier"].id for a in result["assignments"]}
+        self.assertEqual(suppliers_used, {available.id})
+
+    def test_includes_a_supplier_whose_block_already_expired(self):
+        self._give_failing_supplier(self.tomato, "10")
+        previously_blocked = make_supplier("previously blocked")
+        set_price(previously_blocked, self.tomato, "1.00")
+        previously_blocked.blocked_until = timezone.now() - timedelta(days=1)
+        previously_blocked.save(update_fields=["blocked_until"])
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        suppliers_used = {a["supplier"].id for a in result["assignments"]}
+        self.assertEqual(suppliers_used, {previously_blocked.id})
+
+    def test_product_with_no_alternative_reported_as_unavailable(self):
+        self._give_failing_supplier(self.tomato, "10")
+        self._give_failing_supplier(self.cucumber, "5")
+        set_price(make_supplier("tomato only"), self.tomato, "2.00")
+        # nobody else carries cucumber
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        self.assertEqual(result["unavailable"], ["cucumber"])
+        by_product = {a["product"].id for a in result["assignments"]}
+        self.assertEqual(by_product, {self.tomato.id})
+
+    def test_nothing_to_reroute_returns_empty(self):
+        """The failing supplier has no items on this order at all."""
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+        self.assertEqual(result["assignments"], [])
+        self.assertEqual(result["unavailable"], [])

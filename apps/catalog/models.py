@@ -56,6 +56,11 @@ class Supplier(models.Model):
         default=0,
         validators=[MinValueValidator(Decimal("0"))],
     )
+    blocked_until = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Excluded from new order assignment/reroute until this time "
+                   "(e.g. after cancelling an order) — set automatically, not by an admin form.",
+    )
 
     def __str__(self):
         return self.name
