@@ -48,11 +48,14 @@ class SupplierProductWriteSerializer(serializers.Serializer):
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
-        fields = ("id", "name", "phone", "whatsapp_number", "region", "minimum_order")
+        fields = ("id", "name", "phone", "whatsapp_number", "region", "minimum_order", "blocked_until")
         extra_kwargs = {
             "name": {"error_messages": {"unique": "ספק עם שם זה כבר קיים במערכת."}},
             "phone": {"error_messages": {"unique": "מספר הטלפון כבר קיים במערכת."}},
             "whatsapp_number": {"error_messages": {"unique": "מספר הוואטסאפ כבר קיים במערכת."}},
+            # PATCH {"blocked_until": null} is exactly how an admin lifts a
+            # cancellation block from the dashboard — must stay writable.
+            "blocked_until": {"required": False, "allow_null": True},
         }
 
     def validate_phone(self, value):
@@ -139,5 +142,6 @@ class SupplierWithProductsSerializer(serializers.ModelSerializer):
             "whatsapp_number",
             "region",
             "minimum_order",
+            "blocked_until",
             "products",
         )

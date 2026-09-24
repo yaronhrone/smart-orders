@@ -7,6 +7,7 @@ import {
   createSupplier,
   updateSupplier,
   deleteSupplier,
+  unblockSupplier,
   SupplierWithProducts,
   CreateSupplierPayload,
 } from "../../lib/api";
@@ -52,6 +53,8 @@ export default function SuppliersPage() {
   const [confirmDelete, setConfirmDelete] = useState<SupplierWithProducts | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [unblockingId, setUnblockingId] = useState<number | null>(null);
+
   const [editSupplier, setEditSupplier] = useState<SupplierWithProducts | null>(null);
   const [editForm, setEditForm] = useState<CreateSupplierPayload>(EMPTY_FORM);
   const [editError, setEditError] = useAutoError(5000);
@@ -76,6 +79,22 @@ export default function SuppliersPage() {
 
   function toggleExpand(id: number) {
     setExpanded((prev) => (prev === id ? null : id));
+  }
+
+  function isBlocked(s: SupplierWithProducts) {
+    return !!s.blocked_until && new Date(s.blocked_until) > new Date();
+  }
+
+  async function handleUnblock(id: number) {
+    setUnblockingId(id);
+    try {
+      await unblockSupplier(id);
+      await load();
+    } catch {
+      alert("שגיאה בביטול החסימה");
+    } finally {
+      setUnblockingId(null);
+    }
   }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
@@ -202,6 +221,16 @@ export default function SuppliersPage() {
                     </span>
                   </div>
                 </button>
+                {isBlocked(s) && (
+                  <button
+                    onClick={() => handleUnblock(s.id)}
+                    disabled={unblockingId === s.id}
+                    className="shrink-0 bg-red-600 text-white text-xs font-medium px-2 py-1 rounded-lg hover:bg-red-700 transition disabled:opacity-50"
+                    title={`חסום עד ${new Date(s.blocked_until as string).toLocaleDateString("he-IL")} — לחץ לביטול החסימה`}
+                  >
+                    {unblockingId === s.id ? "מבטל..." : "חסום"}
+                  </button>
+                )}
                 <button
                   onClick={() => openEdit(s)}
                   className="shrink-0 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg px-2 py-1 text-sm transition"

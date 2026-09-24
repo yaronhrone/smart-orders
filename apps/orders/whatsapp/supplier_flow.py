@@ -65,6 +65,26 @@ def notify_suppliers_for_order(order) -> None:
     order.transition_to(OrderRequest.Status.SENT)
 
 
+def _notify_admin_supplier_cancelled(supplier, order_request_id: int) -> None:
+    """Alert the admin that a supplier cancelled an order, so someone can
+    find out why — routine reroute already ran by the time this fires,
+    this is just so a pattern (or something unusual) doesn't go unnoticed."""
+    from django.conf import settings
+    admin_number = getattr(settings, "ADMIN_WHATSAPP_NUMBER", "")
+    if not admin_number:
+        logger.warning("ADMIN_WHATSAPP_NUMBER לא מוגדר — לא נשלחה התראה על ביטול ספק")
+        return
+    try:
+        validators.send_whatsapp_message(
+            admin_number,
+            f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.\n"
+            f"📞 {supplier.phone}\n"
+            "הספק חסום מהזמנות חדשות ל-10 ימים. כדאי לברר למה — משהו חריג?",
+        )
+    except Exception as exc:
+        logger.error("שגיאה בשליחת התראה לאדמין על ביטול ספק %s: %s", supplier.id, exc)
+
+
 def send_order_to_supplier(supplier, assignments: list) -> str:
     lines = ["שלום, ברצוני להזמין:"]
     for a in assignments:
@@ -381,7 +401,14 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
 
         try:
             from apps.orders.models import OrderRequest, OrderRequestProduct
-            from apps.orders.services import find_full_coverage_fallback
+            from apps.orders.services import find_reroute_for_cancelled_supplier
+
+            # Block this supplier from any new assignment for 10 days, and
+            # tell the admin so someone can find out why — before anything
+            # else, so it happens even if the reroute below hits an error.
+            supplier.blocked_until = timezone.now() + timedelta(days=10)
+            supplier.save(update_fields=["blocked_until"])
+            _notify_admin_supplier_cancelled(supplier, order_request_id)
 
             # Get customer phone
             first_orp = OrderRequestProduct.objects.select_related(
@@ -392,69 +419,75 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 p = getattr(first_orp.order_request.user, "profile", None)
                 customer_phone = validators._local_to_e164(p.phone) if p and p.phone else None
 
-            fallback = find_full_coverage_fallback(
+            reroute = find_reroute_for_cancelled_supplier(
                 order_request_id=order_request_id,
                 failing_supplier_id=supplier.id,
             )
+            assignments = reroute["assignments"]
+            unavailable = reroute["unavailable"]
 
-            if fallback:
-                new_supplier = fallback["supplier"]
-
-                # Transfer all items to new supplier
-                for item in fallback["items"]:
-                    orp = item["orp"]
-                    orp.supplier = new_supplier
-                    orp.unit_price = item["new_price"]
-                    orp.save(update_fields=["supplier", "unit_price"])
-                _recalculate_order_total(order_request_id)
-
-                # Send order to new supplier
+            if assignments:
                 order_obj = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
                 prof = getattr(order_obj.user, "profile", None)
                 company = prof.company_name if prof else ""
                 address = prof.company_address if prof else ""
                 cp = prof.company_phone if prof else ""
 
-                msg_lines = [f"שלום, *{company}* מבקש להזמין:"]
-                for item in fallback["items"]:
-                    orp = item["orp"]
-                    msg_lines.append(f"- {orp.product.name} x{orp.quantity} {orp.product.get_unit_display()}")
-                if address:
-                    msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
-                if cp:
-                    msg_lines.append(f"📞 {cp}")
-                msg_lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-                validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
+                by_new_supplier = defaultdict(list)
+                for a in assignments:
+                    by_new_supplier[a["supplier"].id].append(a)
 
-                save_supplier_pending_order(
-                    supplier_phone=new_supplier.whatsapp_number,
-                    order_request_id=order_request_id,
-                    products=[
-                        {
-                            "orp_id": item["orp"].id,
-                            "product_name": item["orp"].product.name,
-                            "quantity": str(item["orp"].quantity),
-                            "unit": item["orp"].product.get_unit_display(),
-                        }
-                        for item in fallback["items"]
-                    ],
-                )
+                for new_sid, items in by_new_supplier.items():
+                    new_supplier = items[0]["supplier"]
+                    for a in items:
+                        orp = a["orp"]
+                        orp.supplier = new_supplier
+                        orp.unit_price = a["unit_price"]
+                        orp.save(update_fields=["supplier", "unit_price"])
 
-                # Notify customer of auto-transfer
+                    msg_lines = [f"שלום, *{company}* מבקש להזמין:"]
+                    for a in items:
+                        msg_lines.append(f"- {a['product'].name} x{a['quantity']} {a['product'].get_unit_display()}")
+                    if address:
+                        msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
+                    if cp:
+                        msg_lines.append(f"📞 {cp}")
+                    msg_lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
+                    validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
+
+                    save_supplier_pending_order(
+                        supplier_phone=new_supplier.whatsapp_number,
+                        order_request_id=order_request_id,
+                        products=[
+                            {
+                                "orp_id": a["orp"].id,
+                                "product_name": a["product"].name,
+                                "quantity": str(a["quantity"]),
+                                "unit": a["product"].get_unit_display(),
+                            }
+                            for a in items
+                        ],
+                    )
+
+                _recalculate_order_total(order_request_id)
+
+                # One consolidated message to the customer covering every
+                # item that moved, grouped by its new supplier.
                 if customer_phone:
                     lines = [
                         f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.",
-                        f"✅ העברנו אוטומטית ל-*{new_supplier.name}*:",
+                        "✅ העברנו אוטומטית:",
                     ]
-                    for item in fallback["items"]:
-                        orp = item["orp"]
-                        lines.append(f"  • {orp.product.name} x{orp.quantity} — {item['new_price']}₪")
-                    lines.append(f'\nסה"כ חדש: {fallback["redirect_total"]:.2f}₪')
-                    if not fallback["minimum_met"]:
-                        lines.append(f"⚠️ חסר {fallback['missing_amount']:.2f}₪ למינימום {new_supplier.name}")
+                    for new_sid, items in by_new_supplier.items():
+                        new_supplier = items[0]["supplier"]
+                        lines.append(f"\n*{new_supplier.name}*:")
+                        for a in items:
+                            lines.append(f"  • {a['product'].name} x{a['quantity']} — {a['unit_price']}₪")
+                    if unavailable:
+                        lines.append(f"\n❌ לא נמצא ספק חלופי עבור: {', '.join(unavailable)}")
                     validators.send_whatsapp_message(customer_phone, "\n".join(lines))
             else:
-                # No fallback — cancel the order
+                # Nothing could be rerouted at all — cancel the order.
                 OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.CANCELLED)
                 if customer_phone:
                     validators.send_whatsapp_message(
