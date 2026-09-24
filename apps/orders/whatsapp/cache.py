@@ -214,3 +214,36 @@ def _get_fallback_state(phone: str):
 
 def _clear_fallback_state(phone: str):
     cache.delete(f"whatsapp_fallback:{phone}")
+
+
+def _save_reroute_grace_state(phone: str, order_request_id: int, failing_supplier_id: int):
+    """
+    A supplier cancelled and the cheapest full-coverage reroute leaves some
+    resulting supplier under their own minimum — held open instead of
+    dispatched or dropped, so the customer can top up. Deliberately doesn't
+    cache which products/quantities are short: those live on the
+    OrderRequestProduct rows (still pointing at the failing supplier as a
+    placeholder until the reroute actually commits), read fresh every time
+    so a top-up reply is checked against current DB state, never a stale copy.
+    """
+    key = f"whatsapp_reroute_grace:{phone}"
+    cache.set(
+        key,
+        json.dumps({"order_request_id": order_request_id, "failing_supplier_id": failing_supplier_id}),
+        timeout=MINIMUM_GRACE_TTL,
+    )
+    try:
+        from apps.orders.tasks import handle_reroute_grace_timeout
+        handle_reroute_grace_timeout.apply_async(
+            args=[phone, order_request_id], countdown=MINIMUM_GRACE_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("Could not schedule reroute grace timeout task: %s", exc)
+
+
+def _get_reroute_grace_state(phone: str):
+    return cache.get(f"whatsapp_reroute_grace:{phone}")
+
+
+def _clear_reroute_grace_state(phone: str):
+    cache.delete(f"whatsapp_reroute_grace:{phone}")

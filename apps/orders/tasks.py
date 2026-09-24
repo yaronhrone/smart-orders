@@ -58,6 +58,42 @@ def dispatch_draft_order_task(phone: str, generation: int, is_grace_retry: bool 
 
 
 @shared_task
+def handle_reroute_grace_timeout(phone: str, order_request_id: int):
+    """
+    Fires MINIMUM_GRACE_SECONDS after a post-cancellation reroute was held
+    open because it would've left a supplier under their minimum. If the
+    customer never topped up enough to clear it, give up: cancel the order
+    (the items are still sitting on the now-blocked cancelling supplier —
+    nothing to move back, just drop the order like the no-fallback-at-all
+    case) and clear the grace state.
+    """
+    import json as _json
+    from django.core.cache import cache
+    from apps.orders.models import OrderRequest
+    from apps.orders.whatsapp.cache import _get_reroute_grace_state, _clear_reroute_grace_state
+
+    raw = _get_reroute_grace_state(phone)
+    if not raw:
+        return  # already resolved (topped up, or a newer grace state took over)
+    state = _json.loads(raw)
+    if state.get("order_request_id") != order_request_id:
+        return  # stale — a newer cancellation on a different order replaced this one
+
+    _clear_reroute_grace_state(phone)
+    try:
+        order = OrderRequest.objects.get(id=order_request_id)
+        order.transition_to(OrderRequest.Status.CANCELLED)
+    except OrderRequest.DoesNotExist:
+        return
+
+    send_whatsapp_message(
+        phone,
+        f"⏰ פג הזמן להשלמת המינימום להזמנה #{order_request_id}. ההזמנה בוטלה.\n"
+        "ניתן ליצור הזמנה חדשה דרך המערכת.",
+    )
+
+
+@shared_task
 def handle_fallback_timeout(phone: str, order_request_id: int):
     """
     Fires FALLBACK_TTL seconds after presenting a fallback offer to the customer.

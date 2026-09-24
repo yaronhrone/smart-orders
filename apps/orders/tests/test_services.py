@@ -664,3 +664,28 @@ class FindRerouteForCancelledSupplierTests(TestCase):
         result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
         self.assertEqual(result["assignments"], [])
         self.assertEqual(result["unavailable"], [])
+
+    def test_split_left_under_minimum_is_still_returned_for_the_caller_to_decide(self):
+        """
+        Live-found: the only replacements are two specialists who between
+        them cover both products but neither alone, and neither's resulting
+        total clears its own minimum — nothing to pad from (the other group
+        is under minimum too) or switch to (no third supplier covers both
+        products together). This function doesn't reject that split itself —
+        it hands back what _assign_suppliers found (minimum shortfall and
+        all); the caller decides whether to hold it open for a customer
+        top-up rather than dispatching or dropping it outright.
+        """
+        self._give_failing_supplier(self.tomato, "10")
+        self._give_failing_supplier(self.cucumber, "5")
+        tomato_only = make_supplier("tomato only", minimum_order=1000)
+        cucumber_only = make_supplier("cucumber only", minimum_order=1000)
+        set_price(tomato_only, self.tomato, "2.00")
+        set_price(cucumber_only, self.cucumber, "3.00")
+
+        result = find_reroute_for_cancelled_supplier(self.order.id, self.failing.id)
+
+        self.assertEqual(result["unavailable"], [])
+        by_product = {a["product"].id: a["supplier"] for a in result["assignments"]}
+        self.assertEqual(by_product[self.tomato.id], tomato_only)
+        self.assertEqual(by_product[self.cucumber.id], cucumber_only)

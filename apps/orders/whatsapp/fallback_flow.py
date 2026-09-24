@@ -7,6 +7,7 @@ from django.http import HttpResponse
 
 from .cache import (
     _get_fallback_state, _save_fallback_state, _clear_fallback_state,
+    _get_reroute_grace_state, _clear_reroute_grace_state,
     save_supplier_pending_order,
 )
 from . import validators
@@ -223,6 +224,101 @@ def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
             "ענה *כן* להעברה לספק חלופי, *לא* לביטול.",
         )
         return HttpResponse(status=200)
+
+
+def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
+    """
+    A supplier's cancellation left a valid full-coverage reroute that
+    couldn't clear a resulting supplier's minimum (see supplier_flow's
+    cancellation handler) — held open instead of dispatched. Returns None if
+    nothing is held open for this phone; otherwise treats `body` as an
+    addition to the same basket (same parser a brand-new order uses), and
+    either dispatches the now-valid reroute or reports the still-short
+    amount and keeps waiting for the grace window to run out.
+    """
+    from apps.catalog.models import Product
+    from apps.orders.models import OrderRequestProduct
+    from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
+    from apps.orders.services import _check_missing_minimum, find_reroute_for_cancelled_supplier
+
+    raw = _get_reroute_grace_state(phone)
+    if not raw:
+        return None
+
+    state = json.loads(raw)
+    order_request_id = state["order_request_id"]
+    failing_supplier_id = state["failing_supplier_id"]
+
+    product_names = list(Product.objects.values_list("name", flat=True))
+    try:
+        parsed_items = parse_customer_order(body, product_names)
+    except AmbiguousProductError:
+        validators.send_whatsapp_message(
+            phone, "לא ברור לאיזה מוצר בדיוק התכוונת — נסה שוב עם שם מדויק יותר.",
+        )
+        return HttpResponse(status=200)
+    except ValueError:
+        validators.send_whatsapp_message(
+            phone, "לא הצלחתי להבין. שלח למשל: עוד 10 עגבניות",
+        )
+        return HttpResponse(status=200)
+
+    all_products_map = {p.name: p for p in Product.objects.all()}
+    added_any = False
+    for item in parsed_items:
+        product = all_products_map.get(item["product_name"])
+        if not product:
+            continue
+        existing = OrderRequestProduct.objects.filter(
+            order_request_id=order_request_id, supplier_id=failing_supplier_id, product=product,
+        ).first()
+        if existing:
+            existing.quantity = existing.quantity + Decimal(str(item["quantity"]))
+            existing.save(update_fields=["quantity"])
+        else:
+            # New product, not part of the original cancelled group — parked
+            # on the (now-blocked) failing supplier as a placeholder, same as
+            # every other item still waiting on this reroute; unit_price is
+            # never read before the reroute below overwrites it for real.
+            OrderRequestProduct.objects.create(
+                order_request_id=order_request_id,
+                product=product, supplier_id=failing_supplier_id,
+                quantity=Decimal(str(item["quantity"])), unit_price=Decimal("0"),
+            )
+        added_any = True
+
+    if not added_any:
+        validators.send_whatsapp_message(phone, "לא זיהיתי מוצר ידוע בהודעה. נסה שוב.")
+        return HttpResponse(status=200)
+
+    reroute = find_reroute_for_cancelled_supplier(order_request_id, failing_supplier_id)
+    assignments = reroute["assignments"]
+    minimum_problems = _check_missing_minimum(assignments) if assignments else []
+
+    if assignments and not minimum_problems:
+        from .supplier_flow import _dispatch_reroute_assignments
+        _clear_reroute_grace_state(phone)
+        _dispatch_reroute_assignments(
+            order_request_id, assignments, reroute["unavailable"], phone,
+            intro_lines=[f"✅ תודה! הזמנה #{order_request_id} עכשיו עומדת במינימום — העברנו:"],
+        )
+        return HttpResponse(status=200)
+
+    if not assignments:
+        validators.send_whatsapp_message(
+            phone, "לא נמצא ספק בשביל זה. נסה מוצר אחר או המתן לפקיעת הזמן.",
+        )
+        return HttpResponse(status=200)
+
+    lines = ["עדיין לא מספיק:"]
+    for problem in minimum_problems:
+        lines.append(
+            f"  • {problem['supplier_name']}: חסר עוד {problem['missing_amount']:.2f}₪ "
+            f"(סה\"כ {problem['current_total']:.2f}₪ מתוך {problem['minimum_required']:.2f}₪)"
+        )
+    lines.append("\nשלח עוד, או שההזמנה תבוטל בתום הזמן שנקבע.")
+    validators.send_whatsapp_message(phone, "\n".join(lines))
+    return HttpResponse(status=200)
 
 
 def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
