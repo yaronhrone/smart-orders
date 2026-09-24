@@ -65,6 +65,76 @@ def notify_suppliers_for_order(order) -> None:
     order.transition_to(OrderRequest.Status.SENT)
 
 
+def _dispatch_reroute_assignments(
+    order_request_id: int, assignments: list, unavailable: list,
+    customer_phone: str | None, intro_lines: list,
+) -> None:
+    """
+    Commit a validated (every resulting supplier clears their minimum)
+    reroute: move each ORP to its new supplier, send each new supplier its
+    own order message + pending state, recalc the order total, and send the
+    customer one consolidated message covering every item that moved.
+    Shared by the immediate happy path and by a top-up that just cleared a
+    minimum that was previously blocking dispatch.
+    """
+    from apps.orders.models import OrderRequest
+
+    order_obj = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+    prof = getattr(order_obj.user, "profile", None)
+    company = prof.company_name if prof else ""
+    address = prof.company_address if prof else ""
+    cp = prof.company_phone if prof else ""
+
+    by_new_supplier = defaultdict(list)
+    for a in assignments:
+        by_new_supplier[a["supplier"].id].append(a)
+
+    for new_sid, items in by_new_supplier.items():
+        new_supplier = items[0]["supplier"]
+        for a in items:
+            orp = a["orp"]
+            orp.supplier = new_supplier
+            orp.unit_price = a["unit_price"]
+            orp.save(update_fields=["supplier", "unit_price"])
+
+        msg_lines = [f"שלום, *{company}* מבקש להזמין:"]
+        for a in items:
+            msg_lines.append(f"- {a['product'].name} x{a['quantity']} {a['product'].get_unit_display()}")
+        if address:
+            msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
+        if cp:
+            msg_lines.append(f"📞 {cp}")
+        msg_lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
+        validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
+
+        save_supplier_pending_order(
+            supplier_phone=new_supplier.whatsapp_number,
+            order_request_id=order_request_id,
+            products=[
+                {
+                    "orp_id": a["orp"].id,
+                    "product_name": a["product"].name,
+                    "quantity": str(a["quantity"]),
+                    "unit": a["product"].get_unit_display(),
+                }
+                for a in items
+            ],
+        )
+
+    _recalculate_order_total(order_request_id)
+
+    if customer_phone:
+        lines = list(intro_lines)
+        for new_sid, items in by_new_supplier.items():
+            new_supplier = items[0]["supplier"]
+            lines.append(f"\n*{new_supplier.name}*:")
+            for a in items:
+                lines.append(f"  • {a['product'].name} x{a['quantity']} — {a['unit_price']}₪")
+        if unavailable:
+            lines.append(f"\n❌ לא נמצא ספק חלופי עבור: {', '.join(unavailable)}")
+        validators.send_whatsapp_message(customer_phone, "\n".join(lines))
+
+
 def _notify_admin_supplier_cancelled(supplier, order_request_id: int) -> None:
     """Alert the admin that a supplier cancelled an order, so someone can
     find out why — routine reroute already ran by the time this fires,
@@ -401,7 +471,8 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
 
         try:
             from apps.orders.models import OrderRequest, OrderRequestProduct
-            from apps.orders.services import find_reroute_for_cancelled_supplier
+            from apps.orders.services import _check_missing_minimum, find_reroute_for_cancelled_supplier
+            from .cache import _save_reroute_grace_state
 
             # Block this supplier from any new assignment for 10 days, and
             # tell the admin so someone can find out why — before anything
@@ -425,67 +496,45 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             )
             assignments = reroute["assignments"]
             unavailable = reroute["unavailable"]
+            minimum_problems = _check_missing_minimum(assignments) if assignments else []
 
-            if assignments:
-                order_obj = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
-                prof = getattr(order_obj.user, "profile", None)
-                company = prof.company_name if prof else ""
-                address = prof.company_address if prof else ""
-                cp = prof.company_phone if prof else ""
-
-                by_new_supplier = defaultdict(list)
-                for a in assignments:
-                    by_new_supplier[a["supplier"].id].append(a)
-
-                for new_sid, items in by_new_supplier.items():
-                    new_supplier = items[0]["supplier"]
-                    for a in items:
-                        orp = a["orp"]
-                        orp.supplier = new_supplier
-                        orp.unit_price = a["unit_price"]
-                        orp.save(update_fields=["supplier", "unit_price"])
-
-                    msg_lines = [f"שלום, *{company}* מבקש להזמין:"]
-                    for a in items:
-                        msg_lines.append(f"- {a['product'].name} x{a['quantity']} {a['product'].get_unit_display()}")
-                    if address:
-                        msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
-                    if cp:
-                        msg_lines.append(f"📞 {cp}")
-                    msg_lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-                    validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
-
-                    save_supplier_pending_order(
-                        supplier_phone=new_supplier.whatsapp_number,
-                        order_request_id=order_request_id,
-                        products=[
-                            {
-                                "orp_id": a["orp"].id,
-                                "product_name": a["product"].name,
-                                "quantity": str(a["quantity"]),
-                                "unit": a["product"].get_unit_display(),
-                            }
-                            for a in items
-                        ],
-                    )
-
-                _recalculate_order_total(order_request_id)
-
-                # One consolidated message to the customer covering every
-                # item that moved, grouped by its new supplier.
-                if customer_phone:
-                    lines = [
+            if assignments and not minimum_problems:
+                _dispatch_reroute_assignments(
+                    order_request_id, assignments, unavailable, customer_phone,
+                    intro_lines=[
                         f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.",
                         "✅ העברנו אוטומטית:",
+                    ],
+                )
+            elif assignments and minimum_problems:
+                # A valid full-coverage split exists, but it would leave a
+                # resulting supplier under their own minimum — the user's
+                # explicit rule: a pricier-but-valid split beats a cheaper
+                # one, but nothing under minimum gets dispatched. Hold it
+                # open instead of committing anything, and let the customer
+                # top up (see _handle_reroute_grace_topup).
+                if customer_phone:
+                    _save_reroute_grace_state(customer_phone, order_request_id, supplier.id)
+                    hours = 7200 // 3600
+                    lines = [
+                        f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.",
+                        "מצאנו לאן להעביר את כל הפריטים, אבל זה לא עומד במינימום ההזמנה:",
                     ]
-                    for new_sid, items in by_new_supplier.items():
-                        new_supplier = items[0]["supplier"]
-                        lines.append(f"\n*{new_supplier.name}*:")
-                        for a in items:
-                            lines.append(f"  • {a['product'].name} x{a['quantity']} — {a['unit_price']}₪")
-                    if unavailable:
-                        lines.append(f"\n❌ לא נמצא ספק חלופי עבור: {', '.join(unavailable)}")
+                    for problem in minimum_problems:
+                        lines.append(
+                            f"  • {problem['supplier_name']}: חסר {problem['missing_amount']:.2f}₪ "
+                            f"(סה\"כ נוכחי {problem['current_total']:.2f}₪, מינימום {problem['minimum_required']:.2f}₪)"
+                        )
+                    lines.append(
+                        f"\nיש לך {hours} שעות להוסיף עוד מוצרים/כמות (שלח הודעה רגילה) כדי להשלים "
+                        "למינימום. אם לא, ההזמנה תבוטל אוטומטית."
+                    )
                     validators.send_whatsapp_message(customer_phone, "\n".join(lines))
+                else:
+                    # No way to reach the customer to ask for a top-up —
+                    # can't hold this open indefinitely, so fall back to
+                    # cancelling rather than silently dispatching under-minimum.
+                    OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.CANCELLED)
             else:
                 # Nothing could be rerouted at all — cancel the order.
                 OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.CANCELLED)

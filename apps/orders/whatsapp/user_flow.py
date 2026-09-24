@@ -18,7 +18,7 @@ from .cache import (
     save_pending_order,
 )
 from .delivery_flow import _handle_delivery_flow
-from .fallback_flow import _handle_fallback_approval
+from .fallback_flow import _handle_fallback_approval, _handle_reroute_grace_topup
 from . import validators
 
 logger = logging.getLogger(__name__)
@@ -614,6 +614,10 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     fallback_response = _handle_fallback_approval(phone, body)
     if fallback_response is not None:
         return fallback_response
+
+    reroute_grace_response = _handle_reroute_grace_topup(phone, body)
+    if reroute_grace_response is not None:
+        return reroute_grace_response
 
     clarify_raw = get_pending_clarification(phone)
     if clarify_raw:

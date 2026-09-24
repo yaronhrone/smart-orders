@@ -576,6 +576,12 @@ def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_
     it replaces. "unavailable" lists product names no other supplier in the
     region carries at all — left untouched by the caller (still pointing at
     the failing supplier) since there's nowhere to move them.
+
+    Does NOT itself reject a split that leaves a resulting supplier under
+    their minimum order — the caller (supplier_flow's cancellation handler)
+    decides what to do about that (hold it open for the customer to top up
+    rather than dispatching or dropping it outright); check the result with
+    _check_missing_minimum.
     """
     order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
     region = getattr(getattr(order.user, "profile", None), "region", None)

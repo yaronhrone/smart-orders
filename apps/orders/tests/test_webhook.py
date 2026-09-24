@@ -1417,6 +1417,96 @@ class SupplierCancellationFlowTests(TestCase):
         self.assertIn(self.supplier.name, admin_calls[0][0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_split_left_under_minimum_holds_open_for_a_customer_topup(self, mock_send):
+        """
+        A split across two specialist suppliers that between them cover
+        everything, but neither alone clears its own minimum, must NOT be
+        dispatched AND must NOT be cancelled outright — the user's rule: give
+        the customer a chance to add enough to clear it first.
+        """
+        tomato_only = make_supplier("רק עגבניה", minimum_order=1000)
+        carrot_only = make_supplier("רק גזר", minimum_order=1000)
+        SupplierProduct.objects.create(supplier=tomato_only, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=carrot_only, product=self.carrot, price_per_unit="4.00")
+
+        self._post_supplier("ביטול")
+
+        self.orp1.refresh_from_db()
+        self.orp2.refresh_from_db()
+        self.assertEqual(self.orp1.supplier, self.supplier)  # untouched — still parked on the canceller
+        self.assertEqual(self.orp2.supplier, self.supplier)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)  # held, not cancelled
+        customer_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972501234567"]
+        self.assertEqual(len(customer_calls), 1)
+        self.assertIn("לא עומד במינימום", customer_calls[0][0][1])
+        self.assertIn("רק עגבניה", customer_calls[0][0][1])
+        self.assertIn("רק גזר", customer_calls[0][0][1])
+        self.assertIsNotNone(cache.get("whatsapp_reroute_grace:+972501234567"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_topup_that_clears_the_minimum_dispatches_the_reroute(self, mock_parse, mock_send):
+        """A customer reply that adds enough quantity clears the minimum and
+        the held reroute finally gets dispatched for real."""
+        tomato_only = make_supplier("רק עגבניה", minimum_order=100)
+        carrot_only = make_supplier("רק גזר", minimum_order=1000)
+        SupplierProduct.objects.create(supplier=tomato_only, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=carrot_only, product=self.carrot, price_per_unit="4.00")
+        self._post_supplier("ביטול")  # tomato (20*6=120) clears its 100 min; carrot (15*4=60) doesn't
+
+        mock_parse.return_value = [{"product_name": "גזר", "quantity": Decimal("250")}]
+        self.client.post("/whatsapp/webhook/", {
+            "From": "whatsapp:+972501234567", "Body": "עוד 250 גזר",
+        })
+
+        self.orp2.refresh_from_db()
+        self.assertEqual(self.orp2.supplier, carrot_only)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertIsNone(cache.get("whatsapp_reroute_grace:+972501234567"))
+        carrot_supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == carrot_only.whatsapp_number]
+        self.assertEqual(len(carrot_supplier_calls), 1)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_topup_still_short_reports_remaining_shortfall_and_keeps_waiting(self, mock_parse, mock_send):
+        tomato_only = make_supplier("רק עגבניה", minimum_order=100)
+        carrot_only = make_supplier("רק גזר", minimum_order=1000)
+        SupplierProduct.objects.create(supplier=tomato_only, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=carrot_only, product=self.carrot, price_per_unit="4.00")
+        self._post_supplier("ביטול")
+
+        mock_parse.return_value = [{"product_name": "גזר", "quantity": Decimal("5")}]
+        self.client.post("/whatsapp/webhook/", {
+            "From": "whatsapp:+972501234567", "Body": "עוד 5 גזר",
+        })
+
+        self.orp2.refresh_from_db()
+        self.assertEqual(self.orp2.supplier, self.supplier)  # still not moved — still short
+        self.assertIsNotNone(cache.get("whatsapp_reroute_grace:+972501234567"))
+        last_msg = mock_send.call_args_list[-1][0][1]
+        self.assertIn("עדיין לא מספיק", last_msg)
+
+    def test_grace_timeout_cancels_the_order_when_never_topped_up(self):
+        tomato_only = make_supplier("רק עגבניה", minimum_order=1000)
+        carrot_only = make_supplier("רק גזר", minimum_order=1000)
+        SupplierProduct.objects.create(supplier=tomato_only, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=carrot_only, product=self.carrot, price_per_unit="4.00")
+        with patch("apps.orders.whatsapp.validators.send_whatsapp_message"):
+            self._post_supplier("ביטול")
+
+        from apps.orders.tasks import handle_reroute_grace_timeout
+        with patch("apps.orders.tasks.send_whatsapp_message") as mock_send:
+            handle_reroute_grace_timeout(phone="+972501234567", order_request_id=self.order.id)
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
+        self.assertIsNone(cache.get("whatsapp_reroute_grace:+972501234567"))
+        mock_send.assert_called_once()
+        self.assertIn("פג הזמן", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_blocked_supplier_is_not_chosen_as_replacement_even_if_cheapest(self, mock_send):
         blocked = make_supplier("חסום")
         SupplierProduct.objects.create(supplier=blocked, product=self.tomato, price_per_unit="1.00")
