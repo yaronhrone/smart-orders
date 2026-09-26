@@ -1,10 +1,11 @@
 from decimal import Decimal
 from collections import defaultdict
 from urllib.parse import quote
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from apps.catalog.models import SupplierProduct, Supplier
-from apps.orders.models import OrderRequest, OrderRequestProduct
+from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct, SupplierConfirmation
 
 
 def suggest_order(user, region, products):
@@ -53,7 +54,11 @@ def _assign_suppliers(products, user, region, suppliers=None, price_options=None
 
 def build_order(user, region, products, scenario="cheapest"):
     """
-    Saves an order to DB and returns (OrderRequest, whatsapp_links).
+    Saves one checkout to DB and returns (OrderBatch, [OrderRequest, ...], whatsapp_links).
+
+    Supplier assignment (including minimum-order pad/switch) runs over the
+    whole basket first, exactly as before — only then is the result split
+    into one OrderRequest per supplier, all under one OrderBatch.
 
     scenario: "cheapest" | "fewest_suppliers"
     products: list of {"product": Product, "quantity": Decimal}
@@ -62,19 +67,121 @@ def build_order(user, region, products, scenario="cheapest"):
         assignments = _assign_fewest_suppliers(products, user, region)
     else:
         assignments = _assign_suppliers(products, user, region)
-    total = sum(a["quantity"] * a["unit_price"] for a in assignments)
-    order = OrderRequest.objects.create(user=user, total_price=total)
-    OrderRequestProduct.objects.bulk_create([
-        OrderRequestProduct(
-            order_request=order,
-            product=a["product"],
-            supplier=a["supplier"],
-            quantity=a["quantity"],
-            unit_price=a["unit_price"],
-        )
-        for a in assignments
-    ])
-    return order, generate_whatsapp_links(assignments)
+
+    by_supplier = defaultdict(list)
+    for a in assignments:
+        by_supplier[a["supplier"].id].append(a)
+
+    with transaction.atomic():
+        batch = OrderBatch.objects.create(user=user)
+        orders = []
+        for items in by_supplier.values():
+            order = OrderRequest.objects.create(
+                user=user, batch=batch, supplier=items[0]["supplier"],
+                total_price=sum(a["quantity"] * a["unit_price"] for a in items),
+            )
+            OrderRequestProduct.objects.bulk_create([
+                OrderRequestProduct(
+                    order_request=order,
+                    product=a["product"],
+                    supplier=a["supplier"],
+                    quantity=a["quantity"],
+                    unit_price=a["unit_price"],
+                )
+                for a in items
+            ])
+            orders.append(order)
+    return batch, orders, generate_whatsapp_links(assignments)
+
+
+# ─────────────── Batch helpers: one order per supplier ───────────────
+
+def batch_supplier_totals(batch_id, exclude_order_id=None, only_open=False):
+    """
+    {supplier_id: total} across a batch's non-cancelled orders.
+    only_open=True counts just SENT orders — the ones new items would
+    actually merge into (get_or_create_supplier_order), so the only ones
+    whose existing total counts toward a supplier's minimum for a move.
+    """
+    qs = (
+        OrderRequestProduct.objects
+        .filter(order_request__batch_id=batch_id)
+        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
+    )
+    if only_open:
+        qs = qs.filter(order_request__status=OrderRequest.Status.SENT)
+    if exclude_order_id is not None:
+        qs = qs.exclude(order_request_id=exclude_order_id)
+    totals = defaultdict(Decimal)
+    for orp in qs:
+        totals[orp.supplier_id] += orp.quantity * orp.unit_price
+    return totals
+
+
+def get_or_create_supplier_order(batch, supplier):
+    """
+    The order in `batch` that new items for `supplier` should land in.
+    Reuses a sibling only while it's still SENT (awaiting the supplier's
+    confirmation anyway) — adding to an already-APPROVED/SHIPPED order
+    would silently re-open something the supplier already signed off on,
+    so that gets a fresh order in the same batch instead.
+    Returns (order, created).
+    """
+    order = (
+        batch.orders
+        .filter(supplier=supplier, status=OrderRequest.Status.SENT)
+        .order_by("-id")
+        .first()
+    )
+    if order:
+        return order, False
+    order = OrderRequest.objects.create(
+        user_id=batch.user_id, batch=batch, supplier=supplier, status=OrderRequest.Status.SENT,
+    )
+    return order, True
+
+
+def move_item_to_supplier(orp, supplier, unit_price):
+    """
+    Move one line item to `supplier`'s order in the same batch (see
+    get_or_create_supplier_order). Any confirmation the old supplier gave
+    for it is dropped — the new supplier hasn't confirmed anything yet.
+    Returns the target order. The caller refreshes both orders afterwards
+    (refresh_order_after_changes).
+    """
+    target, _ = get_or_create_supplier_order(orp.order_request.batch, supplier)
+    SupplierConfirmation.objects.filter(order_request_product=orp).delete()
+    orp.order_request = target
+    orp.supplier = supplier
+    orp.unit_price = unit_price
+    orp.save(update_fields=["order_request", "supplier", "unit_price"])
+    return target
+
+
+def refresh_order_after_changes(order_id):
+    """
+    After items moved in or out of an order: recompute its total, cancel it
+    if it's now empty, and approve it if it's still SENT and every item left
+    is confirmed (e.g. the only unconfirmed item was a missing one that just
+    got redirected elsewhere — nothing else would ever re-check that).
+    """
+    try:
+        order = OrderRequest.objects.get(id=order_id)
+    except OrderRequest.DoesNotExist:
+        return None
+
+    items = list(order.products.all())
+    order.total_price = sum((i.quantity * i.unit_price for i in items), Decimal(0))
+    order.save(update_fields=["total_price"])
+
+    if not items:
+        if order.status not in (OrderRequest.Status.CANCELLED, OrderRequest.Status.DELIVERED):
+            order.transition_to(OrderRequest.Status.CANCELLED)
+    elif order.status == OrderRequest.Status.SENT:
+        confirmed = SupplierConfirmation.objects.filter(order_request_product__order_request=order).count()
+        if confirmed >= len(items):
+            order.transition_to(OrderRequest.Status.APPROVED)
+    return order
 
 
 def _build_initial_assignments(products, price_options):
@@ -263,11 +370,18 @@ def _assignments_to_scenario(assignments, scenario_name):
     }
 
 
-def _check_missing_minimum(assignments):
+def _check_missing_minimum(assignments, existing_totals=None):
+    """
+    Suppliers in `assignments` below their minimum. `existing_totals`
+    ({supplier_id: total}, e.g. from batch_supplier_totals) adds what that
+    supplier already has in an order these items would merge into.
+    """
     supplier_totals = defaultdict(Decimal)
     supplier_obj = {}
 
     for a in assignments:
+        if existing_totals and a["supplier"].id not in supplier_obj:
+            supplier_totals[a["supplier"].id] += existing_totals.get(a["supplier"].id, Decimal(0))
         supplier_totals[a["supplier"].id] += a["quantity"] * a["unit_price"]
         supplier_obj[a["supplier"].id] = a["supplier"]
 
@@ -530,12 +644,9 @@ def find_full_coverage_fallback(order_request_id: int, failing_supplier_id: int)
     if not full_coverage_ids:
         return None
 
-    # Existing order totals for candidate suppliers
-    existing_totals = defaultdict(Decimal)
-    for orp in OrderRequestProduct.objects.filter(
-        order_request_id=order_request_id, supplier_id__in=full_coverage_ids
-    ):
-        existing_totals[orp.supplier_id] += orp.quantity * orp.unit_price
+    # What each candidate already has in an open order of this same batch —
+    # the items would merge into that order, so it counts toward the minimum.
+    existing_totals = batch_supplier_totals(order.batch_id, exclude_order_id=order_request_id, only_open=True)
 
     scored = []
     for sid in full_coverage_ids:
@@ -592,7 +703,7 @@ def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_
         .select_related("product")
     )
     if not orps:
-        return {"assignments": [], "unavailable": []}
+        return {"assignments": [], "unavailable": [], "existing_totals": {}}
 
     products = [{"product": orp.product, "quantity": orp.quantity} for orp in orps]
     suppliers = _get_available_suppliers(order.user, region, exclude_supplier_ids=[failing_supplier_id])
@@ -601,7 +712,7 @@ def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_
     unavailable = [p["product"].name for p in products if not price_options.get(p["product"].id)]
     available = [p for p in products if price_options.get(p["product"].id)]
     if not available:
-        return {"assignments": [], "unavailable": unavailable}
+        return {"assignments": [], "unavailable": unavailable, "existing_totals": {}}
 
     assignments = _assign_suppliers(available, order.user, region, suppliers, price_options)
 
@@ -609,7 +720,15 @@ def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_
     for a in assignments:
         a["orp"] = orp_by_product_id[a["product"].id]
 
-    return {"assignments": assignments, "unavailable": unavailable}
+    return {
+        "assignments": assignments,
+        "unavailable": unavailable,
+        # What each new supplier already has in an open sibling order these
+        # items would merge into — pass to _check_missing_minimum.
+        "existing_totals": batch_supplier_totals(
+            order.batch_id, exclude_order_id=order_request_id, only_open=True,
+        ),
+    }
 
 
 def find_fallback_for_product(product, excluded_supplier_id: int, order_request_id: int, quantity: Decimal):
@@ -646,16 +765,17 @@ def find_fallback_for_product(product, excluded_supplier_id: int, order_request_
     if not candidates:
         return None
 
-    existing_totals = defaultdict(Decimal)
-    for orp in OrderRequestProduct.objects.filter(order_request_id=order_request_id).select_related("supplier"):
-        existing_totals[orp.supplier_id] += orp.quantity * orp.unit_price
+    # "Already on this order" now means already in this checkout's batch —
+    # each supplier has its own order, so the other suppliers are siblings.
+    in_batch = batch_supplier_totals(order.batch_id)
+    open_totals = batch_supplier_totals(order.batch_id, only_open=True)
 
-    already_on_order = [sp for sp in candidates if existing_totals.get(sp.supplier_id, Decimal(0)) > 0]
+    already_on_order = [sp for sp in candidates if in_batch.get(sp.supplier_id, Decimal(0)) > 0]
     sp = (already_on_order or candidates)[0]  # already price-ordered by the query
 
     supplier = sp.supplier
     price = sp.price_per_unit
-    existing = existing_totals.get(supplier.id, Decimal(0))
+    existing = open_totals.get(supplier.id, Decimal(0))
     new_total = existing + quantity * price
     minimum_met = new_total >= supplier.minimum_order
     missing_amount = max(Decimal(0), supplier.minimum_order - new_total)

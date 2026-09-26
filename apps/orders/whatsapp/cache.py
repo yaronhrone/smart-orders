@@ -79,7 +79,7 @@ def save_pending_clarification(phone: str, resolved_items: list, ambiguous_items
     carries — {"product_name", "quantity"} and {"query", "quantity",
     "candidates"} respectively. `extra` carries context needed to resume
     afterward — for a modification (as opposed to a fresh order), that's
-    {"context": "modification", "order_id", "intent", "region"}.
+    {"context": "modification", "batch_id", "intent", "region"}.
     """
     key = f"whatsapp_clarify:{phone}"
     payload = {"resolved_items": resolved_items, "ambiguous": ambiguous_items}

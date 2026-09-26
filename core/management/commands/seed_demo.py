@@ -257,7 +257,7 @@ class Command(BaseCommand):
     # ── order history ─────────────────────────────────────────────────
 
     def _seed_orders(self, user, profile):
-        from apps.orders.models import OrderRequest
+        from apps.orders.models import OrderBatch, OrderRequest
         from apps.orders.services import build_order
 
         existing = OrderRequest.objects.filter(user=user).count()
@@ -288,12 +288,14 @@ class Command(BaseCommand):
                 break
 
             scenario = "cheapest" if weeks_ago % 3 else "fewest_suppliers"
-            order, _ = build_order(user, profile.region, basket, scenario=scenario)
-            OrderRequest.objects.filter(pk=order.pk).update(
+            batch, orders, _ = build_order(user, profile.region, basket, scenario=scenario)
+            placed_at = now - timedelta(weeks=weeks_ago, hours=rng.randint(0, 10))
+            OrderBatch.objects.filter(pk=batch.pk).update(created_at=placed_at)
+            OrderRequest.objects.filter(pk__in=[o.pk for o in orders]).update(
                 status=OrderRequest.Status.DELIVERED,
-                created_at=now - timedelta(weeks=weeks_ago, hours=rng.randint(0, 10)),
+                created_at=placed_at,
             )
-            created += 1
+            created += len(orders)
         return created
 
     # ── reset ─────────────────────────────────────────────────────────

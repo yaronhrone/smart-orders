@@ -2,6 +2,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from apps.catalog.models import Product, Supplier, Unit, Region
 from apps.orders.models import OrderRequest, OrderRequestProduct
+from apps.orders.tests.factories import make_order
 
 User = get_user_model()
 
@@ -28,15 +29,16 @@ class OrderRequestModelTests(TestCase):
 
     def setUp(self):
         self.user = make_user()
+        self.supplier = make_supplier()
 
     def test_create_order_default_status(self):
         """New OrderRequest starts as pending"""
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
         self.assertEqual(order.status, OrderRequest.Status.PENDING)
 
     def test_order_status_transitions(self):
         """Real lifecycle: pending -> sent (to suppliers) -> approved (supplier confirmed)."""
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
 
         order.transition_to(OrderRequest.Status.SENT)
         self.assertEqual(OrderRequest.objects.get(id=order.id).status, OrderRequest.Status.SENT)
@@ -46,19 +48,19 @@ class OrderRequestModelTests(TestCase):
 
     def test_pending_cannot_jump_to_approved(self):
         """A fresh order must go through SENT before APPROVED."""
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
         with self.assertRaises(ValueError):
             order.transition_to(OrderRequest.Status.APPROVED)
 
     def test_sent_can_go_straight_to_delivered(self):
         """Delivery can be confirmed even if the supplier never formally approved."""
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
         order.transition_to(OrderRequest.Status.SENT)
         order.transition_to(OrderRequest.Status.DELIVERED)
         self.assertEqual(OrderRequest.objects.get(id=order.id).status, OrderRequest.Status.DELIVERED)
 
     def test_delivered_is_a_terminal_state(self):
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
         order.transition_to(OrderRequest.Status.SENT)
         order.transition_to(OrderRequest.Status.DELIVERED)
         with self.assertRaises(ValueError):
@@ -66,13 +68,13 @@ class OrderRequestModelTests(TestCase):
 
     def test_order_str(self):
         """__str__ includes order id and user email"""
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
         self.assertIn(self.user.email, str(order))
         self.assertIn(str(order.id), str(order))
 
     def test_order_deleted_with_user(self):
         """OrderRequest deleted when user is deleted"""
-        order = OrderRequest.objects.create(user=self.user)
+        order = make_order(self.user, self.supplier)
         self.user.delete()
         self.assertFalse(OrderRequest.objects.filter(id=order.id).exists())
 
@@ -83,7 +85,7 @@ class OrderRequestItemModelTests(TestCase):
         self.user = make_user()
         self.product = make_product()
         self.supplier = make_supplier()
-        self.order = OrderRequest.objects.create(user=self.user)
+        self.order = make_order(self.user, self.supplier)
 
     def test_create_order_item(self):
         """OrderRequestProduct stores product, supplier, quantity and price"""
