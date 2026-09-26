@@ -1469,7 +1469,9 @@ class SupplierCancellationFlowTests(TestCase):
         self.assertEqual(self.order.status, OrderRequest.Status.SENT)  # held, not cancelled
         customer_calls = [c for c in mock_send.call_args_list if c[0][0] == "+972501234567"]
         self.assertEqual(len(customer_calls), 1)
-        self.assertIn("לא עומד במינימום", customer_calls[0][0][1])
+        self.assertIn("לא עומד בהזמנת המינימום", customer_calls[0][0][1])
+        self.assertIn("*שלח*", customer_calls[0][0][1])
+        self.assertIn("*ביטול*", customer_calls[0][0][1])
         self.assertIn("רק עגבניה", customer_calls[0][0][1])
         self.assertIn("רק גזר", customer_calls[0][0][1])
         self.assertIsNotNone(cache.get("whatsapp_reroute_grace:+972501234567"))
@@ -1519,7 +1521,8 @@ class SupplierCancellationFlowTests(TestCase):
         self.assertEqual(self.orp2.supplier, self.supplier)  # still not moved — still short
         self.assertIsNotNone(cache.get("whatsapp_reroute_grace:+972501234567"))
         last_msg = mock_send.call_args_list[-1][0][1]
-        self.assertIn("עדיין לא מספיק", last_msg)
+        self.assertIn("קיבלתי את התוספת", last_msg)
+        self.assertIn("חסר 920.00", last_msg)
 
     def test_grace_timeout_cancels_the_order_when_never_topped_up(self):
         tomato_only = make_supplier("רק עגבניה", minimum_order=1000)
@@ -2322,3 +2325,120 @@ class CheckoutConfirmationMessageTests(TestCase):
         msg = mock_send.call_args[0][1]
         for order in orders:
             self.assertIn(f"הזמנה #{order.id} — {order.supplier.name}", msg)
+
+
+
+@override_settings(
+    CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True,
+    ADMIN_WHATSAPP_NUMBER="+972500000000",
+)
+class RerouteGraceChoicesTests(TestCase):
+    """
+    A supplier cancels its order in a two-supplier checkout:
+      • items the OTHER supplier already in the checkout carries go straight
+        into that supplier's open order;
+      • the rest waits (below minimum) — the customer can add more, answer
+        "שלח" to send anyway, or "ביטול" to drop them.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.customer_phone = "+972503333333"
+        self.user = make_user_with_profile(phone=self.customer_phone)
+        self.tomato = make_product("עגבניה")
+        self.carrot = make_product("גזר")
+        self.pear = make_product("אגס")
+        self.cancelling = make_supplier("מבטל")
+        self.existing = make_supplier("ספק קיים")
+        self.pear_only = make_supplier("רק אגס", minimum_order=1000)
+        # The supplier already in the checkout carries tomatoes; only the new one has pears.
+        SupplierProduct.objects.create(supplier=self.existing, product=self.tomato, price_per_unit="6.00")
+        SupplierProduct.objects.create(supplier=self.existing, product=self.carrot, price_per_unit="3.00")
+        SupplierProduct.objects.create(supplier=self.pear_only, product=self.pear, price_per_unit="10.00")
+
+        self.order = make_order(self.user, self.cancelling, status=OrderRequest.Status.SENT, total_price="0")
+        self.sibling = make_order(
+            self.user, self.existing, batch=self.order.batch, status=OrderRequest.Status.SENT, total_price="30.00",
+        )
+        OrderRequestProduct.objects.create(
+            order_request=self.sibling, product=self.carrot, supplier=self.existing,
+            quantity=Decimal("10"), unit_price=Decimal("3.00"),
+        )
+        self.tomato_item = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.cancelling,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+        self.pear_item = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.pear, supplier=self.cancelling,
+            quantity=Decimal("5"), unit_price=Decimal("9.00"),
+        )
+        save_supplier_pending_order(
+            supplier_phone=self.cancelling.whatsapp_number,
+            order_request_id=self.order.id,
+            products=[
+                {"orp_id": self.tomato_item.id, "product_name": "עגבניה", "quantity": "10", "unit": "kg"},
+                {"orp_id": self.pear_item.id, "product_name": "אגס", "quantity": "5", "unit": "kg"},
+            ],
+        )
+
+    def _post(self, phone, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{phone}", "Body": body})
+
+    def _customer_msgs(self, mock_send):
+        return [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_items_the_existing_supplier_carries_move_there_right_away(self, mock_send):
+        self._post(self.cancelling.whatsapp_number, "ביטול")
+
+        self.tomato_item.refresh_from_db()
+        self.assertEqual(self.tomato_item.order_request, self.sibling)  # merged, no new order
+        self.pear_item.refresh_from_db()
+        self.assertEqual(self.pear_item.order_request, self.order)  # held — pear supplier under minimum
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertIsNotNone(cache.get(f"whatsapp_reroute_grace:{self.customer_phone}"))
+
+        msgs = self._customer_msgs(mock_send)
+        self.assertEqual(len(msgs), 1)  # one consolidated message
+        self.assertIn("הועבר לספק שכבר בהזמנה שלך", msgs[0])
+        self.assertIn("ספק קיים", msgs[0])
+        self.assertIn("רק אגס", msgs[0])
+        self.assertIn("*שלח*", msgs[0])
+
+        existing_msg = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.existing.whatsapp_number][0]
+        self.assertIn(f"להוסיף להזמנה #{self.sibling.id}", existing_msg)
+        pending = json.loads(cache.get(f"whatsapp_supplier_pending:{self.existing.whatsapp_number}"))
+        self.assertEqual(len(pending["products"]), 2)  # carrot (original) + tomato (moved)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_send_dispatches_below_minimum_and_tells_the_supplier(self, mock_send):
+        self._post(self.cancelling.whatsapp_number, "ביטול")
+        mock_send.reset_mock()
+
+        self._post(self.customer_phone, "שלח")
+
+        self.pear_item.refresh_from_db()
+        self.assertEqual(self.pear_item.supplier, self.pear_only)
+        self.assertEqual(self.pear_item.order_request.status, OrderRequest.Status.SENT)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
+        self.assertIsNone(cache.get(f"whatsapp_reroute_grace:{self.customer_phone}"))
+        pear_msg = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.pear_only.whatsapp_number][0]
+        self.assertIn("מתחת להזמנת המינימום", pear_msg)
+        self.assertIn("שולחים כמו שזה", self._customer_msgs(mock_send)[0])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_cancel_drops_the_held_items_only(self, mock_send):
+        self._post(self.cancelling.whatsapp_number, "ביטול")
+        mock_send.reset_mock()
+
+        self._post(self.customer_phone, "ביטול")
+
+        self.order.refresh_from_db()
+        self.sibling.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
+        self.assertEqual(self.sibling.status, OrderRequest.Status.SENT)  # untouched, incl. the merged tomato
+        self.assertEqual(self.sibling.products.count(), 2)
+        self.assertIsNone(cache.get(f"whatsapp_reroute_grace:{self.customer_phone}"))
+        self.assertIn("ממשיכות כרגיל", self._customer_msgs(mock_send)[0])

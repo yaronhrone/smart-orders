@@ -732,7 +732,41 @@ def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_
     if not available:
         return {"assignments": [], "unavailable": unavailable, "existing_totals": {}}
 
-    assignments = _assign_suppliers(available, order.user, region, suppliers, price_options)
+    # First, anything a supplier that already has an open order in this same
+    # checkout also carries goes to that supplier (its cheapest one if
+    # several) — merging into an order that's going out anyway beats opening
+    # a new supplier for it, even at a slightly higher price, and can't
+    # create a new minimum problem. Marked "preferred" so the caller can
+    # commit these right away regardless of what happens with the rest.
+    sibling_supplier_ids = set(
+        OrderRequest.objects
+        .filter(batch_id=order.batch_id, status=OrderRequest.Status.SENT)
+        .exclude(id=order_request_id)
+        .values_list("supplier_id", flat=True)
+    )
+    preferred = []
+    rest = []
+    for p in available:
+        options = price_options[p["product"].id]
+        sibling_options = [(s, price) for s, price in options if s.id in sibling_supplier_ids]
+        if sibling_options:
+            supplier, price = min(sibling_options, key=lambda sp: sp[1])
+            preferred.append({
+                "product": p["product"],
+                "quantity": p["quantity"],
+                "supplier": supplier,
+                "unit_price": price,
+                "all_prices": options,
+                "price_by_supplier": {s.id: pr for s, pr in options},
+                "preferred": True,
+            })
+        else:
+            rest.append(p)
+
+    # Then the cheapest assignment for whatever no existing supplier carries.
+    assignments = preferred + (
+        _assign_suppliers(rest, order.user, region, suppliers, price_options) if rest else []
+    )
 
     orp_by_product_id = {orp.product_id: orp for orp in orps}
     for a in assignments:

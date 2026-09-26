@@ -92,12 +92,14 @@ def notify_suppliers_for_batch(orders) -> None:
         notify_suppliers_for_order(order)
 
 
-def notify_supplier_of_items(order, items, *, created: bool) -> None:
+def notify_supplier_of_items(order, items, *, created: bool, note: str = "") -> None:
     """
     Tell `order`'s supplier about items that just landed in it (a reroute, a
     redirect, a customer addition) and re-register the order's pending state.
     `created` — the order itself is new (first message to this supplier for
-    it) vs. items added to an order they already have open.
+    it) vs. items added to an order they already have open. `note` — an extra
+    line for the supplier (e.g. sent below their minimum at the customer's
+    request).
     """
     company, address, company_phone = _company_details(order)
     if created:
@@ -106,6 +108,8 @@ def notify_supplier_of_items(order, items, *, created: bool) -> None:
         msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה #{order.id}:"]
     for item in items:
         msg_lines.append(f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}")
+    if note:
+        msg_lines.append(f"\n{note}")
     if address:
         msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
     if company_phone:
@@ -115,23 +119,23 @@ def notify_supplier_of_items(order, items, *, created: bool) -> None:
     _save_pending_for_order(order)
 
 
-def _dispatch_reroute_assignments(
-    order_request_id: int, assignments: list, unavailable: list,
-    customer_phone: str | None, intro_lines: list,
-) -> None:
+# Customer replies to a held reroute (see process_reroute's grace branch).
+GRACE_SEND_WORDS = ["שלח", "שלח בכל זאת", "תשלח", "send"]
+GRACE_CANCEL_WORDS = ["ביטול", "בטל", "לבטל", "cancel"]
+
+
+def _move_and_notify(assignments: list, minimum_problems: list = ()) -> list:
     """
-    Commit a validated (every resulting supplier clears their minimum)
-    reroute of a cancelled supplier's order: move each item into its new
-    supplier's order in the same batch (an open sibling, or a new order),
-    notify each of those suppliers once, cancel the source order, and send
-    the customer one consolidated message covering every item that moved.
-    Shared by the immediate happy path and by a top-up that just cleared a
-    minimum that was previously blocking dispatch.
+    Move each item into its new supplier's order in the same batch (an open
+    sibling, or a new order) and notify each of those suppliers once.
+    `minimum_problems` — suppliers this is being sent to below their
+    minimum (customer said "שלח"); they're told so in their message.
+    Returns [{"order", "items"}] per touched order, for the customer message.
     """
-    from apps.orders.models import OrderRequest
     from apps.orders.services import move_item_to_supplier, refresh_order_after_changes
 
-    touched = {}  # target order id -> {"order", "items", "created"}
+    short_by_supplier = {p["supplier_id"]: p for p in minimum_problems}
+    touched = {}
     for a in assignments:
         target = move_item_to_supplier(a["orp"], a["supplier"], a["unit_price"])
         if target.id not in touched:
@@ -144,22 +148,111 @@ def _dispatch_reroute_assignments(
 
     for entry in touched.values():
         refresh_order_after_changes(entry["order"].id)
-        notify_supplier_of_items(entry["order"], entry["items"], created=entry["created"])
+        short = short_by_supplier.get(entry["order"].supplier_id)
+        note = (
+            f"⚠️ שים לב: ההזמנה מתחת להזמנת המינימום שלך "
+            f"({short['current_total']:.2f}₪ מתוך {short['minimum_required']:.2f}₪) — "
+            "הלקוח ביקש לשלוח בכל זאת. אפשר לאשר, או לענות *ביטול*."
+        ) if short else ""
+        notify_supplier_of_items(entry["order"], entry["items"], created=entry["created"], note=note)
+    return list(touched.values())
+
+
+def _describe_moved(entries: list) -> list:
+    lines = []
+    for entry in entries:
+        order = entry["order"]
+        lines.append(f"*{order.supplier.name}* (הזמנה #{order.id}):")
+        for item in entry["items"]:
+            lines.append(f"  • {item.product.name} x{item.quantity} — {item.unit_price}₪")
+    return lines
+
+
+def _cancel_source(order_request_id: int) -> None:
+    from apps.orders.models import OrderRequest
+    from apps.orders.services import refresh_order_after_changes
 
     source = refresh_order_after_changes(order_request_id)
     if source and source.status not in (OrderRequest.Status.CANCELLED, OrderRequest.Status.DELIVERED):
         source.transition_to(OrderRequest.Status.CANCELLED)
 
+
+def process_reroute(
+    order_request_id: int, customer_phone: str | None, header_lines: list,
+    *, force: bool = False, start_grace: bool = True,
+) -> str:
+    """
+    Reroute a cancelled supplier's order (its supplier is order.supplier —
+    one order = one supplier) and act on the result, in this order:
+
+    1. Items a supplier already in this checkout carries go straight into
+       that supplier's open order — right away, whatever happens with the rest.
+    2. The rest goes to the cheapest replacement(s) — dispatched if every one
+       clears its minimum, or if `force` (the customer answered "שלח").
+    3. Otherwise the rest is held open (grace): the customer can add more,
+       answer "שלח" to send as-is, or "ביטול" to drop it
+       (fallback_flow._handle_reroute_grace_topup). `start_grace=False` when
+       already in grace (a top-up), so the timeout isn't restarted.
+    4. Nothing reroutable at all → the order is cancelled.
+
+    Sends the customer ONE message (header_lines + what happened). Returns
+    "dispatched" | "grace" | "cancelled".
+    """
+    from apps.orders.models import OrderRequest
+    from apps.orders.services import _check_missing_minimum, find_reroute_for_cancelled_supplier
+    from .cache import MINIMUM_GRACE_SECONDS, _save_reroute_grace_state
+
+    order = OrderRequest.objects.get(id=order_request_id)
+    reroute = find_reroute_for_cancelled_supplier(order_request_id, order.supplier_id)
+    assignments = reroute["assignments"]
+    preferred = [a for a in assignments if a.get("preferred")]
+    others = [a for a in assignments if not a.get("preferred")]
+    problems = _check_missing_minimum(others, reroute["existing_totals"]) if others else []
+
+    lines = list(header_lines)
+    if preferred:
+        lines.append("\n✅ הועבר לספק שכבר בהזמנה שלך:")
+        lines += _describe_moved(_move_and_notify(preferred))
+
+    if others and (not problems or force):
+        lines.append("\n✅ הועבר לספק חלופי:")
+        lines += _describe_moved(_move_and_notify(others, problems if force else []))
+        _cancel_source(order_request_id)
+        outcome = "dispatched"
+    elif others and customer_phone:
+        if start_grace:
+            _save_reroute_grace_state(customer_phone, order_request_id, order.supplier_id)
+        lines.append("\n⚠️ לשאר הפריטים מצאנו ספק, אבל זה לא עומד בהזמנת המינימום שלו:")
+        for problem in problems:
+            lines.append(
+                f"  • {problem['supplier_name']}: חסר {problem['missing_amount']:.2f}₪ "
+                f"(סה\"כ {problem['current_total']:.2f}₪ מתוך {problem['minimum_required']:.2f}₪)"
+            )
+        lines += [
+            f"\nמה לעשות? (יש לך {MINIMUM_GRACE_SECONDS // 3600} שעות)",
+            "• להוסיף מוצרים/כמות — פשוט שלח אותם (למשל: עוד 10 מלפפון)",
+            "• *שלח* — לשלוח כמו שזה; הספק יאשר או יסרב",
+            "• *ביטול* — לוותר על הפריטים האלה",
+            "אם לא תענה — הפריטים האלה יבוטלו אוטומטית.",
+        ]
+        outcome = "grace"
+    elif others:
+        # Can't ask the customer — never silently dispatch under minimum.
+        _cancel_source(order_request_id)
+        outcome = "cancelled"
+    elif preferred:
+        _cancel_source(order_request_id)
+        outcome = "dispatched"
+    else:
+        _cancel_source(order_request_id)
+        lines.append("\nלא נמצא ספק חלופי. ניתן ליצור הזמנה חדשה דרך המערכת.")
+        outcome = "cancelled"
+
+    if reroute["unavailable"]:
+        lines.append(f"\n❌ אין ספק חלופי עבור: {', '.join(reroute['unavailable'])}")
     if customer_phone:
-        lines = list(intro_lines)
-        for entry in touched.values():
-            order = entry["order"]
-            lines.append(f"\n*{order.supplier.name}* (הזמנה #{order.id}):")
-            for item in entry["items"]:
-                lines.append(f"  • {item.product.name} x{item.quantity} — {item.unit_price}₪")
-        if unavailable:
-            lines.append(f"\n❌ לא נמצא ספק חלופי עבור: {', '.join(unavailable)}")
         validators.send_whatsapp_message(customer_phone, "\n".join(lines))
+    return outcome
 
 
 def _notify_admin_supplier_cancelled(supplier, order_request_id: int) -> None:
@@ -501,8 +594,6 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
 
         try:
             from apps.orders.models import OrderRequest, OrderRequestProduct
-            from apps.orders.services import _check_missing_minimum, find_reroute_for_cancelled_supplier
-            from .cache import _save_reroute_grace_state
 
             # Block this supplier from any new assignment for 10 days, and
             # tell the admin so someone can find out why — before anything
@@ -515,62 +606,10 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             p = getattr(cancelled_order.user, "profile", None)
             customer_phone = validators._local_to_e164(p.phone) if p and p.phone else None
 
-            reroute = find_reroute_for_cancelled_supplier(
-                order_request_id=order_request_id,
-                failing_supplier_id=supplier.id,
+            process_reroute(
+                order_request_id, customer_phone,
+                header_lines=[f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}."],
             )
-            assignments = reroute["assignments"]
-            unavailable = reroute["unavailable"]
-            minimum_problems = (
-                _check_missing_minimum(assignments, reroute["existing_totals"]) if assignments else []
-            )
-
-            if assignments and not minimum_problems:
-                _dispatch_reroute_assignments(
-                    order_request_id, assignments, unavailable, customer_phone,
-                    intro_lines=[
-                        f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.",
-                        "✅ העברנו אוטומטית:",
-                    ],
-                )
-            elif assignments and minimum_problems:
-                # A valid full-coverage split exists, but it would leave a
-                # resulting supplier under their own minimum — the user's
-                # explicit rule: a pricier-but-valid split beats a cheaper
-                # one, but nothing under minimum gets dispatched. Hold it
-                # open instead of committing anything, and let the customer
-                # top up (see _handle_reroute_grace_topup).
-                if customer_phone:
-                    _save_reroute_grace_state(customer_phone, order_request_id, supplier.id)
-                    hours = 7200 // 3600
-                    lines = [
-                        f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.",
-                        "מצאנו לאן להעביר את כל הפריטים, אבל זה לא עומד במינימום ההזמנה:",
-                    ]
-                    for problem in minimum_problems:
-                        lines.append(
-                            f"  • {problem['supplier_name']}: חסר {problem['missing_amount']:.2f}₪ "
-                            f"(סה\"כ נוכחי {problem['current_total']:.2f}₪, מינימום {problem['minimum_required']:.2f}₪)"
-                        )
-                    lines.append(
-                        f"\nיש לך {hours} שעות להוסיף עוד מוצרים/כמות (שלח הודעה רגילה) כדי להשלים "
-                        "למינימום. אם לא, ההזמנה תבוטל אוטומטית."
-                    )
-                    validators.send_whatsapp_message(customer_phone, "\n".join(lines))
-                else:
-                    # No way to reach the customer to ask for a top-up —
-                    # can't hold this open indefinitely, so fall back to
-                    # cancelling rather than silently dispatching under-minimum.
-                    OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.CANCELLED)
-            else:
-                # Nothing could be rerouted at all — cancel the order.
-                OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.CANCELLED)
-                if customer_phone:
-                    validators.send_whatsapp_message(
-                        customer_phone,
-                        f"❌ *{supplier.name}* ביטל את הזמנה #{order_request_id}.\n"
-                        "לא נמצא ספק חלופי. ניתן ליצור הזמנה חדשה דרך המערכת.",
-                    )
         except Exception as exc:
             logger.error("Failed to handle cancellation for order %s: %s", order_request_id, exc)
 
