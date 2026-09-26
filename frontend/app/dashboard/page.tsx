@@ -2,66 +2,38 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchOrders, fetchStats, OrderSummary, OrderStats } from "../lib/api";
-
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  pending:   { label: "ממתין",  color: "bg-yellow-100 text-yellow-800" },
-  approved:  { label: "אושר",   color: "bg-blue-100 text-blue-800" },
-  sent:      { label: "נשלח",   color: "bg-purple-100 text-purple-800" },
-  delivered: { label: "נמסר",   color: "bg-green-100 text-green-800" },
-  cancelled: { label: "בוטל",   color: "bg-red-100 text-red-800" },
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const s = STATUS_LABELS[status] ?? { label: status, color: "bg-gray-100 text-gray-700" };
-  return (
-    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${s.color}`}>
-      {s.label}
-    </span>
-  );
-}
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("he-IL", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function formatCurrency(n: string | number) {
-  return `₪${Number(n).toLocaleString("he-IL", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
+import { fetchOrderBatches, fetchStats, OrderBatchSummary, OrderStats } from "../lib/api";
+import { StatusBadge, deliveredSummary, formatCurrency, formatDateTime } from "../lib/orderStatus";
 
 const ORDERS_PAGE_SIZE = 10;
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [orders, setOrders] = useState<OrderSummary[] | null>(null);
+  const [batches, setBatches] = useState<OrderBatchSummary[] | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [stats, setStats] = useState<OrderStats | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([fetchOrders({ limit: ORDERS_PAGE_SIZE }), fetchStats()])
-      .then(([o, s]) => {
-        setOrders(o.results);
-        setHasMore(o.has_more);
+    Promise.all([fetchOrderBatches({ limit: ORDERS_PAGE_SIZE }), fetchStats()])
+      .then(([b, s]) => {
+        setBatches(b.results);
+        setHasMore(b.has_more);
         setStats(s);
+        // Open the newest checkout by default — it's the one being followed.
+        if (b.results.length > 0) setExpanded(b.results[0].id);
       })
       .catch(() => setError("שגיאה בטעינת הנתונים"));
   }, []);
 
   async function loadMore() {
-    if (!orders) return;
+    if (!batches) return;
     setLoadingMore(true);
     try {
-      const res = await fetchOrders({ limit: ORDERS_PAGE_SIZE, offset: orders.length });
-      setOrders((prev) => [...(prev ?? []), ...res.results]);
+      const res = await fetchOrderBatches({ limit: ORDERS_PAGE_SIZE, offset: batches.length });
+      setBatches((prev) => [...(prev ?? []), ...res.results]);
       setHasMore(res.has_more);
     } catch {
       setError("שגיאה בטעינת הזמנות נוספות");
@@ -78,7 +50,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!orders || !stats) {
+  if (!batches || !stats) {
     return (
       <div className="flex items-center justify-center h-64">
         <p className="text-gray-500">טוען...</p>
@@ -137,43 +109,72 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* Recent orders */}
+      {/* Recent orders — one row per checkout, expanding into its per-supplier orders */}
       <section>
         <h2 className="text-base font-semibold text-green-900 mb-3">הזמנות אחרונות</h2>
-        {orders.length === 0 ? (
+        {batches.length === 0 ? (
           <p className="text-sm text-gray-600">אין הזמנות עדיין.</p>
         ) : (
-          <div className="bg-white rounded-xl shadow-md overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-green-800 text-green-100 text-xs">
-                  <th className="text-right px-4 py-3 font-medium">#</th>
-                  <th className="text-right px-4 py-3 font-medium">תאריך</th>
-                  <th className="text-right px-4 py-3 font-medium">פריטים</th>
-                  <th className="text-right px-4 py-3 font-medium">סה&quot;כ</th>
-                  <th className="text-right px-4 py-3 font-medium">סטטוס</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {orders.map((o) => (
-                  <tr
-                    key={o.id}
-                    onClick={() => router.push(`/dashboard/orders/${o.id}`)}
-                    className="hover:bg-green-50 cursor-pointer transition"
+          <div className="space-y-2">
+            {batches.map((b) => {
+              const isOpen = expanded === b.id;
+              const liveOrders = b.orders.filter((o) => o.status !== "cancelled");
+              const progress = deliveredSummary(b.orders);
+              return (
+                <div key={b.id} className="bg-white rounded-xl shadow-md overflow-hidden">
+                  <button
+                    onClick={() => setExpanded(isOpen ? null : b.id)}
+                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-green-50 transition text-right"
                   >
-                    <td className="px-4 py-3 text-gray-500">{o.id}</td>
-                    <td className="px-4 py-3 text-gray-700">{formatDate(o.created_at)}</td>
-                    <td className="px-4 py-3 text-gray-700">{o.product_count}</td>
-                    <td className="px-4 py-3 font-semibold text-green-700">
-                      {formatCurrency(o.total_price)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={o.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm items-center min-w-0">
+                      <span className="font-medium text-gray-800">{formatDateTime(b.created_at)}</span>
+                      <span className="text-gray-500">
+                        {liveOrders.length === 1 ? liveOrders[0].supplier_name : `${liveOrders.length} ספקים`}
+                      </span>
+                      <span className="font-semibold text-green-700">{formatCurrency(b.total_price)}</span>
+                      <span className="flex items-center gap-2">
+                        <StatusBadge status={b.status} />
+                        {progress && <span className="text-xs text-gray-400">{progress}</span>}
+                      </span>
+                    </div>
+                    <span className={`shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}>
+                      ▼
+                    </span>
+                  </button>
+
+                  {isOpen && (
+                    <div className="border-t border-gray-100 overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-gray-50 text-gray-500 text-xs">
+                            <th className="text-right px-4 py-2 font-medium">הזמנה</th>
+                            <th className="text-right px-4 py-2 font-medium">ספק</th>
+                            <th className="text-right px-4 py-2 font-medium">פריטים</th>
+                            <th className="text-right px-4 py-2 font-medium">סה&quot;כ</th>
+                            <th className="text-right px-4 py-2 font-medium">סטטוס</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {b.orders.map((o) => (
+                            <tr
+                              key={o.id}
+                              onClick={() => router.push(`/dashboard/orders/${o.id}`)}
+                              className="hover:bg-green-50 cursor-pointer transition"
+                            >
+                              <td className="px-4 py-2.5 text-gray-500">#{o.id}</td>
+                              <td className="px-4 py-2.5 text-gray-800">{o.supplier_name}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{o.product_count}</td>
+                              <td className="px-4 py-2.5 font-medium text-gray-800">{formatCurrency(o.total_price)}</td>
+                              <td className="px-4 py-2.5"><StatusBadge status={o.status} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {hasMore && (
