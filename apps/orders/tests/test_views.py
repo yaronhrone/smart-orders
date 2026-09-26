@@ -302,3 +302,53 @@ class AdminOrderBatchListViewTests(APITestCase):
 
         self.assertEqual(len(res.data["results"]), 1)
         self.assertEqual(res.data["results"][0]["status"], "delivered")
+
+
+class PlaceAndSuggestViewTests(APITestCase):
+    """Site checkout: one recommended option, and a WhatsApp to the customer."""
+
+    def setUp(self):
+        from unittest.mock import patch
+        from apps.catalog.models import SupplierProduct
+        from apps.users.models import Profile
+
+        self.user = make_user()
+        Profile.objects.create(user=self.user, phone="0501112222", region=Region.CENTER)
+        self.client.force_authenticate(user=self.user)
+        self.tomato = make_product("עגבנייה")
+        self.carrot = make_product("גזר")
+        self.a = make_supplier("ספק א")
+        self.b = make_supplier("ספק ב")
+        SupplierProduct.objects.create(supplier=self.a, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.b, product=self.carrot, price_per_unit="3.00")
+
+        task_patch = patch("apps.orders.tasks.send_supplier_order_notification_task")
+        send_patch = patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+        task_patch.start()
+        self.mock_send = send_patch.start()
+        self.addCleanup(task_patch.stop)
+        self.addCleanup(send_patch.stop)
+
+    def _basket(self):
+        return {"products": [
+            {"product_name": "עגבנייה", "quantity": "10"},
+            {"product_name": "גזר", "quantity": "4"},
+        ]}
+
+    def test_suggest_returns_the_single_recommended_scenario(self):
+        res = self.client.post(reverse("orders-suggest"), self._basket(), format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(res.data["recommended"], ("cheapest", "fewest_suppliers"))
+
+    def test_place_whatsapps_the_customer_every_order_number(self):
+        res = self.client.post(
+            reverse("orders-place"), {**self._basket(), "scenario": "cheapest"}, format="json",
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(res.data["orders"]), 2)
+        customer_calls = [c for c in self.mock_send.call_args_list if c[0][0] == "+972501112222"]
+        self.assertEqual(len(customer_calls), 1)
+        msg = customer_calls[0][0][1]
+        for o in res.data["orders"]:
+            self.assertIn(f"הזמנה #{o['order_id']} — {o['supplier_name']}", msg)

@@ -86,6 +86,29 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
         return None
 
 
+def notify_customer_of_checkout(user, orders) -> None:
+    """
+    WhatsApp the customer the checkout they just placed on the site — each
+    supplier's order number and total. (A WhatsApp checkout already gets
+    this in its "✅ אושר!" reply.) Silently skipped without a phone.
+    """
+    profile = getattr(user, "profile", None)
+    if not profile or not profile.phone:
+        return
+    lines = ["✅ ההזמנה שלך התקבלה ונשלחה לספקים:"]
+    total = Decimal(0)
+    for order in orders:
+        lines.append(f"  • הזמנה #{order.id} — {order.supplier.name} — {order.total_price:.2f}₪")
+        total += order.total_price
+    if len(orders) > 1:
+        lines.append(f'\nסה"כ: {total:.2f}₪ ({len(orders)} ספקים, הזמנה נפרדת לכל ספק)')
+    lines.append("\nנעדכן אותך כשכל ספק מאשר.")
+    try:
+        validators.send_whatsapp_message(validators._local_to_e164(profile.phone), "\n".join(lines))
+    except Exception as exc:
+        logger.error("Failed to WhatsApp checkout confirmation to user %s: %s", user.id, exc)
+
+
 def _resolve_profile(phone: str):
     """Look up a customer Profile by phone; try +972XXXXXXXXX and 0XXXXXXXXX."""
     from apps.users.models import Profile
@@ -365,19 +388,12 @@ def _suggest_and_respond(
     minimum_issues = result.get("minimum_issues", {})
     unavailable_products = result.get("unavailable_products", [])
     cheapest_issues = minimum_issues.get("cheapest", [])
-    fewest_issues = minimum_issues.get("fewest_suppliers", [])
-    both_ok = not cheapest_issues and not fewest_issues
-    # same_price used to gate the single-confirm shortcut on its own —
-    # true whenever the two scenarios end up identical (the common case:
-    # one dominant supplier), which said nothing about whether that shared
-    # total actually clears its supplier(s)' minimum. That let the shortcut
-    # hand the customer a bare "✅ ... ענה אישור" even when it wouldn't
-    # clear, discovering + dropping the whole thing (no grace period,
-    # old-style) only once they replied — see _handle_user_flow's
-    # scenario_issues check. Now only takes the shortcut when it's also
-    # actually orderable.
-    same_price = cheapest["total_price"] == fewest["total_price"]
-    same = same_price and both_ok
+    # One option only: the cheapest scenario whose suppliers all clear their
+    # minimum (see services.pick_recommended_scenario). Offering both
+    # "cheapest" and "fewest suppliers" and asking א/ב just made the customer
+    # do the comparison the system can do for them.
+    from apps.orders.services import pick_recommended_scenario
+    recommended = pick_recommended_scenario(result)
 
     # A product with no supplier at all doesn't kill the rest of a perfectly
     # orderable basket — suggest_order already dropped it from both
@@ -393,29 +409,17 @@ def _suggest_and_respond(
         minimum_issues=minimum_issues,
     )
 
-    if both_ok:
-        # Both scenarios clear their suppliers' minimums — offer the choice
-        # (or, if the prices happen to be identical, the single option).
-        save_pending_order(phone, cheapest, fewest, **pending_kwargs)
-        if same:
-            msg = _format_scenario("ההזמנה שלך", cheapest)
-            msg += "\n\nענה *אישור* לאישור."
-        else:
-            msg = (
-                _format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
-                + "\n\n"
-                + _format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
-                + "\n\nענה *א* לאפשרות הזולה יותר, *ב* לאפשרות עם פחות ספקים."
-            )
-    elif cheapest_issues and fewest_issues:
-        # Neither scenario clears its suppliers' minimums — there is nothing
-        # valid to offer right now.
+    if recommended:
+        chosen = cheapest if recommended == "cheapest" else fewest
+        save_pending_order(phone, cheapest, fewest, single_scenario=recommended, **pending_kwargs)
+        msg = _format_scenario("ההזמנה שלך", chosen)
+        msg += "\n\nענה *אישור* לאישור."
+    else:
+        # Nothing clears the suppliers' minimums — nothing valid to offer yet.
         shortfalls = (
-            "⛔ אף אחת מהאפשרויות לא עומדת במינימום הזמנה של הספקים:\n\n"
-            + _format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
+            "⛔ ההזמנה לא עומדת במינימום הזמנה של הספקים:\n\n"
+            + _format_scenario("ההזמנה שלך", cheapest)
             + "\n" + _format_minimum_warning(cheapest_issues)
-            + "\n\n" + _format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
-            + "\n" + _format_minimum_warning(fewest_issues)
         )
         if is_grace_retry:
             # Already got one grace window and still doesn't clear a minimum —
@@ -443,24 +447,6 @@ def _suggest_and_respond(
                 "לעמוד במינימום (שלח הודעה נוספת, היא תתווסף להזמנה זו). "
                 "אם לא תעדכן, ההזמנה תבוטל אוטומטית."
             )
-    else:
-        # Exactly one scenario is actually orderable — offer only that one,
-        # instead of letting the customer pick a dead end and then, on
-        # confirming, lose the whole pending order with no way back to the
-        # option that would have worked.
-        valid_scenario, valid_label, broken_issues, broken_label = (
-            ("cheapest", "הזול ביותר", fewest_issues, "האפשרות עם פחות ספקים")
-            if fewest_issues
-            else ("fewest_suppliers", "עם הכי פחות ספקים", cheapest_issues, "האפשרות הזולה ביותר")
-        )
-        chosen = cheapest if valid_scenario == "cheapest" else fewest
-        save_pending_order(phone, cheapest, fewest, single_scenario=valid_scenario, **pending_kwargs)
-        msg = _format_scenario(f"ההזמנה שלך — {valid_label}", chosen)
-        msg += (
-            f"\n\n({broken_label} לא עומדת במינימום הזמנה של "
-            f"{broken_issues[0]['supplier_name']} — חסר ₪{Decimal(str(broken_issues[0]['missing_amount'])):.2f})"
-        )
-        msg += "\n\nענה *אישור* לאישור."
 
     if unrecognized:
         msg += f"\n\n⚠️ לא זוהה: {', '.join(unrecognized)}"

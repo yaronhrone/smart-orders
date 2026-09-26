@@ -49,6 +49,7 @@ from .user_flow import (
     _handle_new_order,
     _handle_order_modification,
     _handle_user_flow,
+    notify_customer_of_checkout,
 )
 from .validators import _normalize_phone, _validate_twilio_signature, send_whatsapp_message
 

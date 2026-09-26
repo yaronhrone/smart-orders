@@ -255,82 +255,60 @@ export default function NewOrderPage() {
       {/* ─── Step 2: Scenarios ────────────────────────────────────────── */}
       {step === 2 && suggestion && (
         <div className="space-y-5">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {(["cheapest", "fewest_suppliers"] as const)
-              .map((key) => ({
-                key,
-                sc: suggestion[key],
-                issues: suggestion.minimum_issues[key],
-              }))
-              .sort((a, b) => Number(a.sc.total_price) - Number(b.sc.total_price))
-              .map(({ key, sc, issues }, idx) => {
-              const isCheapest = idx === 0;
-              const label = isCheapest ? "הכי זול" : (key === "fewest_suppliers" ? "ספק אחד" : "אפשרות נוספת");
-              return (
-                <div
-                  key={key}
-                  className={`border-2 rounded-xl p-4 flex flex-col gap-3 transition ${
-                    isCheapest
-                      ? "border-blue-500 hover:border-blue-600"
-                      : "border-gray-200 hover:border-gray-400"
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className={`text-xs font-semibold uppercase tracking-wide ${isCheapest ? "text-blue-600" : "text-gray-500"}`}>
-                          {label}
-                        </p>
-                        {isCheapest && (
-                          <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">מומלץ</span>
-                        )}
-                      </div>
-                      <p className="text-2xl font-bold text-gray-900 mt-0.5">
-                        {formatCurrency(sc.total_price)}
-                      </p>
-                    </div>
-                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full whitespace-nowrap">
-                      {sc.supplier_count} ספקים
-                    </span>
+          {(() => {
+            // One option only: the cheapest scenario that clears every
+            // supplier's minimum (picked by the server). If none does, show
+            // the cheapest one with what's missing, not orderable.
+            const key = suggestion.recommended ?? "cheapest";
+            const sc = suggestion[key];
+            const issues = suggestion.recommended ? [] : suggestion.minimum_issues[key];
+            return (
+              <div className="border-2 border-blue-500 rounded-xl p-4 flex flex-col gap-3">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-blue-600">ההזמנה שלך — המחיר הזול ביותר</p>
+                    <p className="text-2xl font-bold text-gray-900 mt-0.5">
+                      {formatCurrency(sc.total_price)}
+                    </p>
                   </div>
-
-                  <ul className="text-xs text-gray-600 space-y-1 flex-1">
-                    {sc.products.map((p, i) => {
-                      const unitDisplay = catalog.find(c => c.id === p.product_id)?.unit_display ?? p.unit;
-                      return (
-                        <li key={i} className="flex justify-between gap-2">
-                          <span className="truncate">{p.product_name} × {formatQty(p.quantity)} {unitDisplay}</span>
-                          <span className="shrink-0 text-gray-400">{p.supplier_name}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-
-                  {issues.length > 0 && (
-                    <div className="bg-orange-50 rounded-lg p-2 text-xs text-orange-700 space-y-0.5">
-                      {issues.map((iss) => (
-                        <p key={iss.supplier_id}>
-                          {iss.supplier_name}: חסר {formatCurrency(iss.missing_amount)} למינימום
-                        </p>
-                      ))}
-                    </div>
-                  )}
-
-                  <button
-                    onClick={() => handlePlace(key)}
-                    disabled={placing || issues.length > 0}
-                    className={`w-full py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition ${
-                      isCheapest
-                        ? "bg-blue-600 text-white hover:bg-blue-700"
-                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    }`}
-                  >
-                    {placing ? "מבצע הזמנה..." : issues.length > 0 ? "⛔ מינימום לא עומד" : `הזמן — ${label}`}
-                  </button>
+                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full whitespace-nowrap">
+                    {sc.supplier_count === 1 ? "ספק אחד" : `${sc.supplier_count} ספקים — הזמנה נפרדת לכל ספק`}
+                  </span>
                 </div>
-              );
-            })}
-          </div>
+
+                <ul className="text-xs text-gray-600 space-y-1">
+                  {sc.products.map((p, i) => {
+                    const unitDisplay = catalog.find(c => c.id === p.product_id)?.unit_display ?? p.unit;
+                    return (
+                      <li key={i} className="flex justify-between gap-2">
+                        <span className="truncate">{p.product_name} × {formatQty(p.quantity)} {unitDisplay}</span>
+                        <span className="shrink-0 text-gray-400">{p.supplier_name}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                {issues.length > 0 && (
+                  <div className="bg-orange-50 rounded-lg p-2 text-xs text-orange-700 space-y-0.5">
+                    {issues.map((iss) => (
+                      <p key={iss.supplier_id}>
+                        {iss.supplier_name}: חסר {formatCurrency(iss.missing_amount)} למינימום
+                      </p>
+                    ))}
+                    <p className="font-medium pt-1">הוסף מוצרים או כמות כדי לעמוד במינימום.</p>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => handlePlace(key)}
+                  disabled={placing || issues.length > 0}
+                  className="w-full py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                >
+                  {placing ? "מבצע הזמנה..." : issues.length > 0 ? "⛔ מינימום לא עומד" : "אשר והזמן"}
+                </button>
+              </div>
+            );
+          })()}
 
           {placeError && (
             <div className="bg-red-50 border border-red-300 rounded-xl px-4 py-3 flex items-start gap-2">

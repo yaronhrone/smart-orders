@@ -300,6 +300,9 @@ export interface SuggestOrderResponse {
     cheapest: MinimumIssue[];
     fewest_suppliers: MinimumIssue[];
   };
+  /** The single scenario to offer — cheapest one clearing every supplier's
+   *  minimum. null when none does. */
+  recommended: "cheapest" | "fewest_suppliers" | null;
 }
 
 export async function suggestOrder(

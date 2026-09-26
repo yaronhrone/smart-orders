@@ -79,6 +79,9 @@ class SuggestOrderResponseSerializer(serializers.Serializer):
     cheapest = ScenarioSerializer()
     fewest_suppliers = ScenarioSerializer()
     minimum_issues = MinimumIssuesByScenarioSerializer()
+    # The single scenario to offer ("cheapest" | "fewest_suppliers"), or
+    # null when none clears every supplier's minimum.
+    recommended = serializers.CharField(allow_null=True)
 
 # ---------------------------------------------------------------------------
 # Output — place endpoint

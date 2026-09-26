@@ -69,11 +69,12 @@ class PlaceOrderView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            from apps.orders.whatsapp import notify_suppliers_for_batch
+            from apps.orders.whatsapp import notify_customer_of_checkout, notify_suppliers_for_batch
             notify_suppliers_for_batch(orders)
+            notify_customer_of_checkout(request.user, orders)
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).error("Failed to notify suppliers for batch %s: %s", batch.id, exc)
+            logging.getLogger(__name__).error("Failed to notify suppliers/customer for batch %s: %s", batch.id, exc)
 
         response_data = {
             "batch_id": batch.id,
