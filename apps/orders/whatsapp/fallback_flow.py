@@ -228,18 +228,19 @@ def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
 
 def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
     """
-    A supplier's cancellation left a valid full-coverage reroute that
-    couldn't clear a resulting supplier's minimum (see supplier_flow's
-    cancellation handler) — held open instead of dispatched. Returns None if
-    nothing is held open for this phone; otherwise treats `body` as an
-    addition to the same basket (same parser a brand-new order uses), and
-    either dispatches the now-valid reroute or reports the still-short
-    amount and keeps waiting for the grace window to run out.
+    A supplier's cancellation left items whose replacement supplier(s) don't
+    clear their minimum — held open (see supplier_flow.process_reroute).
+    Returns None if nothing is held open for this phone. Otherwise the
+    customer's reply is one of:
+      • "שלח"   — send as-is, below minimum; the supplier decides.
+      • "ביטול" — drop the held items (the rest of the checkout is untouched).
+      • anything else — an addition to the same basket (same parser a new
+        order uses); rerouted again, dispatched once it clears the minimum.
     """
     from apps.catalog.models import Product
-    from apps.orders.models import OrderRequestProduct
+    from apps.orders.models import OrderRequest, OrderRequestProduct
     from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
-    from apps.orders.services import _check_missing_minimum, find_reroute_for_cancelled_supplier
+    from .supplier_flow import GRACE_CANCEL_WORDS, GRACE_SEND_WORDS, _cancel_source, process_reroute
 
     raw = _get_reroute_grace_state(phone)
     if not raw:
@@ -248,6 +249,29 @@ def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
     state = json.loads(raw)
     order_request_id = state["order_request_id"]
     failing_supplier_id = state["failing_supplier_id"]
+    reply = body.strip().lower()
+
+    if reply in GRACE_SEND_WORDS:
+        _clear_reroute_grace_state(phone)
+        process_reroute(
+            order_request_id, phone,
+            header_lines=["👍 שולחים כמו שזה — הספק יאשר או יסרב, ונעדכן אותך."],
+            force=True, start_grace=False,
+        )
+        return HttpResponse(status=200)
+
+    if reply in GRACE_CANCEL_WORDS:
+        _clear_reroute_grace_state(phone)
+        _cancel_source(order_request_id)
+        order = OrderRequest.objects.get(id=order_request_id)
+        validators.send_whatsapp_message(
+            phone,
+            f"✅ הפריטים שנשארו מהזמנה #{order_request_id} בוטלו. "
+            "שאר ההזמנות שלך מאותה הזמנה ממשיכות כרגיל."
+            if order.batch.orders.exclude(id=order_request_id).exists()
+            else f"✅ הפריטים שנשארו מהזמנה #{order_request_id} בוטלו.",
+        )
+        return HttpResponse(status=200)
 
     product_names = list(Product.objects.values_list("name", flat=True))
     try:
@@ -259,7 +283,7 @@ def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
         return HttpResponse(status=200)
     except ValueError:
         validators.send_whatsapp_message(
-            phone, "לא הצלחתי להבין. שלח למשל: עוד 10 עגבניות",
+            phone, "לא הצלחתי להבין. שלח למשל: עוד 10 עגבניות — או *שלח* / *ביטול*.",
         )
         return HttpResponse(status=200)
 
@@ -277,9 +301,9 @@ def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
             existing.save(update_fields=["quantity"])
         else:
             # New product, not part of the original cancelled group — parked
-            # on the (now-blocked) failing supplier as a placeholder, same as
-            # every other item still waiting on this reroute; unit_price is
-            # never read before the reroute below overwrites it for real.
+            # on the (now-blocked) failing supplier's order as a placeholder,
+            # same as every other item still waiting on this reroute;
+            # unit_price is never read before the reroute overwrites it.
             OrderRequestProduct.objects.create(
                 order_request_id=order_request_id,
                 product=product, supplier_id=failing_supplier_id,
@@ -288,36 +312,14 @@ def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
         added_any = True
 
     if not added_any:
-        validators.send_whatsapp_message(phone, "לא זיהיתי מוצר ידוע בהודעה. נסה שוב.")
+        validators.send_whatsapp_message(phone, "לא זיהיתי מוצר ידוע בהודעה. נסה שוב, או ענה *שלח* / *ביטול*.")
         return HttpResponse(status=200)
 
-    reroute = find_reroute_for_cancelled_supplier(order_request_id, failing_supplier_id)
-    assignments = reroute["assignments"]
-    minimum_problems = _check_missing_minimum(assignments, reroute["existing_totals"]) if assignments else []
-
-    if assignments and not minimum_problems:
-        from .supplier_flow import _dispatch_reroute_assignments
+    outcome = process_reroute(
+        order_request_id, phone, header_lines=["✅ קיבלתי את התוספת."], start_grace=False,
+    )
+    if outcome != "grace":
         _clear_reroute_grace_state(phone)
-        _dispatch_reroute_assignments(
-            order_request_id, assignments, reroute["unavailable"], phone,
-            intro_lines=[f"✅ תודה! הזמנה #{order_request_id} עכשיו עומדת במינימום — העברנו:"],
-        )
-        return HttpResponse(status=200)
-
-    if not assignments:
-        validators.send_whatsapp_message(
-            phone, "לא נמצא ספק בשביל זה. נסה מוצר אחר או המתן לפקיעת הזמן.",
-        )
-        return HttpResponse(status=200)
-
-    lines = ["עדיין לא מספיק:"]
-    for problem in minimum_problems:
-        lines.append(
-            f"  • {problem['supplier_name']}: חסר עוד {problem['missing_amount']:.2f}₪ "
-            f"(סה\"כ {problem['current_total']:.2f}₪ מתוך {problem['minimum_required']:.2f}₪)"
-        )
-    lines.append("\nשלח עוד, או שההזמנה תבוטל בתום הזמן שנקבע.")
-    validators.send_whatsapp_message(phone, "\n".join(lines))
     return HttpResponse(status=200)
 
 
