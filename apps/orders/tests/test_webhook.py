@@ -20,6 +20,7 @@ from django.utils import timezone as django_timezone
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
+from apps.orders.tests.factories import make_order
 from apps.orders.whatsapp import (
     _parse_delivery_eta,
     _parse_supplier_reply,
@@ -646,8 +647,8 @@ class MinimumScenarioFilteringTests(TestCase):
             "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
             "minimum_issues": {"cheapest": [], "fewest_suppliers": _issue("ספק גדול")},
         }
-        order = OrderRequest.objects.create(user=self.user, total_price=Decimal("50.00"))
-        mock_build.return_value = (order, [])
+        order = make_order(self.user, make_supplier("ספק זול"), total_price=Decimal("50.00"))
+        mock_build.return_value = (order.batch, [order], {})
 
         self._post("+972506666666", "10 עגבניות")
         _flush_draft("+972506666666")
@@ -914,8 +915,7 @@ class OrderModificationTests(TestCase):
         SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
         SupplierProduct.objects.create(supplier=self.supplier, product=self.potato, price_per_unit="3.00")
         self.user = make_user_with_profile(phone="+972507777777")
-        self.order = OrderRequest.objects.create(
-            user=self.user, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
+        self.order = make_order(self.user, self.supplier, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
         )
         self.orp = OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
@@ -1107,8 +1107,7 @@ class DeliveryConfirmationWordTests(TestCase):
         # is ever a question — APPROVED (not SENT) is the realistic starting
         # status for testing "קיבלתי", and is what the delivery_flow filter
         # fix now actually looks for.
-        self.order = OrderRequest.objects.create(
-            user=self.user, status=OrderRequest.Status.APPROVED, total_price=Decimal("50.00")
+        self.order = make_order(self.user, self.supplier, status=OrderRequest.Status.APPROVED, total_price=Decimal("50.00")
         )
         OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
@@ -1139,8 +1138,7 @@ class SupplierConfirmationFlowTests(TestCase):
         self.tomato = make_product("עגבניה")
         self.carrot = make_product("גזר")
         self.supplier = make_supplier("ספק א")
-        self.order = OrderRequest.objects.create(
-            user=self.user, total_price="100.00", status=OrderRequest.Status.SENT,
+        self.order = make_order(self.user, self.supplier, total_price="100.00", status=OrderRequest.Status.SENT,
         )
         self.orp1 = OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
@@ -1320,8 +1318,7 @@ class SupplierCancellationFlowTests(TestCase):
         self.tomato = make_product("עגבניה")
         self.carrot = make_product("גזר")
         self.supplier = make_supplier("ספק א")
-        self.order = OrderRequest.objects.create(
-            user=self.user, total_price="100.00", status=OrderRequest.Status.SENT,
+        self.order = make_order(self.user, self.supplier, total_price="100.00", status=OrderRequest.Status.SENT,
         )
         self.orp1 = OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
@@ -1358,8 +1355,16 @@ class SupplierCancellationFlowTests(TestCase):
         self.orp2.refresh_from_db()
         self.assertEqual(self.orp1.supplier, replacement)
         self.assertEqual(self.orp2.supplier, replacement)
+        # One order per supplier: the items now live in the replacement's own
+        # order in the same checkout, which is live; the canceller's order
+        # is cancelled — and ONLY it.
+        new_order = self.orp1.order_request
+        self.assertEqual(new_order, self.orp2.order_request)
+        self.assertEqual(new_order.supplier, replacement)
+        self.assertEqual(new_order.batch, self.order.batch)
+        self.assertEqual(new_order.status, OrderRequest.Status.SENT)
         self.order.refresh_from_db()
-        self.assertNotEqual(self.order.status, OrderRequest.Status.CANCELLED)
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
 
         # New supplier got its own order message + pending state.
         replacement_calls = [c for c in mock_send.call_args_list if c[0][0] == replacement.whatsapp_number]
@@ -1462,8 +1467,11 @@ class SupplierCancellationFlowTests(TestCase):
 
         self.orp2.refresh_from_db()
         self.assertEqual(self.orp2.supplier, carrot_only)
+        self.assertEqual(self.orp2.order_request.supplier, carrot_only)
+        self.assertEqual(self.orp2.order_request.status, OrderRequest.Status.SENT)
+        # Held open until now; once dispatched the canceller's order is cancelled.
         self.order.refresh_from_db()
-        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
         self.assertIsNone(cache.get("whatsapp_reroute_grace:+972501234567"))
         carrot_supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == carrot_only.whatsapp_number]
         self.assertEqual(len(carrot_supplier_calls), 1)
@@ -1704,8 +1712,7 @@ class DailyUpdateCutoffTests(TestCase):
         self.supplier = make_supplier("ספק א")
         SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
         self.user = make_user_with_profile(phone=self.phone)
-        self.order = OrderRequest.objects.create(
-            user=self.user, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
+        self.order = make_order(self.user, self.supplier, status=OrderRequest.Status.SENT, total_price=Decimal("50.00")
         )
         OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier,
@@ -1780,7 +1787,7 @@ class ShippingAndDeliveryChainTests(TestCase):
         self.user = make_user_with_profile(phone=self.customer_phone)
 
     def _make_order(self, status):
-        order = OrderRequest.objects.create(user=self.user, status=status, total_price=Decimal("50.00"))
+        order = make_order(self.user, self.supplier, status=status, total_price=Decimal("50.00"))
         OrderRequestProduct.objects.create(
             order_request=order, product=self.tomato, supplier=self.supplier,
             quantity=Decimal("10"), unit_price=Decimal("5.00"),
@@ -1862,8 +1869,9 @@ class ShippingAndDeliveryChainTests(TestCase):
         carrot = make_product("גזר")
         supplier_b = make_supplier("ספק ב")
         order = self._make_order(OrderRequest.Status.APPROVED)
+        order_b = make_order(self.user, supplier_b, batch=order.batch, status=OrderRequest.Status.APPROVED)
         OrderRequestProduct.objects.create(
-            order_request=order, product=carrot, supplier=supplier_b,
+            order_request=order_b, product=carrot, supplier=supplier_b,
             quantity=Decimal("5"), unit_price=Decimal("3.00"),
         )
 
@@ -1977,8 +1985,7 @@ class FallbackFlowTests(TestCase):
         SupplierProduct.objects.create(supplier=self.supplier_b, product=self.tomato, price_per_unit="6.00")
         self.customer_phone = "+972509999999"
         self.user = make_user_with_profile(phone=self.customer_phone)
-        self.order = OrderRequest.objects.create(
-            user=self.user, status=OrderRequest.Status.SENT, total_price="50.00"
+        self.order = make_order(self.user, self.supplier_a, status=OrderRequest.Status.SENT, total_price="50.00"
         )
         self.orp = OrderRequestProduct.objects.create(
             order_request=self.order, product=self.tomato, supplier=self.supplier_a,
@@ -2056,3 +2063,237 @@ class FallbackFlowTests(TestCase):
         self.assertIsNone(cache.get(f"whatsapp_fallback:{self.customer_phone}"))
         self.orp.refresh_from_db()
         self.assertEqual(self.orp.supplier, self.supplier_b)
+        # The item moved into supplier B's own order in the same checkout;
+        # supplier A's order, now empty, is cancelled.
+        self.assertNotEqual(self.orp.order_request, self.order)
+        self.assertEqual(self.orp.order_request.supplier, self.supplier_b)
+        self.assertEqual(self.orp.order_request.batch, self.order.batch)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.CANCELLED)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_redirect_into_open_sibling_order_reregisters_all_its_items(self, mock_send):
+        """
+        Supplier B already has its own SENT order in this checkout. The
+        redirected item joins that order, and B's pending state must cover
+        the order's older unconfirmed items too — otherwise B's "אישור"
+        would confirm only the new item and the order would never approve.
+        """
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        carrot = make_product("גזר")
+        SupplierProduct.objects.create(supplier=self.supplier_b, product=carrot, price_per_unit="3.00")
+        sibling = make_order(self.user, self.supplier_b, batch=self.order.batch, status=OrderRequest.Status.SENT)
+        older_item = OrderRequestProduct.objects.create(
+            order_request=sibling, product=carrot, supplier=self.supplier_b,
+            quantity="400", unit_price="3.00",
+        )
+        self._report_missing()
+
+        _handle_fallback_approval(self.customer_phone, "כן")
+
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.order_request, sibling)
+        pending = json.loads(cache.get(f"whatsapp_supplier_pending:{self.supplier_b.whatsapp_number}"))
+        self.assertEqual(pending["order_request_id"], sibling.id)
+        self.assertEqual({p["orp_id"] for p in pending["products"]}, {older_item.id, self.orp.id})
+
+
+
+# ─────────────── One order per supplier: cross-order behaviour ───────────────
+
+@override_settings(
+    CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True,
+    ADMIN_WHATSAPP_NUMBER="+972500000000",
+)
+class PerSupplierOrderTests(TestCase):
+    """
+    A checkout spanning two suppliers is two orders in one OrderBatch. Each
+    supplier's order lives its own life — confirming, shipping, cancelling
+    or being delivered never touches the sibling order.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.customer_phone = "+972508888888"
+        self.user = make_user_with_profile(phone=self.customer_phone)
+        self.tomato = make_product("עגבניה")
+        self.carrot = make_product("גזר")
+        self.supplier_a = make_supplier("ספק א")
+        self.supplier_b = make_supplier("ספק ב")
+        self.order_a = make_order(self.user, self.supplier_a, status=OrderRequest.Status.SENT, total_price="50.00")
+        self.order_b = make_order(
+            self.user, self.supplier_b, batch=self.order_a.batch,
+            status=OrderRequest.Status.SENT, total_price="30.00",
+        )
+        self.item_a = OrderRequestProduct.objects.create(
+            order_request=self.order_a, product=self.tomato, supplier=self.supplier_a,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+        self.item_b = OrderRequestProduct.objects.create(
+            order_request=self.order_b, product=self.carrot, supplier=self.supplier_b,
+            quantity=Decimal("10"), unit_price=Decimal("3.00"),
+        )
+
+    def _post(self, phone, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{phone}", "Body": body})
+
+    def _pending(self, order, items):
+        save_supplier_pending_order(
+            supplier_phone=order.supplier.whatsapp_number,
+            order_request_id=order.id,
+            products=[
+                {"orp_id": i.id, "product_name": i.product.name, "quantity": str(i.quantity), "unit": "kg"}
+                for i in items
+            ],
+        )
+
+    def _before_cutoff(self):
+        return patch(
+            "apps.orders.whatsapp.user_flow.timezone.localtime",
+            return_value=django_timezone.make_aware(datetime(2026, 1, 1, 10, 0)),
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_supplier_confirmation_approves_only_its_own_order(self, mock_send):
+        self._pending(self.order_a, [self.item_a])
+
+        self._post(self.supplier_a.whatsapp_number, "אישור")
+
+        self.order_a.refresh_from_db()
+        self.order_b.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.APPROVED)
+        self.assertEqual(self.order_b.status, OrderRequest.Status.SENT)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_both_suppliers_can_report_shipped_independently(self, mock_send):
+        """The bug that started this redesign: the second supplier's
+        "יצא למשלוח" used to find nothing once the shared status had moved on."""
+        for order in (self.order_a, self.order_b):
+            order.transition_to(OrderRequest.Status.APPROVED)
+
+        self._post(self.supplier_a.whatsapp_number, "יצא למשלוח")
+        self._post(self.supplier_b.whatsapp_number, "יצא למשלוח")
+
+        self.order_a.refresh_from_db()
+        self.order_b.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.SHIPPED)
+        self.assertEqual(self.order_b.status, OrderRequest.Status.SHIPPED)
+        customer_msgs = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+        self.assertEqual(len(customer_msgs), 2)
+        self.assertTrue(any(f"#{self.order_a.id}" in m and "ספק א" in m for m in customer_msgs))
+        self.assertTrue(any(f"#{self.order_b.id}" in m and "ספק ב" in m for m in customer_msgs))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_cancelling_supplier_cancels_only_its_own_order(self, mock_send):
+        """Used to cancel the WHOLE order when nothing could be rerouted —
+        including every other supplier's items."""
+        self._pending(self.order_a, [self.item_a])  # nobody else carries tomatoes
+
+        self._post(self.supplier_a.whatsapp_number, "ביטול")
+
+        self.order_a.refresh_from_db()
+        self.order_b.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.CANCELLED)
+        self.assertEqual(self.order_b.status, OrderRequest.Status.SENT)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_reroute_merges_into_an_open_sibling_order(self, mock_send):
+        """If the replacement supplier already has an open order in this
+        checkout, the items join it instead of opening a second order."""
+        SupplierProduct.objects.create(supplier=self.supplier_b, product=self.tomato, price_per_unit="6.00")
+        self._pending(self.order_a, [self.item_a])
+
+        self._post(self.supplier_a.whatsapp_number, "ביטול")
+
+        self.item_a.refresh_from_db()
+        self.assertEqual(self.item_a.order_request, self.order_b)
+        self.assertEqual(self.order_a.batch.orders.count(), 2)
+        self.order_b.refresh_from_db()
+        self.assertEqual(self.order_b.total_price, Decimal("90.00"))  # 30 + 10*6
+        b_msg = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.supplier_b.whatsapp_number][0]
+        self.assertIn(f"להוסיף להזמנה #{self.order_b.id}", b_msg)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_delivery_menu_lists_orders_and_delivers_only_the_one_picked(self, mock_send):
+        for order in (self.order_a, self.order_b):
+            order.transition_to(OrderRequest.Status.APPROVED)
+
+        self._post(self.customer_phone, "קיבלתי")
+        menu = mock_send.call_args[0][1]
+        self.assertIn(f"#{self.order_a.id}", menu)
+        self.assertIn(f"#{self.order_b.id}", menu)
+
+        self._post(self.customer_phone, "2")
+
+        self.order_a.refresh_from_db()
+        self.order_b.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.APPROVED)
+        self.assertEqual(self.order_b.status, OrderRequest.Status.DELIVERED)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_adding_a_product_from_a_new_supplier_opens_a_new_order_in_the_checkout(self, mock_parse, mock_send):
+        supplier_c = make_supplier("ספק ג")
+        potato = make_product("תפוח אדמה אדום")
+        SupplierProduct.objects.create(supplier=supplier_c, product=potato, price_per_unit="2.00")
+        mock_parse.return_value = {"intent": "add", "items": [{"product_name": potato.name, "quantity": Decimal("20")}]}
+
+        with self._before_cutoff():
+            self._post(self.customer_phone, "תוסיף 20 תפוח אדמה אדום")
+
+        new_order = OrderRequest.objects.get(batch=self.order_a.batch, supplier=supplier_c)
+        self.assertEqual(new_order.status, OrderRequest.Status.SENT)
+        self.assertEqual(new_order.products.get().quantity, Decimal("20"))
+        c_msg = [c[0][1] for c in mock_send.call_args_list if c[0][0] == supplier_c.whatsapp_number][0]
+        self.assertIn(f"הזמנה #{new_order.id}", c_msg)
+        self.assertIsNotNone(cache.get(f"whatsapp_supplier_pending:{supplier_c.whatsapp_number}"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_updating_an_item_the_supplier_already_approved_is_refused(self, mock_parse, mock_send):
+        self.order_a.transition_to(OrderRequest.Status.APPROVED)
+        mock_parse.return_value = {"intent": "update", "items": [{"product_name": "עגבניה", "quantity": Decimal("30")}]}
+
+        with self._before_cutoff():
+            self._post(self.customer_phone, "תעדכן עגבניות ל-30")
+
+        self.item_a.refresh_from_db()
+        self.assertEqual(self.item_a.quantity, Decimal("10"))
+        self.assertIn("כבר אישר", mock_send.call_args[0][1])
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class CheckoutConfirmationMessageTests(TestCase):
+    """Confirming a scenario over WhatsApp tells the customer each order
+    number and its supplier — later messages ("הזמנה #41 יצאה למשלוח")
+    have to map back to something they were told."""
+
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirmation_lists_one_order_per_supplier(self, mock_send, mock_task):
+        cache.clear()
+        user = make_user_with_profile(phone="+972504444444")
+        tomato = make_product("עגבניה")
+        carrot = make_product("גזר")
+        a = make_supplier("ספק א")
+        b = make_supplier("ספק ב")
+        SupplierProduct.objects.create(supplier=a, product=tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=b, product=carrot, price_per_unit="3.00")
+        scenario = _scenario("62.00")
+        save_pending_order(
+            "+972504444444", scenario, scenario,
+            products=[
+                {"product_id": tomato.id, "quantity": "10"},
+                {"product_id": carrot.id, "quantity": "4"},
+            ],
+            user_id=user.id, region=Region.CENTER,
+        )
+
+        self.client.post("/whatsapp/webhook/", {"From": "whatsapp:+972504444444", "Body": "אישור"})
+
+        orders = list(OrderRequest.objects.filter(user=user).order_by("id"))
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0].batch, orders[1].batch)
+        msg = mock_send.call_args[0][1]
+        for order in orders:
+            self.assertIn(f"הזמנה #{order.id} — {order.supplier.name}", msg)

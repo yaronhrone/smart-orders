@@ -11,10 +11,44 @@ from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
 from apps.users.models import Profile
 from apps.orders.models import OrderRequest, OrderRequestProduct
 from apps.orders.services import (
-    build_order, find_fallback_for_product, find_reroute_for_cancelled_supplier, suggest_order,
+    build_order as _build_order, find_fallback_for_product, find_reroute_for_cancelled_supplier,
+    get_or_create_supplier_order, move_item_to_supplier, refresh_order_after_changes, suggest_order,
 )
+from apps.orders.tests.factories import make_order
 
 User = get_user_model()
+
+
+class _Checkout:
+    """
+    Whole-basket view over one build_order() result, so the supplier-
+    assignment tests (which only care which supplier each item landed with,
+    not how the basket was split into orders) read the same as before:
+    `.products` spans every order in the batch.
+    """
+
+    def __init__(self, batch, orders):
+        self.batch = batch
+        self.orders = orders
+
+    @property
+    def products(self):
+        return OrderRequestProduct.objects.filter(order_request__batch=self.batch)
+
+    @property
+    def total_price(self):
+        return sum(o.total_price for o in self.orders)
+
+    @property
+    def status(self):
+        statuses = {o.status for o in self.orders}
+        assert len(statuses) == 1, statuses
+        return statuses.pop()
+
+
+def build_order(*args, **kwargs):
+    batch, orders, links = _build_order(*args, **kwargs)
+    return _Checkout(batch, orders), links
 
 
 def make_user(email="user@test.com"):
@@ -514,7 +548,7 @@ class FindFallbackForProductTests(TestCase):
         self.tomato = make_product("tomato")
         self.other_product = make_product("carrot")
         self.failing = make_supplier("failing", minimum_order=0)
-        self.order = OrderRequest.objects.create(user=self.user, total_price="0", status=OrderRequest.Status.SENT)
+        self.order = make_order(self.user, self.failing, total_price="0", status=OrderRequest.Status.SENT)
 
     def test_picks_cheapest_when_none_already_on_order(self):
         cheap = make_supplier("cheap")
@@ -537,14 +571,32 @@ class FindFallbackForProductTests(TestCase):
         cheaper_stranger = make_supplier("cheaper stranger")
         set_price(already_on_order, self.tomato, "6.00")
         set_price(cheaper_stranger, self.tomato, "5.00")
+        # "Already on the order" = already has its own order in the same checkout.
+        sibling = make_order(self.user, already_on_order, batch=self.order.batch, status=OrderRequest.Status.SENT)
         OrderRequestProduct.objects.create(
-            order_request=self.order, product=self.other_product, supplier=already_on_order,
+            order_request=sibling, product=self.other_product, supplier=already_on_order,
             quantity="1", unit_price="1.00",
         )
 
         result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
 
         self.assertEqual(result["supplier"], already_on_order)
+
+    def test_supplier_in_a_different_checkout_gets_no_preference(self):
+        """Only siblings in the SAME checkout count as 'already on the order'."""
+        elsewhere = make_supplier("in another checkout")
+        cheaper_stranger = make_supplier("cheaper stranger")
+        set_price(elsewhere, self.tomato, "6.00")
+        set_price(cheaper_stranger, self.tomato, "5.00")
+        other_checkout = make_order(self.user, elsewhere, status=OrderRequest.Status.SENT)
+        OrderRequestProduct.objects.create(
+            order_request=other_checkout, product=self.other_product, supplier=elsewhere,
+            quantity="1", unit_price="1.00",
+        )
+
+        result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
+
+        self.assertEqual(result["supplier"], cheaper_stranger)
 
     def test_no_candidates_returns_none(self):
         result = find_fallback_for_product(self.tomato, self.failing.id, self.order.id, Decimal("10"))
@@ -574,7 +626,7 @@ class FindRerouteForCancelledSupplierTests(TestCase):
         self.tomato = make_product("tomato")
         self.cucumber = make_product("cucumber")
         self.failing = make_supplier("failing", minimum_order=0)
-        self.order = OrderRequest.objects.create(user=self.user, total_price="0", status=OrderRequest.Status.SENT)
+        self.order = make_order(self.user, self.failing, total_price="0", status=OrderRequest.Status.SENT)
 
     def _give_failing_supplier(self, product, quantity):
         set_price(self.failing, product, "1.00")  # price doesn't matter, only presence
@@ -689,3 +741,95 @@ class FindRerouteForCancelledSupplierTests(TestCase):
         by_product = {a["product"].id: a["supplier"] for a in result["assignments"]}
         self.assertEqual(by_product[self.tomato.id], tomato_only)
         self.assertEqual(by_product[self.cucumber.id], cucumber_only)
+
+
+class BuildOrderSplitsPerSupplierTests(TestCase):
+    """build_order: one checkout (OrderBatch) = one order per supplier."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.tomato = make_product("tomato")
+        self.carrot = make_product("carrot")
+
+    def test_two_suppliers_become_two_orders_in_one_batch(self):
+        a = make_supplier("A")
+        b = make_supplier("B")
+        set_price(a, self.tomato, "5.00")
+        set_price(b, self.carrot, "3.00")
+
+        batch, orders, links = _build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("10")},
+            {"product": self.carrot, "quantity": Decimal("4")},
+        ])
+
+        self.assertEqual(len(orders), 2)
+        self.assertEqual({o.supplier for o in orders}, {a, b})
+        for order in orders:
+            self.assertEqual(order.batch, batch)
+            self.assertEqual({i.supplier for i in order.products.all()}, {order.supplier})
+        by_supplier = {o.supplier: o for o in orders}
+        self.assertEqual(float(by_supplier[a].total_price), 50.0)
+        self.assertEqual(float(by_supplier[b].total_price), 12.0)
+        self.assertEqual(len(links), 2)
+
+    def test_single_supplier_is_one_order(self):
+        a = make_supplier("A")
+        set_price(a, self.tomato, "5.00")
+        set_price(a, self.carrot, "3.00")
+
+        batch, orders, _ = _build_order(self.user, Region.CENTER, [
+            {"product": self.tomato, "quantity": Decimal("10")},
+            {"product": self.carrot, "quantity": Decimal("4")},
+        ])
+
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0].products.count(), 2)
+
+
+class BatchHelpersTests(TestCase):
+    """Moving items between the per-supplier orders of one checkout."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.tomato = make_product("tomato")
+        self.a = make_supplier("A")
+        self.b = make_supplier("B")
+        self.order_a = make_order(self.user, self.a, status=OrderRequest.Status.SENT)
+        self.item = OrderRequestProduct.objects.create(
+            order_request=self.order_a, product=self.tomato, supplier=self.a,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+
+    def test_move_creates_a_new_order_for_a_supplier_not_yet_in_the_batch(self):
+        target = move_item_to_supplier(self.item, self.b, Decimal("6.00"))
+
+        self.assertNotEqual(target, self.order_a)
+        self.assertEqual(target.batch, self.order_a.batch)
+        self.assertEqual(target.supplier, self.b)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.order_request, target)
+        self.assertEqual(self.item.unit_price, Decimal("6.00"))
+
+    def test_move_reuses_an_open_sibling_order(self):
+        sibling = make_order(self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.SENT)
+        self.assertEqual(move_item_to_supplier(self.item, self.b, Decimal("6.00")), sibling)
+
+    def test_move_never_reopens_an_approved_sibling(self):
+        approved = make_order(self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.APPROVED)
+        target, created = get_or_create_supplier_order(self.order_a.batch, self.b)
+        self.assertTrue(created)
+        self.assertNotEqual(target, approved)
+
+    def test_refresh_cancels_an_emptied_order(self):
+        move_item_to_supplier(self.item, self.b, Decimal("6.00"))
+        refresh_order_after_changes(self.order_a.id)
+        self.order_a.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.CANCELLED)
+        self.assertEqual(self.order_a.total_price, Decimal("0"))
+
+    def test_refresh_approves_when_everything_left_is_confirmed(self):
+        from apps.orders.models import SupplierConfirmation
+        SupplierConfirmation.objects.create(order_request_product=self.item, confirmed_quantity=Decimal("10"))
+        refresh_order_after_changes(self.order_a.id)
+        self.order_a.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.APPROVED)

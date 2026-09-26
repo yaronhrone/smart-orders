@@ -7,6 +7,21 @@ from django.db import models
 from apps.catalog.models import Product, Supplier
 
 
+class OrderBatch(models.Model):
+    """
+    One customer checkout — every OrderRequest created by the same "place
+    order" (site) or scenario confirmation (WhatsApp). Each supplier gets its
+    own OrderRequest with its own status/total; the batch only groups them
+    for display ("26/9 14:32" → click → the per-supplier orders). Totals and
+    overall status are derived from the orders, never stored here, so
+    there's one source of truth.
+    """
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="order_batches")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"קבוצת הזמנות #{self.id} - {self.user.email}"
+
 
 class OrderRequest(models.Model):
     class Status(models.TextChoices):
@@ -18,6 +33,11 @@ class OrderRequest(models.Model):
         CANCELLED = "cancelled", "בוטל"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="orders")
+    batch = models.ForeignKey(OrderBatch, on_delete=models.CASCADE, related_name="orders")
+    # One order = one supplier. Every OrderRequestProduct under this order
+    # belongs to this supplier — moving an item to another supplier means
+    # moving it to that supplier's order in the same batch.
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name="orders")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)

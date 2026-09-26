@@ -19,50 +19,100 @@ from . import validators
 logger = logging.getLogger(__name__)
 
 
-def notify_suppliers_for_order(order) -> None:
-    """Send WhatsApp to every supplier in an order, save pending state, and mark order SENT.
+SUPPLIER_REPLY_INSTRUCTIONS = (
+    "\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה"
+)
 
-    Groups by phone number so suppliers sharing a number (e.g. in testing) get one combined
-    message instead of multiple separate ones.
+
+def _company_details(order):
+    profile = getattr(order.user, "profile", None)
+    if not profile:
+        return "", "", ""
+    return profile.company_name, profile.company_address, profile.company_phone
+
+
+def _save_pending_for_order(order) -> None:
+    """
+    Register everything in `order` the supplier hasn't confirmed yet as
+    pending — not just the items in the latest message. An order can gain
+    items after the first message (a redirect, a customer addition); if the
+    pending state only held the newest ones, the supplier's "אישור" would
+    leave the earlier ones unconfirmed forever and the order stuck on SENT.
+    """
+    from apps.orders.models import SupplierConfirmation
+
+    confirmed_ids = set(
+        SupplierConfirmation.objects
+        .filter(order_request_product__order_request=order)
+        .values_list("order_request_product_id", flat=True)
+    )
+    save_supplier_pending_order(
+        supplier_phone=order.supplier.whatsapp_number,
+        order_request_id=order.id,
+        products=[
+            {
+                "orp_id": item.id,
+                "product_name": item.product.name,
+                "quantity": str(item.quantity),
+                "unit": item.product.get_unit_display(),
+            }
+            for item in order.products.select_related("product").all()
+            if item.id not in confirmed_ids
+        ],
+    )
+
+
+def notify_suppliers_for_order(order) -> None:
+    """Send the order to its supplier, save pending state, and mark it SENT.
+
+    One order = one supplier (a checkout with several suppliers is several
+    orders in one OrderBatch — see notify_suppliers_for_batch).
     """
     from apps.orders.models import OrderRequest
     from apps.orders.tasks import send_supplier_order_notification_task
 
-    profile = getattr(order.user, "profile", None)
-    company_name = profile.company_name if profile else ""
-    company_address = profile.company_address if profile else ""
-    company_phone = profile.company_phone if profile else ""
+    company_name, company_address, company_phone = _company_details(order)
 
-    by_phone = defaultdict(list)
-    for orp in order.products.select_related("product", "supplier").all():
-        by_phone[orp.supplier.whatsapp_number].append(orp)
+    lines = [f"שלום, *{company_name}* מבקש להזמין (הזמנה #{order.id}):"]
+    for item in order.products.select_related("product").all():
+        lines.append(f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}")
+    if company_address:
+        lines.append(f"\n📍 *כתובת למשלוח:* {company_address}")
+    if company_phone:
+        lines.append(f"📞 {company_phone}")
+    lines.append(SUPPLIER_REPLY_INSTRUCTIONS)
+    send_supplier_order_notification_task.delay(order.supplier.whatsapp_number, "\n".join(lines))
 
-    for phone, items in by_phone.items():
-        lines = [f"שלום, *{company_name}* מבקש להזמין:"]
-        for item in items:
-            lines.append(f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}")
-        if company_address:
-            lines.append(f"\n📍 *כתובת למשלוח:* {company_address}")
-        if company_phone:
-            lines.append(f"📞 {company_phone}")
-        lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-        send_supplier_order_notification_task.delay(phone, "\n".join(lines))
-
-        save_supplier_pending_order(
-            supplier_phone=phone,
-            order_request_id=order.id,
-            products=[
-                {
-                    "orp_id": item.id,
-                    "product_name": item.product.name,
-                    "quantity": str(item.quantity),
-                    "unit": item.product.get_unit_display(),
-                }
-                for item in items
-            ],
-        )
-
+    _save_pending_for_order(order)
     order.transition_to(OrderRequest.Status.SENT)
+
+
+def notify_suppliers_for_batch(orders) -> None:
+    for order in orders:
+        notify_suppliers_for_order(order)
+
+
+def notify_supplier_of_items(order, items, *, created: bool) -> None:
+    """
+    Tell `order`'s supplier about items that just landed in it (a reroute, a
+    redirect, a customer addition) and re-register the order's pending state.
+    `created` — the order itself is new (first message to this supplier for
+    it) vs. items added to an order they already have open.
+    """
+    company, address, company_phone = _company_details(order)
+    if created:
+        msg_lines = [f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
+    else:
+        msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה #{order.id}:"]
+    for item in items:
+        msg_lines.append(f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}")
+    if address:
+        msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
+    if company_phone:
+        msg_lines.append(f"📞 {company_phone}")
+    msg_lines.append(SUPPLIER_REPLY_INSTRUCTIONS)
+    validators.send_whatsapp_message(order.supplier.whatsapp_number, "\n".join(msg_lines))
+    _save_pending_for_order(order)
 
 
 def _dispatch_reroute_assignments(
@@ -71,65 +121,42 @@ def _dispatch_reroute_assignments(
 ) -> None:
     """
     Commit a validated (every resulting supplier clears their minimum)
-    reroute: move each ORP to its new supplier, send each new supplier its
-    own order message + pending state, recalc the order total, and send the
-    customer one consolidated message covering every item that moved.
+    reroute of a cancelled supplier's order: move each item into its new
+    supplier's order in the same batch (an open sibling, or a new order),
+    notify each of those suppliers once, cancel the source order, and send
+    the customer one consolidated message covering every item that moved.
     Shared by the immediate happy path and by a top-up that just cleared a
     minimum that was previously blocking dispatch.
     """
     from apps.orders.models import OrderRequest
+    from apps.orders.services import move_item_to_supplier, refresh_order_after_changes
 
-    order_obj = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
-    prof = getattr(order_obj.user, "profile", None)
-    company = prof.company_name if prof else ""
-    address = prof.company_address if prof else ""
-    cp = prof.company_phone if prof else ""
-
-    by_new_supplier = defaultdict(list)
+    touched = {}  # target order id -> {"order", "items", "created"}
     for a in assignments:
-        by_new_supplier[a["supplier"].id].append(a)
+        target = move_item_to_supplier(a["orp"], a["supplier"], a["unit_price"])
+        if target.id not in touched:
+            touched[target.id] = {
+                "order": target,
+                "items": [],
+                "created": not target.products.exclude(id=a["orp"].id).exists(),
+            }
+        touched[target.id]["items"].append(a["orp"])
 
-    for new_sid, items in by_new_supplier.items():
-        new_supplier = items[0]["supplier"]
-        for a in items:
-            orp = a["orp"]
-            orp.supplier = new_supplier
-            orp.unit_price = a["unit_price"]
-            orp.save(update_fields=["supplier", "unit_price"])
+    for entry in touched.values():
+        refresh_order_after_changes(entry["order"].id)
+        notify_supplier_of_items(entry["order"], entry["items"], created=entry["created"])
 
-        msg_lines = [f"שלום, *{company}* מבקש להזמין:"]
-        for a in items:
-            msg_lines.append(f"- {a['product'].name} x{a['quantity']} {a['product'].get_unit_display()}")
-        if address:
-            msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
-        if cp:
-            msg_lines.append(f"📞 {cp}")
-        msg_lines.append("\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה")
-        validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
-
-        save_supplier_pending_order(
-            supplier_phone=new_supplier.whatsapp_number,
-            order_request_id=order_request_id,
-            products=[
-                {
-                    "orp_id": a["orp"].id,
-                    "product_name": a["product"].name,
-                    "quantity": str(a["quantity"]),
-                    "unit": a["product"].get_unit_display(),
-                }
-                for a in items
-            ],
-        )
-
-    _recalculate_order_total(order_request_id)
+    source = refresh_order_after_changes(order_request_id)
+    if source and source.status not in (OrderRequest.Status.CANCELLED, OrderRequest.Status.DELIVERED):
+        source.transition_to(OrderRequest.Status.CANCELLED)
 
     if customer_phone:
         lines = list(intro_lines)
-        for new_sid, items in by_new_supplier.items():
-            new_supplier = items[0]["supplier"]
-            lines.append(f"\n*{new_supplier.name}*:")
-            for a in items:
-                lines.append(f"  • {a['product'].name} x{a['quantity']} — {a['unit_price']}₪")
+        for entry in touched.values():
+            order = entry["order"]
+            lines.append(f"\n*{order.supplier.name}* (הזמנה #{order.id}):")
+            for item in entry["items"]:
+                lines.append(f"  • {item.product.name} x{item.quantity} — {item.unit_price}₪")
         if unavailable:
             lines.append(f"\n❌ לא נמצא ספק חלופי עבור: {', '.join(unavailable)}")
         validators.send_whatsapp_message(customer_phone, "\n".join(lines))
@@ -446,15 +473,18 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
     if not raw:
         if any(kw in body for kw in SHIPPING_KEYWORDS):
             from apps.orders.models import OrderRequest
-            pending_orp = (
-                OrderRequestProduct.objects
-                .filter(supplier=supplier, order_request__status=OrderRequest.Status.APPROVED)
-                .select_related("order_request__user__profile")
-                .order_by("-order_request__created_at")
+            # One order per supplier, so this supplier's latest APPROVED
+            # order is exactly what they're reporting — no shared status
+            # with other suppliers to trip over.
+            approved_order = (
+                OrderRequest.objects
+                .filter(supplier=supplier, status=OrderRequest.Status.APPROVED)
+                .select_related("user__profile")
+                .order_by("-created_at")
                 .first()
             )
-            if pending_orp:
-                return _handle_mark_shipped(phone, supplier, pending_orp.order_request, body)
+            if approved_order:
+                return _handle_mark_shipped(phone, supplier, approved_order, body)
         return _handle_supplier_price_update(phone, supplier, body)
 
     data = json.loads(raw)
@@ -481,14 +511,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             supplier.save(update_fields=["blocked_until"])
             _notify_admin_supplier_cancelled(supplier, order_request_id)
 
-            # Get customer phone
-            first_orp = OrderRequestProduct.objects.select_related(
-                "order_request__user__profile"
-            ).filter(order_request_id=order_request_id).first()
-            customer_phone = None
-            if first_orp:
-                p = getattr(first_orp.order_request.user, "profile", None)
-                customer_phone = validators._local_to_e164(p.phone) if p and p.phone else None
+            cancelled_order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
+            p = getattr(cancelled_order.user, "profile", None)
+            customer_phone = validators._local_to_e164(p.phone) if p and p.phone else None
 
             reroute = find_reroute_for_cancelled_supplier(
                 order_request_id=order_request_id,
@@ -496,7 +521,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             )
             assignments = reroute["assignments"]
             unavailable = reroute["unavailable"]
-            minimum_problems = _check_missing_minimum(assignments) if assignments else []
+            minimum_problems = (
+                _check_missing_minimum(assignments, reroute["existing_totals"]) if assignments else []
+            )
 
             if assignments and not minimum_problems:
                 _dispatch_reroute_assignments(

@@ -37,6 +37,8 @@ from .supplier_flow import (
     _parse_delivery_eta,
     _parse_supplier_cutoff,
     _parse_supplier_reply,
+    notify_supplier_of_items,
+    notify_suppliers_for_batch,
     notify_suppliers_for_order,
     send_order_to_supplier,
 )

@@ -171,32 +171,42 @@ export async function updateAdminUserProfile(id: number, data: Partial<UserProfi
 
 // ─────────────── Orders ───────────────
 
-export interface OrderSummary {
+// One order = one supplier. Everything placed in one checkout shares an
+// OrderBatch — the dashboard shows one row per batch that expands into its
+// per-supplier orders.
+
+export interface BatchOrderSummary {
   id: number;
+  supplier_id: number;
+  supplier_name: string;
   status: string;
   total_price: string;
-  created_at: string;
   product_count: number;
 }
 
-export async function fetchOrders(params: PageParams = {}): Promise<Paginated<OrderSummary>> {
-  return request<Paginated<OrderSummary>>(`/api/orders/${toQueryString(params)}`);
+export interface OrderBatchSummary {
+  id: number;
+  created_at: string;
+  /** Sum of the batch's non-cancelled orders. */
+  total_price: string;
+  /** The least advanced non-cancelled order's status ("cancelled" if all are). */
+  status: string;
+  orders: BatchOrderSummary[];
 }
 
-export interface AdminOrderSummary {
-  id: number;
-  status: string;
-  total_price: string;
-  created_at: string;
+export async function fetchOrderBatches(params: PageParams = {}): Promise<Paginated<OrderBatchSummary>> {
+  return request<Paginated<OrderBatchSummary>>(`/api/orders/batches/${toQueryString(params)}`);
+}
+
+export interface AdminOrderBatchSummary extends OrderBatchSummary {
   customer_email: string;
   company_name: string;
-  product_count: number;
 }
 
-export async function fetchAdminOrders(
+export async function fetchAdminOrderBatches(
   params: PageParams & { status?: string } = {}
-): Promise<Paginated<AdminOrderSummary>> {
-  return request<Paginated<AdminOrderSummary>>(`/api/orders/admin/${toQueryString(params)}`);
+): Promise<Paginated<AdminOrderBatchSummary>> {
+  return request<Paginated<AdminOrderBatchSummary>>(`/api/orders/admin/batches/${toQueryString(params)}`);
 }
 
 export interface SupplierSpending {
@@ -232,6 +242,10 @@ export interface OrderDetail {
   status: string;
   total_price: string;
   created_at: string;
+  supplier_id: number;
+  supplier_name: string;
+  batch_id: number;
+  batch_created_at: string;
   products: OrderItemDetail[];
 }
 
@@ -304,11 +318,19 @@ export interface WhatsAppLink {
   whatsapp_url: string;
 }
 
-export interface PlaceOrderResponse {
+export interface PlacedOrder {
   order_id: number;
+  supplier_id: number;
+  supplier_name: string;
   status: string;
   total_price: string;
+}
+
+export interface PlaceOrderResponse {
+  batch_id: number;
+  total_price: string;
   scenario: string;
+  orders: PlacedOrder[];
   whatsapp_links: WhatsAppLink[];
 }
 

@@ -108,7 +108,7 @@ class Command(BaseCommand):
 
     def _step1_supplier_missing(self, supplier_body: str):
         from apps.catalog.models import Supplier, Product
-        from apps.orders.models import OrderRequest, OrderRequestProduct
+        from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct
         from apps.users.models import Profile
         from apps.orders.whatsapp import save_supplier_pending_order
 
@@ -141,6 +141,8 @@ class Command(BaseCommand):
         unit_price = Decimal("4.90")
         order = OrderRequest.objects.create(
             user=user,
+            batch=OrderBatch.objects.create(user=user),
+            supplier=supplier_a,
             total_price=quantity * unit_price,
             status=OrderRequest.Status.SENT,
         )
@@ -231,7 +233,7 @@ class Command(BaseCommand):
         After removal, supplier A drops below minimum → auto-transfer remaining items to B.
         """
         from apps.catalog.models import Supplier, Product
-        from apps.orders.models import OrderRequest, OrderRequestProduct
+        from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct
         from apps.users.models import Profile
         from apps.orders.whatsapp import save_supplier_pending_order
 
@@ -247,6 +249,8 @@ class Command(BaseCommand):
         # After removing tomatoes: 20*3.50 = 70₪ (still below 500₪ → auto-transfer גזר to B)
         order = OrderRequest.objects.create(
             user=profile.user,
+            batch=OrderBatch.objects.create(user=profile.user),
+            supplier=supplier_a,
             total_price=168,
             status=OrderRequest.Status.SENT,
         )
@@ -288,8 +292,7 @@ class Command(BaseCommand):
         # Cleanup
         order.refresh_from_db()
         self.stdout.write(f"  ניקוי הזמנה #{order.id}...")
-        OrderRequestProduct.objects.filter(order_request=order).delete()
-        order.delete()
+        order.batch.delete()
 
     def _test_partial_qty(self, customer_reply: str):
         """
@@ -299,7 +302,7 @@ class Command(BaseCommand):
         Customer says כן/לא.
         """
         from apps.catalog.models import Supplier, Product
-        from apps.orders.models import OrderRequest, OrderRequestProduct
+        from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct
         from apps.users.models import Profile
         from apps.orders.whatsapp import save_supplier_pending_order
 
@@ -312,6 +315,8 @@ class Command(BaseCommand):
         # Order: 100kg tomatoes, but supplier A can only supply 40kg
         order = OrderRequest.objects.create(
             user=profile.user,
+            batch=OrderBatch.objects.create(user=profile.user),
+            supplier=supplier_a,
             total_price=Decimal("490"),
             status=OrderRequest.Status.SENT,
         )
@@ -350,8 +355,7 @@ class Command(BaseCommand):
 
         # Cleanup
         self.stdout.write(f"\n  ניקוי הזמנה #{order.id}...")
-        OrderRequestProduct.objects.filter(order_request=order).delete()
-        order.delete()
+        order.batch.delete()
 
     def _call_user_webhook(self, phone, body):
         from apps.orders.whatsapp import _handle_user_flow

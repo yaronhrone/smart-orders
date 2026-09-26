@@ -16,15 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 def _recalculate_order_total(order_request_id: int):
-    """Recalculate and persist order.total_price from its remaining ORPs."""
-    from apps.orders.models import OrderRequest, OrderRequestProduct
+    """
+    After items were removed from / moved out of an order: recompute its
+    total, cancel it if it's now empty, approve it if everything left is
+    confirmed (see services.refresh_order_after_changes). One order is one
+    supplier now, so "the rest of this order" is always just that supplier's.
+    """
+    from apps.orders.services import refresh_order_after_changes
     try:
-        total = sum(
-            (orp.quantity * orp.unit_price
-             for orp in OrderRequestProduct.objects.filter(order_request_id=order_request_id)),
-            Decimal(0),
-        )
-        OrderRequest.objects.filter(id=order_request_id).update(total_price=total)
+        refresh_order_after_changes(order_request_id)
     except Exception as exc:
         logger.error("_recalculate_order_total(%s): %s", order_request_id, exc)
 
@@ -293,7 +293,7 @@ def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
 
     reroute = find_reroute_for_cancelled_supplier(order_request_id, failing_supplier_id)
     assignments = reroute["assignments"]
-    minimum_problems = _check_missing_minimum(assignments) if assignments else []
+    minimum_problems = _check_missing_minimum(assignments, reroute["existing_totals"]) if assignments else []
 
     if assignments and not minimum_problems:
         from .supplier_flow import _dispatch_reroute_assignments
@@ -435,53 +435,30 @@ def _auto_transfer_remaining(phone: str, order_request_id: int, failing_supplier
         )
         return
 
-    # Execute the transfer
+    # Execute the transfer — the items move into the new supplier's order in
+    # the same batch (an open sibling, or a new order), and the failing
+    # supplier's now-empty order is cancelled by the refresh below.
+    from apps.orders.services import move_item_to_supplier
+    from .supplier_flow import notify_supplier_of_items
+
+    target = None
+    created = False
+    moved = []
     for item in result["items"]:
         orp = item["orp"]
-        orp.supplier = new_supplier
-        orp.unit_price = item["new_price"]
-        orp.save(update_fields=["supplier", "unit_price"])
+        if target is None:
+            target = move_item_to_supplier(orp, new_supplier, item["new_price"])
+            created = not target.products.exclude(id=orp.id).exists()
+        else:
+            move_item_to_supplier(orp, new_supplier, item["new_price"])
+        moved.append(orp)
         lines.append(f"  ↪ {orp.product.name} x{orp.quantity} → {new_supplier.name} ({item['new_price']}₪)")
 
-    lines.append(f"✅ כל המוצרים של {failing_supplier.name} הועברו ל-{new_supplier.name}.")
+    lines.append(f"✅ כל המוצרים של {failing_supplier.name} הועברו ל-{new_supplier.name} (הזמנה #{target.id}).")
 
-    # Edge case 1: recalculate total after price changes
     _recalculate_order_total(order_request_id)
-
-    # Notify the new supplier
-    try:
-        order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
-        profile = getattr(order.user, "profile", None)
-        company = profile.company_name if profile else ""
-        address = profile.company_address if profile else ""
-        company_phone_str = profile.company_phone if profile else ""
-    except OrderRequest.DoesNotExist:
-        company = address = company_phone_str = ""
-
-    msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה:"]
-    for item in result["items"]:
-        orp = item["orp"]
-        msg_lines.append(f"- {orp.product.name} x{orp.quantity} {orp.product.get_unit_display()}")
-    if address:
-        msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
-    if company_phone_str:
-        msg_lines.append(f"📞 {company_phone_str}")
-    msg_lines.append("\nאנא ענה *אישור* לאישור.")
-
-    validators.send_whatsapp_message(new_supplier.whatsapp_number, "\n".join(msg_lines))
-    save_supplier_pending_order(
-        supplier_phone=new_supplier.whatsapp_number,
-        order_request_id=order_request_id,
-        products=[
-            {
-                "orp_id": item["orp"].id,
-                "product_name": item["orp"].product.name,
-                "quantity": str(item["orp"].quantity),
-                "unit": item["orp"].product.get_unit_display(),
-            }
-            for item in result["items"]
-        ],
-    )
+    _recalculate_order_total(target.id)
+    notify_supplier_of_items(target, moved, created=created)
 
 
 def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
@@ -491,6 +468,16 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
 
     order_request_id = state["order_request_id"]
     redirects = state["redirects"]
+
+    from apps.orders.services import (
+        batch_supplier_totals, get_or_create_supplier_order, move_item_to_supplier,
+    )
+    from .supplier_flow import notify_supplier_of_items
+
+    source_order = OrderRequest.objects.select_related("batch").get(id=order_request_id)
+    batch_open_totals = batch_supplier_totals(
+        source_order.batch_id, exclude_order_id=order_request_id, only_open=True,
+    )
 
     by_supplier = defaultdict(list)
     for r in redirects:
@@ -516,13 +503,10 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
         except Supplier.DoesNotExist:
             continue
 
-        # Check minimum with existing + redirected items BEFORE updating DB
-        existing_total = sum(
-            orp.quantity * orp.unit_price
-            for orp in OrderRequestProduct.objects.filter(
-                order_request_id=order_request_id, supplier=supplier
-            )
-        )
+        # Check minimum with existing + redirected items BEFORE updating DB.
+        # "Existing" = what this supplier already has in an open (SENT) order
+        # of the same batch — that's the order the items would merge into.
+        existing_total = batch_open_totals.get(supplier.id, Decimal(0))
         redirect_total = sum(
             Decimal(r["quantity"]) * Decimal(r["fallback_price"]) for r in items
         )
@@ -537,15 +521,16 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
             unresolved_redirects.extend(items)
             continue  # Skip this supplier — don't update DB or send message
 
-        # Update DB and collect items for supplier message
-        supplier_items_for_msg = []
+        # Move/create the items in this supplier's order in the same batch
+        target, created = get_or_create_supplier_order(source_order.batch, supplier)
+        moved_items = []
         for r in items:
             if r.get("type") == "partial":
                 # Edge case 2: create NEW ORP for remaining qty — original ORP already reduced
                 try:
                     original_orp = OrderRequestProduct.objects.select_related("product").get(id=r["orp_id"])
                     new_orp = OrderRequestProduct.objects.create(
-                        order_request_id=order_request_id,
+                        order_request=target,
                         product=original_orp.product,
                         supplier=supplier,
                         quantity=Decimal(r["quantity"]),
@@ -554,60 +539,28 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
                     success_lines.append(
                         f"  • {r['product_name']} {r['quantity']} {r.get('unit', '')} (חלקי) → {supplier.name}"
                     )
-                    # Build redirect entry for supplier pending cache using new ORP id
-                    supplier_items_for_msg.append({**r, "orp_id": new_orp.id, "quantity": r["quantity"]})
+                    moved_items.append(new_orp)
                 except OrderRequestProduct.DoesNotExist:
                     pass
             else:
-                # Full redirect: change existing ORP to new supplier
+                # Full redirect: the existing item moves to the new supplier's order
                 try:
-                    orp = OrderRequestProduct.objects.get(id=r["orp_id"])
-                    orp.supplier = supplier
-                    orp.unit_price = Decimal(r["fallback_price"])
-                    orp.save(update_fields=["supplier", "unit_price"])
+                    orp = OrderRequestProduct.objects.select_related("product").get(id=r["orp_id"])
+                    move_item_to_supplier(orp, supplier, Decimal(r["fallback_price"]))
                     success_lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} → {supplier.name}")
-                    supplier_items_for_msg.append(r)
+                    moved_items.append(orp)
                 except OrderRequestProduct.DoesNotExist:
                     pass
 
-        if not supplier_items_for_msg:
+        if not moved_items:
+            if created:
+                target.delete()  # nothing actually landed in it
             continue
 
-        # Build supplier WhatsApp message
-        try:
-            order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
-            profile = getattr(order.user, "profile", None)
-            company = profile.company_name if profile else ""
-            address = profile.company_address if profile else ""
-            company_phone_str = profile.company_phone if profile else ""
-        except OrderRequest.DoesNotExist:
-            company = address = company_phone_str = ""
+        _recalculate_order_total(target.id)
+        notify_supplier_of_items(target, moved_items, created=created)
 
-        msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה:"]
-        for r in supplier_items_for_msg:
-            msg_lines.append(f"- {r['product_name']} x{r['quantity']} {r.get('unit', '')}")
-        if address:
-            msg_lines.append(f"\n📍 *כתובת למשלוח:* {address}")
-        if company_phone_str:
-            msg_lines.append(f"📞 {company_phone_str}")
-        msg_lines.append("\nאנא ענה *אישור* לאישור.")
-
-        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(msg_lines))
-        save_supplier_pending_order(
-            supplier_phone=supplier.whatsapp_number,
-            order_request_id=order_request_id,
-            products=[
-                {
-                    "orp_id": r["orp_id"],
-                    "product_name": r["product_name"],
-                    "quantity": r["quantity"],
-                    "unit": r.get("unit", ""),
-                }
-                for r in supplier_items_for_msg
-            ],
-        )
-
-    # Edge case 1: recalculate total after all redirect changes
+    # Edge case 1: recalculate the source order after all redirect changes
     _recalculate_order_total(order_request_id)
 
     if unresolved_redirects:

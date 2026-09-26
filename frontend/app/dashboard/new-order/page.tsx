@@ -354,9 +354,24 @@ export default function NewOrderPage() {
           <div className="bg-green-50 border border-green-200 rounded-xl p-5 text-center">
             <p className="text-lg font-bold text-green-800">הזמנה בוצעה בהצלחה!</p>
             <p className="text-sm text-green-700 mt-1">
-              הזמנה #{placed.order_id} — {formatCurrency(placed.total_price)}
+              סה&quot;כ {formatCurrency(placed.total_price)}
+              {placed.orders.length > 1 && ` — ${placed.orders.length} הזמנות, אחת לכל ספק`}
             </p>
             <p className="text-sm text-green-600 mt-2">הודעות WhatsApp נשלחו לספקים אוטומטית</p>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
+            {placed.orders.map((o) => (
+              <button
+                key={o.order_id}
+                onClick={() => router.push(`/dashboard/orders/${o.order_id}`)}
+                className="w-full flex items-center justify-between px-4 py-3 text-sm hover:bg-green-50 transition text-right"
+              >
+                <span className="text-gray-500">הזמנה #{o.order_id}</span>
+                <span className="flex-1 px-4 font-medium text-gray-800">{o.supplier_name}</span>
+                <span className="font-semibold text-green-700">{formatCurrency(o.total_price)}</span>
+              </button>
+            ))}
           </div>
 
           <div className="flex gap-3">

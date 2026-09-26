@@ -91,11 +91,20 @@ class WhatsAppLinkSerializer(serializers.Serializer):
     whatsapp_url = serializers.CharField()
 
 
-class PlaceOrderResponseSerializer(serializers.Serializer):
-    order_id = serializers.IntegerField()
+class PlacedOrderSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField(source="id")
+    supplier_id = serializers.IntegerField(source="supplier.id")
+    supplier_name = serializers.CharField(source="supplier.name")
     status = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class PlaceOrderResponseSerializer(serializers.Serializer):
+    """One checkout = one batch = one order per supplier."""
+    batch_id = serializers.IntegerField()
+    total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     scenario = serializers.CharField()
+    orders = PlacedOrderSerializer(many=True)
     whatsapp_links = WhatsAppLinkSerializer(many=True)
 
 # ---------------------------------------------------------------------------
@@ -117,32 +126,81 @@ class OrderItemDetailSerializer(serializers.Serializer):
 
 
 class OrderDetailSerializer(serializers.Serializer):
+    """One order = one supplier. `batch_id`/`batch_created_at` link it back to
+    the checkout it was placed in, alongside its sibling orders."""
     id = serializers.IntegerField()
     status = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     created_at = serializers.DateTimeField()
+    supplier_id = serializers.IntegerField()
+    supplier_name = serializers.CharField()
+    batch_id = serializers.IntegerField()
+    batch_created_at = serializers.DateTimeField()
     products = OrderItemDetailSerializer(many=True)
 
 
-class OrderListSerializer(serializers.Serializer):
+# ---------------------------------------------------------------------------
+# Output — checkout batches (dashboard lists)
+# ---------------------------------------------------------------------------
+
+# How far along an order is — a batch's overall status is its LEAST advanced
+# live order ("the checkout is only as done as its slowest supplier").
+STATUS_PROGRESS = [
+    OrderRequest.Status.PENDING,
+    OrderRequest.Status.SENT,
+    OrderRequest.Status.APPROVED,
+    OrderRequest.Status.SHIPPED,
+    OrderRequest.Status.DELIVERED,
+]
+
+
+def batch_overall_status(orders):
+    live = [o.status for o in orders if o.status != OrderRequest.Status.CANCELLED]
+    if not live:
+        return OrderRequest.Status.CANCELLED
+    return min(live, key=STATUS_PROGRESS.index)
+
+
+class BatchOrderSummarySerializer(serializers.Serializer):
     id = serializers.IntegerField()
+    supplier_id = serializers.IntegerField(source="supplier.id")
+    supplier_name = serializers.CharField(source="supplier.name")
     status = serializers.CharField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    created_at = serializers.DateTimeField()
     product_count = serializers.IntegerField()
 
 
-class AdminOrderListSerializer(serializers.ModelSerializer):
-    """Cross-customer order list for the admin dashboard — mainly for manually
-    unsticking a test order (see AdminOrderStatusUpdateView) without going
-    through Django's own /django-admin/."""
-    customer_email = serializers.EmailField(source="user.email", read_only=True)
-    company_name = serializers.CharField(source="user.profile.company_name", read_only=True, default="")
-    product_count = serializers.IntegerField(read_only=True)
+class OrderBatchSerializer(serializers.Serializer):
+    """
+    A checkout for the dashboard list: one row per batch, expanding into its
+    per-supplier orders. Expects `orders` prefetched with `supplier` and an
+    annotated `product_count` (see views._batches_queryset).
+    """
+    id = serializers.IntegerField()
+    created_at = serializers.DateTimeField()
+    total_price = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    orders = BatchOrderSummarySerializer(many=True)
 
-    class Meta:
-        model = OrderRequest
-        fields = ("id", "status", "total_price", "created_at", "customer_email", "company_name", "product_count")
+    def get_total_price(self, batch):
+        total = sum(
+            (o.total_price for o in batch.orders.all() if o.status != OrderRequest.Status.CANCELLED),
+            Decimal(0),
+        )
+        return f"{total:.2f}"
+
+    def get_status(self, batch):
+        return batch_overall_status(batch.orders.all())
+
+
+class AdminOrderBatchSerializer(OrderBatchSerializer):
+    """Same as OrderBatchSerializer plus who placed it — admin sees every customer."""
+    customer_email = serializers.EmailField(source="user.email")
+    company_name = serializers.SerializerMethodField()
+
+    def get_company_name(self, batch):
+        profile = getattr(batch.user, "profile", None)
+        return profile.company_name if profile else ""
 
 # ---------------------------------------------------------------------------
 # Input — status update
