@@ -30,7 +30,7 @@ def suggest_order(user, region, products):
 
     cheapest = _assign_suppliers(available, user, region, suppliers, price_options)
     fewest = _assign_fewest_suppliers(available, user, region, suppliers, price_options)
-    return {
+    result = {
         "cheapest": _assignments_to_scenario(cheapest, "cheapest"),
         "fewest_suppliers": _assignments_to_scenario(fewest, "fewest_suppliers"),
         "minimum_issues": {
@@ -39,6 +39,24 @@ def suggest_order(user, region, products):
         },
         "unavailable_products": unavailable,
     }
+    result["recommended"] = pick_recommended_scenario(result)
+    return result
+
+
+def pick_recommended_scenario(result):
+    """
+    The ONE scenario the customer is offered (site and WhatsApp alike): the
+    cheapest one whose every supplier clears its minimum — a pricier-but-
+    valid basket beats a cheaper one a supplier would refuse. Ties go to
+    fewer suppliers. None if no scenario clears the minimums.
+    """
+    valid = [name for name in ("cheapest", "fewest_suppliers") if not result["minimum_issues"][name]]
+    if not valid:
+        return None
+    return min(
+        valid,
+        key=lambda name: (Decimal(str(result[name]["total_price"])), result[name]["supplier_count"]),
+    )
 
 
 def _assign_suppliers(products, user, region, suppliers=None, price_options=None):

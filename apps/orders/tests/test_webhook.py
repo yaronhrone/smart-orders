@@ -552,11 +552,13 @@ class MinimumScenarioFilteringTests(TestCase):
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     @patch("apps.orders.services.suggest_order")
-    def test_both_valid_offers_both_as_before(self, mock_suggest, mock_parse, mock_send):
+    def test_both_valid_offers_only_the_cheapest(self, mock_suggest, mock_parse, mock_send):
+        """One option, not an א/ב choice: when both scenarios clear their
+        minimums, the customer is offered just the cheaper one."""
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
-            "cheapest": _scenario("50.00"),
-            "fewest_suppliers": _scenario("60.00"),
+            "cheapest": _scenario("50.00", supplier_name="ספק זול"),
+            "fewest_suppliers": _scenario("60.00", supplier_name="ספק יקר"),
             "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
         }
 
@@ -564,10 +566,34 @@ class MinimumScenarioFilteringTests(TestCase):
         _flush_draft("+972506666666")
 
         msg = mock_send.call_args[0][1]
-        self.assertIn("*א*", msg)
-        self.assertIn("*ב*", msg)
+        self.assertNotIn("*א*", msg)
+        self.assertNotIn("*ב*", msg)
+        self.assertIn("ענה *אישור*", msg)
+        self.assertIn("ספק זול", msg)
+        self.assertNotIn("ספק יקר", msg)
         data = json.loads(cache.get("whatsapp_order:+972506666666"))
-        self.assertNotIn("single_scenario", data)
+        self.assertEqual(data["single_scenario"], "cheapest")
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_pricier_scenario_offered_when_the_cheaper_one_fails_minimum(self, mock_suggest, mock_parse, mock_send):
+        """Pricier-but-valid beats cheaper-but-broken."""
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("40.00", supplier_name="ספק קטן"),
+            "fewest_suppliers": _scenario("60.00", supplier_name="ספק גדול"),
+            "minimum_issues": {"cheapest": _issue("ספק קטן"), "fewest_suppliers": []},
+        }
+
+        self._post("+972506666666", "10 עגבניות")
+        _flush_draft("+972506666666")
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("ספק גדול", msg)
+        self.assertNotIn("ספק קטן", msg)
+        data = json.loads(cache.get("whatsapp_order:+972506666666"))
+        self.assertEqual(data["single_scenario"], "fewest_suppliers")
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
@@ -592,7 +618,7 @@ class MinimumScenarioFilteringTests(TestCase):
         self.assertNotIn("*א*", msg)
         self.assertNotIn("*ב*", msg)
         self.assertIn("ענה *אישור*", msg)
-        self.assertIn("ספק גדול", msg)  # explains what's excluded and why
+        self.assertNotIn("ספק גדול", msg)  # the broken scenario simply isn't offered
 
         data = json.loads(cache.get("whatsapp_order:+972506666666"))
         self.assertEqual(data["single_scenario"], "cheapest")
@@ -754,8 +780,7 @@ class MinimumScenarioFilteringTests(TestCase):
         from apps.orders.whatsapp.cache import get_draft_order
         self.assertIsNone(get_draft_order("+972506666666"))  # cleared once it actually dispatched
         msg = mock_send.call_args[0][1]
-        self.assertIn("*א*", msg)
-        self.assertIn("*ב*", msg)
+        self.assertIn("ענה *אישור*", msg)  # now orderable — offered for confirmation
         # Proves the top-up actually merged into the held draft (10 + 40),
         # rather than the second message replacing or ignoring the first.
         priced_items = mock_suggest.call_args.kwargs["products"]
