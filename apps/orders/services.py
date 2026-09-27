@@ -159,21 +159,60 @@ def get_or_create_supplier_order(batch, supplier):
     return order, True
 
 
+def add_item_to_order(order, product, supplier, quantity, unit_price):
+    """
+    Add `quantity` of `product` to `order` — merging into an existing line
+    for the same product there instead of creating a second line for it.
+    Live-found bug: every "move/add into a target order" call site used to
+    unconditionally create/move a new line, so an item that already had a
+    sibling line for the same product on the target (e.g. a customer's
+    top-up landing on a supplier that already carries that product from an
+    earlier reroute) showed up twice — same total price either way, but
+    duplicated on the supplier's WhatsApp message and the order detail page.
+    Returns the resulting OrderRequestProduct (the existing line, now with
+    the added quantity, or a freshly created one).
+    """
+    existing = order.products.filter(product=product).first()
+    if existing:
+        existing.quantity += quantity
+        existing.save(update_fields=["quantity"])
+        return existing
+    return OrderRequestProduct.objects.create(
+        order_request=order, product=product, supplier=supplier,
+        quantity=quantity, unit_price=unit_price,
+    )
+
+
 def move_item_to_supplier(orp, supplier, unit_price):
     """
     Move one line item to `supplier`'s order in the same batch (see
-    get_or_create_supplier_order). Any confirmation the old supplier gave
-    for it is dropped — the new supplier hasn't confirmed anything yet.
-    Returns the target order. The caller refreshes both orders afterwards
-    (refresh_order_after_changes).
+    get_or_create_supplier_order), merging into an existing line for the
+    same product there via add_item_to_order. Any confirmation the old
+    supplier gave for it is dropped — the new supplier hasn't confirmed
+    anything yet.
+
+    Returns (target_order, target_item, created). `target_item` is the line
+    that now carries the moved quantity — NOT necessarily `orp` itself (it
+    may already have been merged into an existing sibling line and deleted)
+    — use the returned item, never `orp`, for anything display-related
+    afterward. `created` is whether `target_order` was just created for
+    this move (its first item).
     """
-    target, _ = get_or_create_supplier_order(orp.order_request.batch, supplier)
+    target, created = get_or_create_supplier_order(orp.order_request.batch, supplier)
     SupplierConfirmation.objects.filter(order_request_product=orp).delete()
+
+    existing = target.products.filter(product=orp.product).exclude(id=orp.id).first()
+    if existing:
+        existing.quantity += orp.quantity
+        existing.save(update_fields=["quantity"])
+        orp.delete()
+        return target, existing, created
+
     orp.order_request = target
     orp.supplier = supplier
     orp.unit_price = unit_price
     orp.save(update_fields=["order_request", "supplier", "unit_price"])
-    return target
+    return target, orp, created
 
 
 def refresh_order_after_changes(order_id):

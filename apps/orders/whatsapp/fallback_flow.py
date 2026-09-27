@@ -445,16 +445,16 @@ def _auto_transfer_remaining(phone: str, order_request_id: int, failing_supplier
 
     target = None
     created = False
-    moved = []
+    moved_by_id = {}
     for item in result["items"]:
-        orp = item["orp"]
-        if target is None:
-            target = move_item_to_supplier(orp, new_supplier, item["new_price"])
-            created = not target.products.exclude(id=orp.id).exists()
-        else:
-            move_item_to_supplier(orp, new_supplier, item["new_price"])
-        moved.append(orp)
-        lines.append(f"  ↪ {orp.product.name} x{orp.quantity} → {new_supplier.name} ({item['new_price']}₪)")
+        t, moved_item, was_created = move_item_to_supplier(item["orp"], new_supplier, item["new_price"])
+        target = t
+        created = created or was_created
+        moved_by_id[moved_item.id] = moved_item  # dedup: a merge into an already-moved
+        # sibling line must replace, not duplicate, that earlier reference.
+    moved = list(moved_by_id.values())
+    for m in moved:
+        lines.append(f"  ↪ {m.product.name} x{m.quantity} → {new_supplier.name} ({m.unit_price}₪)")
 
     lines.append(f"✅ כל המוצרים של {failing_supplier.name} הועברו ל-{new_supplier.name} (הזמנה #{target.id}).")
 
@@ -472,7 +472,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     redirects = state["redirects"]
 
     from apps.orders.services import (
-        batch_supplier_totals, get_or_create_supplier_order, move_item_to_supplier,
+        add_item_to_order, batch_supplier_totals, get_or_create_supplier_order, move_item_to_supplier,
     )
     from .supplier_flow import notify_supplier_of_items
 
@@ -525,34 +525,35 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
 
         # Move/create the items in this supplier's order in the same batch
         target, created = get_or_create_supplier_order(source_order.batch, supplier)
-        moved_items = []
+        moved_by_id = {}
         for r in items:
             if r.get("type") == "partial":
-                # Edge case 2: create NEW ORP for remaining qty — original ORP already reduced
+                # Edge case 2: original ORP already reduced to the confirmed
+                # qty — the remaining qty is a fresh addition to `target`,
+                # merging into an existing line there if one already covers
+                # this product (add_item_to_order) instead of duplicating it.
                 try:
                     original_orp = OrderRequestProduct.objects.select_related("product").get(id=r["orp_id"])
-                    new_orp = OrderRequestProduct.objects.create(
-                        order_request=target,
-                        product=original_orp.product,
-                        supplier=supplier,
-                        quantity=Decimal(r["quantity"]),
-                        unit_price=Decimal(r["fallback_price"]),
+                    moved_item = add_item_to_order(
+                        target, original_orp.product, supplier,
+                        Decimal(r["quantity"]), Decimal(r["fallback_price"]),
                     )
                     success_lines.append(
                         f"  • {r['product_name']} {r['quantity']} {r.get('unit', '')} (חלקי) → {supplier.name}"
                     )
-                    moved_items.append(new_orp)
+                    moved_by_id[moved_item.id] = moved_item
                 except OrderRequestProduct.DoesNotExist:
                     pass
             else:
                 # Full redirect: the existing item moves to the new supplier's order
                 try:
                     orp = OrderRequestProduct.objects.select_related("product").get(id=r["orp_id"])
-                    move_item_to_supplier(orp, supplier, Decimal(r["fallback_price"]))
+                    _, moved_item, _ = move_item_to_supplier(orp, supplier, Decimal(r["fallback_price"]))
                     success_lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} → {supplier.name}")
-                    moved_items.append(orp)
+                    moved_by_id[moved_item.id] = moved_item
                 except OrderRequestProduct.DoesNotExist:
                     pass
+        moved_items = list(moved_by_id.values())
 
         if not moved_items:
             if created:

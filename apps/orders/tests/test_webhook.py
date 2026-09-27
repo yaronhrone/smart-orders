@@ -2442,3 +2442,97 @@ class RerouteGraceChoicesTests(TestCase):
         self.assertEqual(self.sibling.products.count(), 2)
         self.assertIsNone(cache.get(f"whatsapp_reroute_grace:{self.customer_phone}"))
         self.assertIn("ממשיכות כרגיל", self._customer_msgs(mock_send)[0])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    def test_topup_of_a_product_already_moved_to_a_sibling_merges_not_duplicates(self, mock_parse, mock_send):
+        """
+        Live-found bug: the tomato item moves to the sibling ("ספק קיים")
+        right away as "preferred". A later top-up adding MORE tomato used to
+        land as a SECOND, separate line on that same sibling order instead
+        of summing into the one already there.
+        """
+        self._post(self.cancelling.whatsapp_number, "ביטול")
+        self.tomato_item.refresh_from_db()
+        self.assertEqual(self.tomato_item.order_request, self.sibling)  # moved there already
+
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("8")}]
+        self._post(self.customer_phone, "עוד 8 עגבניה")
+
+        self.assertEqual(self.sibling.products.filter(product=self.tomato).count(), 1)
+        merged = self.sibling.products.get(product=self.tomato)
+        self.assertEqual(merged.id, self.tomato_item.id)
+        self.assertEqual(merged.quantity, Decimal("18"))  # 10 + 8, one line
+
+
+@override_settings(
+    CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True,
+    ADMIN_WHATSAPP_NUMBER="+972500000000",
+)
+class BatchApprovedSummaryTests(TestCase):
+    """One consolidated 'your whole order is confirmed' WhatsApp once every
+    order in a checkout is approved — on top of the per-supplier ones."""
+
+    def setUp(self):
+        cache.clear()
+        self.customer_phone = "+972507654321"
+        self.user = make_user_with_profile(phone=self.customer_phone)
+        self.tomato = make_product("עגבניה")
+        self.carrot = make_product("גזר")
+        self.a = make_supplier("ספק א")
+        self.b = make_supplier("ספק ב")
+        self.order_a = make_order(self.user, self.a, status=OrderRequest.Status.SENT, total_price="50.00")
+        self.order_b = make_order(
+            self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.SENT, total_price="30.00",
+        )
+        self.item_a = OrderRequestProduct.objects.create(
+            order_request=self.order_a, product=self.tomato, supplier=self.a,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+        self.item_b = OrderRequestProduct.objects.create(
+            order_request=self.order_b, product=self.carrot, supplier=self.b,
+            quantity=Decimal("10"), unit_price=Decimal("3.00"),
+        )
+        save_supplier_pending_order(
+            supplier_phone=self.a.whatsapp_number, order_request_id=self.order_a.id,
+            products=[{"orp_id": self.item_a.id, "product_name": "עגבניה", "quantity": "10", "unit": "kg"}],
+        )
+        save_supplier_pending_order(
+            supplier_phone=self.b.whatsapp_number, order_request_id=self.order_b.id,
+            products=[{"orp_id": self.item_b.id, "product_name": "גזר", "quantity": "10", "unit": "kg"}],
+        )
+
+    def _post(self, phone, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{phone}", "Body": body})
+
+    def _customer_msgs(self, mock_send):
+        return [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.customer_phone]
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_summary_sent_only_once_the_last_supplier_confirms(self, mock_send):
+        self._post(self.a.whatsapp_number, "אישור")
+        self.assertFalse(any("כל ההזמנה שלך אושרה" in m for m in self._customer_msgs(mock_send)))
+
+        self._post(self.b.whatsapp_number, "אישור")
+        summaries = [m for m in self._customer_msgs(mock_send) if "כל ההזמנה שלך אושרה" in m]
+        self.assertEqual(len(summaries), 1)
+        self.assertIn(f"ספק א (הזמנה #{self.order_a.id}) — 50.00₪", summaries[0])
+        self.assertIn(f"ספק ב (הזמנה #{self.order_b.id}) — 30.00₪", summaries[0])
+        self.assertIn('סה"כ: 80.00₪', summaries[0])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_single_supplier_checkout_gets_no_extra_summary(self, mock_send):
+        """The per-supplier message already says it all when there's only one."""
+        solo_order = make_order(self.user, self.a, status=OrderRequest.Status.SENT, total_price="20.00")
+        item = OrderRequestProduct.objects.create(
+            order_request=solo_order, product=self.tomato, supplier=self.a,
+            quantity=Decimal("4"), unit_price=Decimal("5.00"),
+        )
+        save_supplier_pending_order(
+            supplier_phone=self.a.whatsapp_number, order_request_id=solo_order.id,
+            products=[{"orp_id": item.id, "product_name": "עגבניה", "quantity": "4", "unit": "kg"}],
+        )
+
+        self._post(self.a.whatsapp_number, "אישור")
+
+        self.assertFalse(any("כל ההזמנה שלך אושרה" in m for m in self._customer_msgs(mock_send)))
