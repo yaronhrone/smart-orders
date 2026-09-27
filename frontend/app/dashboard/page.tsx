@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchOrderBatches, fetchStats, OrderBatchSummary, OrderStats } from "../lib/api";
 import { StatusBadge, deliveredSummary, formatCurrency, formatDateTime } from "../lib/orderStatus";
+import { monthLabel } from "../lib/hebrewMonth";
 
 const ORDERS_PAGE_SIZE = 10;
 
@@ -14,6 +15,7 @@ export default function DashboardPage() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [stats, setStats] = useState<OrderStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -27,6 +29,18 @@ export default function DashboardPage() {
       })
       .catch(() => setError("שגיאה בטעינת הנתונים"));
   }, []);
+
+  async function selectMonth(month: string) {
+    if (statsLoading || month === stats?.month) return;
+    setStatsLoading(true);
+    try {
+      setStats(await fetchStats(month));
+    } catch {
+      setError("שגיאה בטעינת נתוני החודש");
+    } finally {
+      setStatsLoading(false);
+    }
+  }
 
   async function loadMore() {
     if (!batches) return;
@@ -65,49 +79,75 @@ export default function DashboardPage() {
     <div className="px-6 py-6 space-y-8">
       <h1 className="text-2xl font-bold text-green-900">לוח בקרה</h1>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        <div className="bg-green-700 rounded-xl shadow-md p-4">
-          <p className="text-xs text-green-200 mb-1">סה&quot;כ הוצאות</p>
-          <p className="text-2xl font-bold text-white">
-            {formatCurrency(stats.total_spent)}
-          </p>
+      {/* Monthly summary — a tab per month, defaulting to the current one */}
+      <section>
+        <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+          {stats.available_months.map((m) => (
+            <button
+              key={m}
+              onClick={() => selectMonth(m)}
+              disabled={statsLoading}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition disabled:opacity-50 ${
+                m === stats.month
+                  ? "bg-green-700 text-white"
+                  : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+              }`}
+            >
+              {monthLabel(m)}
+            </button>
+          ))}
         </div>
-        <div className="bg-blue-600 rounded-xl shadow-md p-4">
-          <p className="text-xs text-blue-100 mb-1">מספר הזמנות</p>
-          <p className="text-2xl font-bold text-white">{stats.order_count}</p>
-        </div>
-        <div className="bg-orange-500 rounded-xl shadow-md p-4">
-          <p className="text-xs text-orange-100 mb-1">מספר ספקים</p>
-          <p className="text-2xl font-bold text-white">{stats.by_supplier.length}</p>
-        </div>
-      </div>
 
-      {/* Spending by supplier */}
-      {stats.by_supplier.length > 0 && (
-        <section>
-          <h2 className="text-base font-semibold text-green-900 mb-3">הוצאות לפי ספק</h2>
-          <div className="bg-white rounded-xl shadow-md divide-y divide-gray-100">
-            {stats.by_supplier.map((s) => (
-              <div key={s.supplier_id} className="px-4 py-3">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-sm font-medium text-gray-800">{s.supplier_name}</span>
-                  <span className="text-sm font-semibold text-green-700">
-                    {formatCurrency(s.total_spent)}
-                  </span>
-                </div>
-                <div className="w-full bg-gray-100 rounded-full h-2">
-                  <div
-                    className="bg-green-500 h-2 rounded-full"
-                    style={{ width: `${(Number(s.total_spent) / maxSpend) * 100}%` }}
-                  />
-                </div>
-                <p className="text-xs text-gray-400 mt-1">{s.order_count} פריטים</p>
-              </div>
-            ))}
+        <div className={`space-y-8 transition-opacity ${statsLoading ? "opacity-50" : ""}`}>
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div className="bg-green-700 rounded-xl shadow-md p-4">
+              <p className="text-xs text-green-200 mb-1">סה&quot;כ הוצאות</p>
+              <p className="text-2xl font-bold text-white">
+                {formatCurrency(stats.total_spent)}
+              </p>
+            </div>
+            <div className="bg-blue-600 rounded-xl shadow-md p-4">
+              <p className="text-xs text-blue-100 mb-1">מספר הזמנות</p>
+              <p className="text-2xl font-bold text-white">{stats.order_count}</p>
+            </div>
+            <div className="bg-orange-500 rounded-xl shadow-md p-4">
+              <p className="text-xs text-orange-100 mb-1">מספר ספקים</p>
+              <p className="text-2xl font-bold text-white">{stats.by_supplier.length}</p>
+            </div>
           </div>
-        </section>
-      )}
+
+          {/* Spending by supplier, this month */}
+          {stats.by_supplier.length > 0 ? (
+            <div>
+              <h2 className="text-base font-semibold text-green-900 mb-3">
+                הוצאות לפי ספק — {monthLabel(stats.month)}
+              </h2>
+              <div className="bg-white rounded-xl shadow-md divide-y divide-gray-100">
+                {stats.by_supplier.map((s) => (
+                  <div key={s.supplier_id} className="px-4 py-3">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-sm font-medium text-gray-800">{s.supplier_name}</span>
+                      <span className="text-sm font-semibold text-green-700">
+                        {formatCurrency(s.total_spent)}
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-2">
+                      <div
+                        className="bg-green-500 h-2 rounded-full"
+                        style={{ width: `${(Number(s.total_spent) / maxSpend) * 100}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">{s.order_count} פריטים</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">אין הזמנות ב-{monthLabel(stats.month)}.</p>
+          )}
+        </div>
+      </section>
 
       {/* Recent orders — one row per checkout, expanding into its per-supplier orders */}
       <section>

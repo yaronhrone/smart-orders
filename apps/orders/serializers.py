@@ -228,3 +228,5 @@ class OrderStatsSerializer(serializers.Serializer):
     total_spent = serializers.DecimalField(max_digits=12, decimal_places=2)
     order_count = serializers.IntegerField()
     by_supplier = SupplierSpendingSerializer(many=True)
+    month = serializers.CharField()  # "YYYY-MM" — the month these totals cover
+    available_months = serializers.ListField(child=serializers.CharField())

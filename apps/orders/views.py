@@ -4,7 +4,9 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from django.core.cache import cache
 from django.db.models import Count, Prefetch
+from django.db.models.functions import TruncMonth
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 
 from core.cache_utils import get_cache_version
@@ -233,17 +235,47 @@ class OrderStatsView(APIView):
 
     @extend_schema(responses=OrderStatsSerializer)
     def get(self, request):
-        """GET /api/orders/stats/ — spending totals per supplier for the current user."""
+        """
+        GET /api/orders/stats/?month=YYYY-MM — spending totals per supplier
+        for one calendar month (default: the current month). `available_months`
+        always lists every month the user has ever ordered in (newest first),
+        for a month-tab UI — independent of which month was requested.
+        """
+        month_param = request.query_params.get("month")
+        if month_param:
+            try:
+                year, mon = (int(part) for part in month_param.split("-"))
+                if not 1 <= mon <= 12:
+                    raise ValueError
+            except ValueError:
+                return Response({"detail": "פורמט חודש לא תקין, נדרש YYYY-MM"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            now = timezone.localtime()
+            year, mon = now.year, now.month
+            month_param = f"{year:04d}-{mon:02d}"
+
         version = get_cache_version("orders", request.user.id)
-        cache_key = f"orders:stats:{request.user.id}:v{version}"
+        cache_key = f"orders:stats:{request.user.id}:v{version}:{month_param}"
 
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
 
+        all_orders = OrderRequest.objects.filter(user=request.user)
+        available_months = [
+            m.strftime("%Y-%m") for m in
+            all_orders.annotate(month=TruncMonth("created_at"))
+            .order_by("-month").values_list("month", flat=True).distinct()
+            if m
+        ]
+        # This month might have nothing yet — still worth showing as a tab
+        # (an empty "current month" beats a UI with no current-month option).
+        if month_param not in available_months:
+            available_months.insert(0, month_param)
+
         orders = (
-            OrderRequest.objects
-            .filter(user=request.user)
+            all_orders
+            .filter(created_at__year=year, created_at__month=mon)
             .prefetch_related("products__supplier")
         )
 
@@ -278,6 +310,8 @@ class OrderStatsView(APIView):
             "total_spent": total_spent,
             "order_count": order_count,
             "by_supplier": by_supplier,
+            "month": month_param,
+            "available_months": available_months,
         }
         payload = OrderStatsSerializer(result).data
         cache.set(cache_key, payload, timeout=ORDERS_CACHE_TTL)
