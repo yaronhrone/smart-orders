@@ -801,18 +801,40 @@ class BatchHelpersTests(TestCase):
         )
 
     def test_move_creates_a_new_order_for_a_supplier_not_yet_in_the_batch(self):
-        target = move_item_to_supplier(self.item, self.b, Decimal("6.00"))
+        target, item, created = move_item_to_supplier(self.item, self.b, Decimal("6.00"))
 
         self.assertNotEqual(target, self.order_a)
         self.assertEqual(target.batch, self.order_a.batch)
         self.assertEqual(target.supplier, self.b)
+        self.assertTrue(created)
         self.item.refresh_from_db()
+        self.assertEqual(item, self.item)  # no merge target existed — same row, moved in place
         self.assertEqual(self.item.order_request, target)
         self.assertEqual(self.item.unit_price, Decimal("6.00"))
 
     def test_move_reuses_an_open_sibling_order(self):
         sibling = make_order(self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.SENT)
-        self.assertEqual(move_item_to_supplier(self.item, self.b, Decimal("6.00")), sibling)
+        target, item, created = move_item_to_supplier(self.item, self.b, Decimal("6.00"))
+        self.assertEqual(target, sibling)
+        self.assertFalse(created)
+
+    def test_move_merges_into_an_existing_line_for_the_same_product(self):
+        """Live-found bug: moving an item into a sibling order that already
+        carries the same product used to create a duplicate line instead of
+        summing into it."""
+        sibling = make_order(self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.SENT)
+        already_there = OrderRequestProduct.objects.create(
+            order_request=sibling, product=self.tomato, supplier=self.b,
+            quantity=Decimal("4"), unit_price=Decimal("6.00"),
+        )
+
+        target, item, created = move_item_to_supplier(self.item, self.b, Decimal("6.00"))
+
+        self.assertEqual(target, sibling)
+        self.assertEqual(item.id, already_there.id)  # merged into the existing line, not a new one
+        self.assertEqual(item.quantity, Decimal("14"))  # 4 + 10
+        self.assertEqual(sibling.products.count(), 1)
+        self.assertFalse(OrderRequestProduct.objects.filter(id=self.item.id).exists())  # source row gone
 
     def test_move_never_reopens_an_approved_sibling(self):
         approved = make_order(self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.APPROVED)

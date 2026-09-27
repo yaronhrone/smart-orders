@@ -137,16 +137,15 @@ def _move_and_notify(assignments: list, minimum_problems: list = ()) -> list:
     short_by_supplier = {p["supplier_id"]: p for p in minimum_problems}
     touched = {}
     for a in assignments:
-        target = move_item_to_supplier(a["orp"], a["supplier"], a["unit_price"])
-        if target.id not in touched:
-            touched[target.id] = {
-                "order": target,
-                "items": [],
-                "created": not target.products.exclude(id=a["orp"].id).exists(),
-            }
-        touched[target.id]["items"].append(a["orp"])
+        target, item, created = move_item_to_supplier(a["orp"], a["supplier"], a["unit_price"])
+        entry = touched.setdefault(target.id, {"order": target, "items_by_id": {}, "created": created})
+        entry["items_by_id"][item.id] = item  # keyed by id: a later merge into the same
+        # line (two assignments landing on the same product+supplier) must
+        # replace, not duplicate, the earlier reference — item always
+        # carries the up-to-date cumulative quantity.
 
     for entry in touched.values():
+        entry["items"] = list(entry["items_by_id"].values())
         refresh_order_after_changes(entry["order"].id)
         short = short_by_supplier.get(entry["order"].supplier_id)
         note = (
@@ -175,6 +174,45 @@ def _cancel_source(order_request_id: int) -> None:
     source = refresh_order_after_changes(order_request_id)
     if source and source.status not in (OrderRequest.Status.CANCELLED, OrderRequest.Status.DELIVERED):
         source.transition_to(OrderRequest.Status.CANCELLED)
+
+
+def _maybe_send_batch_approved_summary(order_request_id: int, customer_phone: str | None) -> None:
+    """
+    `order_request_id` just got APPROVED. If it was the last order in its
+    checkout still waiting on a supplier, the customer gets one consolidated
+    "your whole order is confirmed" summary — across every supplier, on top
+    of the per-supplier "✅ X אישר" message they already got for each one.
+    Requested explicitly for the case where a cancellation/reroute left part
+    of a checkout stuck below minimum: once that's resolved and every
+    supplier involved has cleared it, the customer should hear that the
+    WHOLE thing finally went through, not just piece by piece.
+
+    Fires at most once per checkout: only called when THIS confirmation is
+    what just moved order_request_id out of PENDING/SENT, and only sends
+    anything if no sibling order is still PENDING/SENT at that moment — an
+    order that was already APPROVED earlier can't retrigger this later.
+    """
+    if not customer_phone:
+        return
+    from apps.orders.models import OrderRequest
+
+    order = OrderRequest.objects.select_related("batch").get(id=order_request_id)
+    live = list(
+        order.batch.orders
+        .exclude(status=OrderRequest.Status.CANCELLED)
+        .select_related("supplier")
+    )
+    if len(live) < 2:
+        return  # single-supplier checkout — the per-supplier message already said it all
+    if any(o.status in (OrderRequest.Status.PENDING, OrderRequest.Status.SENT) for o in live):
+        return  # someone else in this checkout hasn't confirmed yet
+
+    total = sum((o.total_price for o in live), Decimal(0))
+    lines = ["🎉 כל ההזמנה שלך אושרה על ידי כל הספקים:"]
+    for o in live:
+        lines.append(f"  • {o.supplier.name} (הזמנה #{o.id}) — {o.total_price:.2f}₪")
+    lines.append(f'\nסה"כ: {total:.2f}₪')
+    validators.send_whatsapp_message(customer_phone, "\n".join(lines))
 
 
 def process_reroute(
@@ -659,6 +697,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             pass
 
     # Mark order APPROVED only if all items confirmed, none missing, none partial
+    just_approved = False
     if not missing and not partial_products:
         try:
             from apps.orders.models import OrderRequest
@@ -668,6 +707,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             ).count()
             if total_orps > 0 and confirmed_orps >= total_orps:
                 OrderRequest.objects.get(id=order_request_id).transition_to(OrderRequest.Status.APPROVED)
+                just_approved = True
         except Exception as exc:
             logger.error("Failed to update order status after supplier confirmation: %s", exc)
 
@@ -765,6 +805,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                     customer_lines.append(f"\n🕐 צפוי להגיע עד השעה {eta_time.strftime('%H:%M')}")
                 customer_lines.append(f"\nמספר הזמנה: #{order_request_id}")
                 validators.send_whatsapp_message(customer_phone, "\n".join(customer_lines))
+
+            if just_approved:
+                _maybe_send_batch_approved_summary(order_request_id, customer_phone)
     except Exception as exc:
         logger.error("Failed to notify customer after supplier confirmation: %s", exc)
 
