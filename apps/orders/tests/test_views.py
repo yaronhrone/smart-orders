@@ -352,3 +352,79 @@ class PlaceAndSuggestViewTests(APITestCase):
         msg = customer_calls[0][0][1]
         for o in res.data["orders"]:
             self.assertIn(f"הזמנה #{o['order_id']} — {o['supplier_name']}", msg)
+
+
+class OrderStatsViewTests(APITestCase):
+    """GET /api/orders/stats/ — per-supplier spend for one calendar month."""
+
+    def setUp(self):
+        from django.utils import timezone
+        self.timezone = timezone
+        self.user = make_user()
+        self.other = make_user("other@test.com")
+        self.client.force_authenticate(user=self.user)
+        self.product = make_product("עגבנייה")
+        self.supplier_a = make_supplier("ספק א")
+        self.supplier_b = make_supplier("ספק ב")
+
+    def _order(self, user, supplier, created_at, quantity="10", price="5.00"):
+        order = make_order(user, total=str(Decimal(quantity) * Decimal(price)), supplier=supplier)
+        make_order_item(order, self.product, quantity=quantity, price=price)
+        OrderRequest.objects.filter(pk=order.pk).update(created_at=created_at)
+        return order
+
+    def test_defaults_to_the_current_month(self):
+        now = self.timezone.now()
+        self._order(self.user, self.supplier_a, now)
+        last_month = now.replace(day=1) - self.timezone.timedelta(days=1)
+        self._order(self.user, self.supplier_a, last_month)
+
+        res = self.client.get(reverse("orders-stats"))
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["month"], now.strftime("%Y-%m"))
+        self.assertEqual(res.data["order_count"], 1)  # only this month's order
+        self.assertEqual(float(res.data["total_spent"]), 50.0)
+
+    def test_explicit_month_param_filters_to_that_month(self):
+        october = self.timezone.datetime(2026, 10, 15, tzinfo=self.timezone.get_current_timezone())
+        november = self.timezone.datetime(2026, 11, 5, tzinfo=self.timezone.get_current_timezone())
+        self._order(self.user, self.supplier_a, october, quantity="10", price="5.00")
+        self._order(self.user, self.supplier_b, november, quantity="20", price="3.00")
+
+        res = self.client.get(reverse("orders-stats"), {"month": "2026-10"})
+
+        self.assertEqual(res.data["month"], "2026-10")
+        self.assertEqual(res.data["order_count"], 1)
+        self.assertEqual(float(res.data["total_spent"]), 50.0)
+        self.assertEqual(len(res.data["by_supplier"]), 1)
+        self.assertEqual(res.data["by_supplier"][0]["supplier_name"], "ספק א")
+
+    def test_available_months_lists_every_month_with_data_newest_first(self):
+        self._order(self.user, self.supplier_a, self.timezone.datetime(2026, 8, 1, tzinfo=self.timezone.get_current_timezone()))
+        self._order(self.user, self.supplier_a, self.timezone.datetime(2026, 10, 1, tzinfo=self.timezone.get_current_timezone()))
+
+        res = self.client.get(reverse("orders-stats"), {"month": "2026-10"})
+
+        self.assertEqual(res.data["available_months"][:2], ["2026-10", "2026-08"])
+
+    def test_current_month_listed_as_available_even_with_no_orders_yet(self):
+        current = self.timezone.now().strftime("%Y-%m")
+        res = self.client.get(reverse("orders-stats"))
+        self.assertIn(current, res.data["available_months"])
+        self.assertEqual(res.data["order_count"], 0)
+        self.assertEqual(res.data["by_supplier"], [])
+
+    def test_invalid_month_format_returns_400(self):
+        res = self.client.get(reverse("orders-stats"), {"month": "not-a-month"})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_only_own_orders_counted(self):
+        self._order(self.other, self.supplier_a, self.timezone.now())
+        res = self.client.get(reverse("orders-stats"))
+        self.assertEqual(res.data["order_count"], 0)
+
+    def test_unauthenticated_returns_401(self):
+        self.client.force_authenticate(user=None)
+        res = self.client.get(reverse("orders-stats"))
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)

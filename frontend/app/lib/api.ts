@@ -220,10 +220,15 @@ export interface OrderStats {
   total_spent: string;
   order_count: number;
   by_supplier: SupplierSpending[];
+  /** "YYYY-MM" — the month these totals cover. */
+  month: string;
+  /** Every month the user has ever ordered in, newest first, plus the
+   *  current month even if it has no orders yet — for a month-tab UI. */
+  available_months: string[];
 }
 
-export async function fetchStats(): Promise<OrderStats> {
-  return request<OrderStats>("/api/orders/stats/");
+export async function fetchStats(month?: string): Promise<OrderStats> {
+  return request<OrderStats>(`/api/orders/stats/${toQueryString(month ? { month } : {})}`);
 }
 
 export interface OrderItemDetail {
