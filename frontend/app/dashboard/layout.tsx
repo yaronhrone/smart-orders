@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe, logout as apiLogout, Me } from "../lib/api";
 import { AppSidebar } from "../components/AppSidebar";
+import { AssistantChat } from "../components/AssistantChat";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -32,6 +33,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen relative z-10" dir="rtl">
       <AppSidebar me={me} onLogout={logout} />
       <div className="pt-14 md:pt-0 md:mr-56 min-h-screen">{children}</div>
+      <AssistantChat isAdmin={Boolean(me?.is_staff)} />
     </div>
   );
 }

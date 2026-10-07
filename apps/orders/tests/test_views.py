@@ -367,11 +367,24 @@ class OrderStatsViewTests(APITestCase):
         self.supplier_a = make_supplier("ספק א")
         self.supplier_b = make_supplier("ספק ב")
 
-    def _order(self, user, supplier, created_at, quantity="10", price="5.00"):
-        order = make_order(user, total=str(Decimal(quantity) * Decimal(price)), supplier=supplier)
+    def _order(self, user, supplier, created_at, quantity="10", price="5.00", status_val=OrderRequest.Status.SENT):
+        order = make_order(
+            user, total=str(Decimal(quantity) * Decimal(price)), supplier=supplier, status_val=status_val,
+        )
         make_order_item(order, self.product, quantity=quantity, price=price)
         OrderRequest.objects.filter(pk=order.pk).update(created_at=created_at)
         return order
+
+    def test_cancelled_and_pending_orders_are_not_counted_as_spend(self):
+        now = self.timezone.now()
+        self._order(self.user, self.supplier_a, now)
+        self._order(self.user, self.supplier_a, now, status_val=OrderRequest.Status.CANCELLED)
+        self._order(self.user, self.supplier_a, now, status_val=OrderRequest.Status.PENDING)
+
+        res = self.client.get(reverse("orders-stats"))
+
+        self.assertEqual(res.data["order_count"], 1)
+        self.assertEqual(float(res.data["total_spent"]), 50.0)
 
     def test_defaults_to_the_current_month(self):
         now = self.timezone.now()

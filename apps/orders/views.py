@@ -28,6 +28,7 @@ from .serializers import (
 from decimal import Decimal
 from collections import defaultdict
 from .services import suggest_order, build_order
+from .spend import SPEND_STATUSES
 class SuggestOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     @extend_schema(request=SuggestOrderInputSerializer, responses=SuggestOrderResponseSerializer)
@@ -261,7 +262,7 @@ class OrderStatsView(APIView):
         if cached is not None:
             return Response(cached)
 
-        all_orders = OrderRequest.objects.filter(user=request.user)
+        all_orders = OrderRequest.objects.filter(user=request.user, status__in=SPEND_STATUSES)
         available_months = [
             m.strftime("%Y-%m") for m in
             all_orders.annotate(month=TruncMonth("created_at"))

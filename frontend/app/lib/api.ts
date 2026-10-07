@@ -53,6 +53,14 @@ async function tryRefresh(): Promise<boolean> {
   }
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export async function request<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
   const res = await fetch(path, {
     ...options,
@@ -72,7 +80,7 @@ export async function request<T>(path: string, options: RequestInit = {}, _retri
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(_parseErrorBody(body) || res.statusText);
+    throw new ApiError(_parseErrorBody(body) || res.statusText, res.status);
   }
   if (res.status === 204) return null as T;
   return res.json();
@@ -504,4 +512,28 @@ export async function createProductAlias(productId: number, alias: string): Prom
 
 export async function deleteProductAlias(id: number): Promise<void> {
   return request<void>(`/api/catalog/product-aliases/${id}/`, { method: "DELETE" });
+}
+
+export interface AssistantTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantAnswer {
+  answer: string;
+  call_id: number;
+}
+
+export async function askAssistant(message: string, history: AssistantTurn[]): Promise<AssistantAnswer> {
+  return request<AssistantAnswer>("/api/assistant/ask/", {
+    method: "POST",
+    body: JSON.stringify({ message, history }),
+  });
+}
+
+export async function sendAssistantFeedback(callId: number, rating: "up" | "down"): Promise<void> {
+  await request("/api/assistant/feedback/", {
+    method: "POST",
+    body: JSON.stringify({ call_id: callId, rating }),
+  });
 }
