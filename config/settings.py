@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.catalog",
     "apps.orders",
+    "apps.assistant",
     "drf_spectacular",
 ]
 
@@ -181,6 +182,8 @@ REST_FRAMEWORK = {
     #     "user": "50/day",
     #     "anon": "20/day",
     # },
+    # Only views that opt in with throttle_scope are limited (see apps/assistant/views.py).
+    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour"},
 }
 
 from datetime import timedelta
