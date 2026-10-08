@@ -16,6 +16,7 @@ from .cache import (
     save_draft_order,
     save_pending_clarification,
     save_pending_order,
+    SESSION_TTL,
 )
 from .delivery_flow import _handle_delivery_flow
 from .fallback_flow import _handle_fallback_approval, _handle_reroute_grace_topup
@@ -27,6 +28,23 @@ logger = logging.getLogger(__name__)
 # starts a new order instead of tacking onto the old one — without a cutoff,
 # "update" would apply indefinitely, including to an order from days ago.
 DAILY_UPDATE_CUTOFF = dtime(23, 0)
+
+
+# A bare "yes" with no offer waiting means the offer expired (SESSION_TTL) or
+# never existed. Better to say so than to parse "אישור" as a new order.
+_CONFIRM_WORDS = {"אישור", "אשר", "מאשר", "אני מאשר", "כן", "אוקי", "אוקיי", "ok", "okay"}
+
+
+def _offer_validity_text(seconds: int) -> str:
+    if seconds == 3600:
+        return "לשעה"
+    if seconds == 7200:
+        return "לשעתיים"
+    return f"ל-{seconds // 60} דקות"
+
+
+def _is_bare_confirmation(body: str) -> bool:
+    return body.strip().strip("!.").strip().casefold() in _CONFIRM_WORDS
 
 
 def _format_scenario(label, s):
@@ -413,7 +431,10 @@ def _suggest_and_respond(
         chosen = cheapest if recommended == "cheapest" else fewest
         save_pending_order(phone, cheapest, fewest, single_scenario=recommended, **pending_kwargs)
         msg = _format_scenario("ההזמנה שלך", chosen)
-        msg += "\n\nענה *אישור* לאישור."
+        msg += (
+            "\n\nענה *אישור* לאישור. "
+            f"ההצעה תקפה {_offer_validity_text(SESSION_TTL)}; אחרי זה צריך לשלוח את ההזמנה מחדש."
+        )
     else:
         # Nothing clears the suppliers' minimums — nothing valid to offer yet.
         shortfalls = (
@@ -643,6 +664,15 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     raw = cache.get(key)
 
     if not raw:
+        if _is_bare_confirmation(body):
+            validators.send_whatsapp_message(
+                phone,
+                "⏰ אין כרגע הזמנה שממתינה לאישור. "
+                f"ההצעה תקפה {_offer_validity_text(SESSION_TTL)} מרגע שנשלחה, "
+                "ואם עבר הזמן צריך לשלוח את ההזמנה מחדש.",
+            )
+            return HttpResponse(status=200)
+
         # Check if user has a SENT order (awaiting supplier confirmation) → offer modification
         profile = _resolve_profile(phone)
 
