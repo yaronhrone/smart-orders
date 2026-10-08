@@ -534,6 +534,94 @@ def _issue(supplier_name, missing="900.00"):
 
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class ExpiredOfferTests(TestCase):
+    """The offer waits in Redis for SESSION_TTL; after that a bare "אישור" must say so."""
+
+    PHONE = "+972507777777"
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.supplier = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
+        self.user = make_user_with_profile(phone=self.PHONE)
+
+    def _post(self, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": body})
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_offer_tells_the_customer_how_long_it_is_valid(self, mock_suggest, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00"),
+            "fewest_suppliers": _scenario("60.00"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+        }
+
+        self._post("10 עגבניות")
+        _flush_draft(self.PHONE)
+
+        msg = mock_send.call_args[0][1]
+        self.assertIn("ענה *אישור*", msg)
+        self.assertIn("ההצעה תקפה לשעה", msg)
+        self.assertIn("לשלוח את ההזמנה מחדש", msg)
+
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirming_after_the_offer_expired_says_to_resend(self, mock_send, mock_parse):
+        # nothing in the cache: the offer expired (or never existed)
+        for word in ("אישור", "אישור!", " כן ", "OK"):
+            with self.subTest(word=word):
+                mock_send.reset_mock()
+                response = self._post(word)
+
+                self.assertEqual(response.status_code, 200)
+                msg = mock_send.call_args[0][1]
+                self.assertIn("אין כרגע הזמנה שממתינה לאישור", msg)
+                self.assertIn("צריך לשלוח את ההזמנה מחדש", msg)
+        mock_parse.assert_not_called()  # never read as a new order
+        self.assertFalse(OrderRequest.objects.filter(user=self.user).exists())
+
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_stale_confirmation_is_not_read_as_an_update_to_an_open_order(self, mock_send, mock_parse):
+        make_order(self.user, self.supplier, status=OrderRequest.Status.SENT)
+
+        self._post("אישור")
+
+        self.assertIn("אין כרגע הזמנה שממתינה לאישור", mock_send.call_args[0][1])
+        mock_parse.assert_not_called()
+
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirming_in_time_still_creates_the_order(self, mock_send, mock_send_wa, mock_supplier_task):
+        cheapest = _scenario("50.00")
+        save_pending_order(
+            self.PHONE, cheapest, cheapest, single_scenario="cheapest",
+            products=[{"product_id": self.tomato.id, "quantity": "10"}],
+            user_id=self.user.id, region=Region.CENTER,
+        )
+
+        self._post("אישור")
+
+        order = OrderRequest.objects.get(user=self.user)
+        self.assertEqual(order.status, OrderRequest.Status.SENT)
+        self.assertIsNone(cache.get(f"whatsapp_order:{self.PHONE}"))
+
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_ordinary_text_is_still_treated_as_a_new_order(self, mock_send, mock_parse):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+
+        self._post("10 קילו עגבניות")
+
+        mock_parse.assert_called_once()
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
 class MinimumScenarioFilteringTests(TestCase):
 
     def setUp(self):
