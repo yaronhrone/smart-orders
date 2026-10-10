@@ -28,6 +28,24 @@ function formatQty(qty: string | number): string {
 
 const WHOLE_UNITS = new Set(["UNIT", "BOX"]);
 
+// Same rule as the server (deadline_flow.is_weekend_order): Friday, or Saturday before 22:00, Israel time.
+function isWeekendOrder(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Jerusalem", weekday: "short", hour: "2-digit", hourCycle: "h23",
+  }).formatToParts(now);
+  const weekday = parts.find((p) => p.type === "weekday")?.value;
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  return weekday === "Fri" || (weekday === "Sat" && hour < 22);
+}
+
+function WeekendNotice() {
+  return (
+    <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 text-sm text-sky-900">
+      🗓️ הזמנת סוף שבוע: אין משלוחים בשבת. ההזמנה תגיע ביום ראשון, והספקים יאשרו אותה במוצאי שבת.
+    </div>
+  );
+}
+
 type Step = 1 | 2 | 3;
 
 interface OrderItem {
@@ -267,6 +285,8 @@ export default function NewOrderPage() {
       {/* ─── Step 2: Scenarios ────────────────────────────────────────── */}
       {step === 2 && suggestion && (
         <div className="space-y-5">
+          {isWeekendOrder() && <WeekendNotice />}
+
           {openBatch && (
             <div className="border-2 border-amber-400 bg-amber-50 rounded-xl p-4 flex flex-col gap-3">
               <div>
@@ -405,6 +425,8 @@ export default function NewOrderPage() {
               </>
             )}
           </div>
+
+          {isWeekendOrder() && <WeekendNotice />}
 
           {placed.not_added.length > 0 && (
             <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-800">

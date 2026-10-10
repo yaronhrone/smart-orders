@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -13,7 +13,9 @@ from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfir
 from apps.orders.tests.factories import make_order
 from apps.orders.tests.test_webhook import make_product, make_supplier, make_user_with_profile
 from apps.orders.whatsapp.cache import save_supplier_pending_order
-from apps.orders.whatsapp.deadline_flow import confirmation_deadline, handle_overdue_orders, overdue_orders
+from apps.orders.whatsapp.deadline_flow import (
+    confirmation_deadline, handle_overdue_orders, is_shabbat_quiet_time, is_weekend_order, overdue_orders,
+)
 
 IL = ZoneInfo("Asia/Jerusalem")
 LOCMEM_CACHE = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
@@ -21,9 +23,17 @@ ADMIN = "+972500000099"
 CUSTOMER = "+972509999999"
 
 
-def il_today(hour, minute=0, days_ago=0):
-    day = timezone.now().astimezone(IL).date() - timedelta(days=days_ago)
+# Fixed dates, so the weekday rules don't depend on when the suite runs.
+MONDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY = (date(2026, 10, d) for d in (5, 8, 9, 10, 11))
+
+
+def il_at(day, hour, minute=0):
     return datetime.combine(day, time(hour, minute), tzinfo=IL)
+
+
+def il_today(hour, minute=0, days_ago=0):
+    """An ordinary weekday (Monday)."""
+    return il_at(MONDAY - timedelta(days=days_ago), hour, minute)
 
 
 @override_settings(CACHES=LOCMEM_CACHE, ADMIN_WHATSAPP_NUMBER=ADMIN)
@@ -147,8 +157,8 @@ class SupplierConfirmationDeadlineTests(TestCase):
         self.assertIn("חסה", admin)
         self.assertEqual(self._to(self.a.whatsapp_number), [])
 
-    def test_orders_older_than_yesterday_are_left_alone(self):
-        OrderRequest.objects.filter(pk=self.order.pk).update(created_at=il_today(10, days_ago=3))
+    def test_orders_older_than_three_days_are_left_alone(self):
+        OrderRequest.objects.filter(pk=self.order.pk).update(created_at=il_today(10, days_ago=4))
 
         self.assertEqual(overdue_orders(now=il_today(18)), [])
 
@@ -168,10 +178,49 @@ class SupplierConfirmationDeadlineTests(TestCase):
 
         self.assertIsNotNone(cache.get(key))
 
-    def test_beat_runs_the_task_every_evening(self):
+    def test_beat_runs_sunday_to_thursday_evenings_and_saturday_night_only(self):
         from apps.orders.tasks import enforce_supplier_confirmation_deadline
 
-        entry = settings.CELERY_BEAT_SCHEDULE["supplier-confirmation-deadline"]
-        self.assertEqual(entry["task"], enforce_supplier_confirmation_deadline.name)
-        self.assertEqual(entry["schedule"].hour, set(range(18, 24)))
+        weekdays = settings.CELERY_BEAT_SCHEDULE["supplier-confirmation-deadline"]
+        saturday = settings.CELERY_BEAT_SCHEDULE["supplier-confirmation-deadline-saturday-night"]
+        for entry in (weekdays, saturday):
+            self.assertEqual(entry["task"], enforce_supplier_confirmation_deadline.name)
+        self.assertEqual(weekdays["schedule"].hour, set(range(18, 24)))
+        self.assertEqual(weekdays["schedule"].day_of_week, {0, 1, 2, 3, 4})  # celery: 0 = Sunday
+        self.assertEqual(saturday["schedule"].hour, set(range(21, 24)))
+        self.assertEqual(saturday["schedule"].day_of_week, {6})
         self.assertEqual(settings.CELERY_TIMEZONE, "Asia/Jerusalem")
+
+    # ─── Weekends: no deliveries on Shabbat ───
+
+    def test_friday_and_saturday_orders_are_due_saturday_night(self):
+        self.assertEqual(confirmation_deadline(il_at(FRIDAY, 10)), il_at(SATURDAY, 22))
+        self.assertEqual(confirmation_deadline(il_at(SATURDAY, 12)), il_at(SATURDAY, 22))
+        self.assertEqual(confirmation_deadline(il_at(SATURDAY, 21)), il_at(SATURDAY, 23))  # still 2 hours
+        self.assertEqual(confirmation_deadline(il_at(THURSDAY, 20)), il_at(THURSDAY, 22))
+        self.assertEqual(confirmation_deadline(il_at(SUNDAY, 9)), il_at(SUNDAY, 18))
+
+    def test_weekend_order_rule(self):
+        self.assertTrue(is_weekend_order(il_at(FRIDAY, 8)))
+        self.assertTrue(is_weekend_order(il_at(SATURDAY, 21, 59)))
+        self.assertFalse(is_weekend_order(il_at(SATURDAY, 22)))
+        self.assertFalse(is_weekend_order(il_at(THURSDAY, 23)))
+
+    def test_nothing_is_rerouted_during_shabbat(self):
+        OrderRequest.objects.filter(pk=self.order.pk).update(created_at=il_at(THURSDAY, 10))
+
+        self.assertTrue(is_shabbat_quiet_time(il_at(FRIDAY, 18)))
+        self.assertEqual(handle_overdue_orders(now=il_at(FRIDAY, 18)), 0)
+        self.assertEqual(handle_overdue_orders(now=il_at(SATURDAY, 20, 45)), 0)
+        self.assertEqual(self.mock_send.call_count, 0)
+
+    def test_friday_order_is_rerouted_on_saturday_night_not_before(self):
+        OrderRequest.objects.filter(pk=self.order.pk).update(created_at=il_at(FRIDAY, 9))
+
+        self.assertEqual(handle_overdue_orders(now=il_at(SATURDAY, 21, 45)), 0)  # Shabbat over, not due yet
+        self.assertEqual(handle_overdue_orders(now=il_at(SATURDAY, 22)), 1)
+
+    def test_thursday_night_order_is_picked_up_on_saturday_night(self):
+        OrderRequest.objects.filter(pk=self.order.pk).update(created_at=il_at(THURSDAY, 23, 30))
+
+        self.assertEqual(handle_overdue_orders(now=il_at(SATURDAY, 21)), 1)

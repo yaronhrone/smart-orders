@@ -222,10 +222,16 @@ from celery.schedules import crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE = {
     # Orders a supplier hasn't confirmed by 18:00 (or within 2 hours of being
-    # sent) move to another supplier. Evenings only, so nothing is rerouted at night.
+    # sent) move to another supplier. Evenings only, so nothing is rerouted at
+    # night; not on Friday, and on Saturday only after Shabbat (Friday/Saturday
+    # orders are delivered Sunday and due Saturday 22:00).
     "supplier-confirmation-deadline": {
         "task": "apps.orders.tasks.enforce_supplier_confirmation_deadline",
-        "schedule": crontab(minute="*/15", hour="18-23"),
+        "schedule": crontab(minute="*/15", hour="18-23", day_of_week="sun,mon,tue,wed,thu"),
+    },
+    "supplier-confirmation-deadline-saturday-night": {
+        "task": "apps.orders.tasks.enforce_supplier_confirmation_deadline",
+        "schedule": crontab(minute="*/15", hour="21-23", day_of_week="sat"),
     },
 }
 

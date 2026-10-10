@@ -354,6 +354,15 @@ class PlaceAndSuggestViewTests(APITestCase):
             self.assertIn(f"הזמנה #{o['order_id']} — {o['supplier_name']}", msg)
 
 
+    def test_place_on_the_weekend_says_delivery_is_on_sunday(self):
+        from unittest.mock import patch
+
+        with patch("apps.orders.whatsapp.user_flow.is_weekend_order", return_value=True):
+            self.client.post(reverse("orders-place"), {**self._basket(), "scenario": "cheapest"}, format="json")
+
+        msg = [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == "+972501112222"][-1]
+        self.assertIn("ההזמנה תגיע ביום ראשון", msg)
+
 class OrderStatsViewTests(APITestCase):
     """GET /api/orders/stats/ — per-supplier spend for one calendar month."""
 

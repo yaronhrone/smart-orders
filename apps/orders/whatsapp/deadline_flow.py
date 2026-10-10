@@ -12,6 +12,15 @@ logger = logging.getLogger(__name__)
 
 CONFIRMATION_DEADLINE = time(18, 0)
 MIN_CONFIRMATION_WINDOW = timedelta(hours=2)
+# No deliveries on Shabbat: orders sent Friday or Saturday are delivered on
+# Sunday, so their supplier has until Saturday night to confirm.
+FRIDAY, SATURDAY = 4, 5
+WEEKEND_DEADLINE = time(22, 0)
+SHABBAT_OVER = time(21, 0)
+# Thursday-night orders are handled on Saturday night, two days later.
+LOOKBACK_DAYS = 3
+
+WEEKEND_ORDER_NOTICE = "🗓️ הזמנת סוף שבוע: אין משלוחים בשבת. ההזמנה תגיע ביום ראשון, והספקים יאשרו אותה במוצאי שבת."
 
 _OUTCOME_TEXT = {
     "dispatched": "הועברה לספק אחר",
@@ -20,29 +29,51 @@ _OUTCOME_TEXT = {
 }
 
 
+def is_weekend_order(when=None) -> bool:
+    """Placed Friday or Saturday before 22:00 (Israel time): delivered Sunday, confirmed Saturday night."""
+    local = (when or timezone.now()).astimezone(IL_TZ)
+    weekday = local.weekday()
+    return weekday == FRIDAY or (weekday == SATURDAY and local.time() < WEEKEND_DEADLINE)
+
+
 def confirmation_deadline(sent_at):
-    """18:00 Israel time on the day it was sent, but never less than 2 hours after sending."""
+    """
+    18:00 Israel time on the day it was sent; for Friday and Saturday orders
+    (delivered Sunday), 22:00 on Saturday night. Never less than 2 hours
+    after sending.
+    """
     local = sent_at.astimezone(IL_TZ)
-    at_cutoff = datetime.combine(local.date(), CONFIRMATION_DEADLINE, tzinfo=IL_TZ)
-    return max(at_cutoff, local + MIN_CONFIRMATION_WINDOW)
+    weekday = local.weekday()
+    if is_weekend_order(sent_at):
+        saturday = local.date() + timedelta(days=SATURDAY - weekday)
+        base = datetime.combine(saturday, WEEKEND_DEADLINE, tzinfo=IL_TZ)
+    else:
+        base = datetime.combine(local.date(), CONFIRMATION_DEADLINE, tzinfo=IL_TZ)
+    return max(base, local + MIN_CONFIRMATION_WINDOW)
+
+
+def is_shabbat_quiet_time(now) -> bool:
+    """Friday, and Saturday until Shabbat is over: suppliers aren't answering, so nothing is rerouted."""
+    local = now.astimezone(IL_TZ)
+    return local.weekday() == FRIDAY or (local.weekday() == SATURDAY and local.time() < SHABBAT_OVER)
 
 
 def overdue_orders(now=None):
     """
     SENT orders past their deadline that the job hasn't handled yet. Only
-    orders sent today or yesterday (Israel time): older stuck orders are
-    left alone instead of all being rerouted at once.
+    orders from the last LOOKBACK_DAYS days (Israel time): older stuck
+    orders are left alone instead of all being rerouted at once.
     """
     from apps.orders.models import OrderRequest
 
     now = now or timezone.now()
-    yesterday = now.astimezone(IL_TZ).date() - timedelta(days=1)
+    since = now.astimezone(IL_TZ).date() - timedelta(days=LOOKBACK_DAYS)
     candidates = (
         OrderRequest.objects
         .filter(
             status=OrderRequest.Status.SENT,
             deadline_handled_at__isnull=True,
-            created_at__gte=datetime.combine(yesterday, time.min, tzinfo=IL_TZ),
+            created_at__gte=datetime.combine(since, time.min, tzinfo=IL_TZ),
         )
         .select_related("supplier", "user__profile")
     )
@@ -51,6 +82,9 @@ def overdue_orders(now=None):
 
 def handle_overdue_orders(now=None) -> int:
     """Reroute every overdue order (see handle_overdue_order). Returns how many were handled."""
+    now = now or timezone.now()
+    if is_shabbat_quiet_time(now):
+        return 0
     handled = 0
     for order in overdue_orders(now):
         try:

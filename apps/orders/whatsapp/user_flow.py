@@ -21,6 +21,7 @@ from .cache import (
     save_pending_order,
     SESSION_TTL,
 )
+from .deadline_flow import WEEKEND_ORDER_NOTICE, is_weekend_order
 from .delivery_flow import _handle_delivery_flow
 from .fallback_flow import _handle_fallback_approval, _handle_reroute_grace_topup
 from apps.orders.services import NOT_ADDED_REASONS
@@ -235,6 +236,8 @@ def notify_customer_of_checkout(user, orders) -> None:
     if len(orders) > 1:
         lines.append(f'\nסה"כ: {total:.2f}₪ ({len(orders)} ספקים, הזמנה נפרדת לכל ספק)')
     lines.append("\nנעדכן אותך כשכל ספק מאשר.")
+    if is_weekend_order():
+        lines.append(f"\n{WEEKEND_ORDER_NOTICE}")
     try:
         validators.send_whatsapp_message(validators._local_to_e164(profile.phone), "\n".join(lines))
     except Exception as exc:
@@ -565,6 +568,8 @@ def _suggest_and_respond(
             "\n\nענה *אישור* לאישור. "
             f"ההצעה תקפה {_offer_validity_text(SESSION_TTL)}; אחרי זה צריך לשלוח את ההזמנה מחדש."
         )
+        if is_weekend_order():
+            msg += f"\n\n{WEEKEND_ORDER_NOTICE}"
     else:
         # Nothing clears the suppliers' minimums — nothing valid to offer yet.
         shortfalls = (

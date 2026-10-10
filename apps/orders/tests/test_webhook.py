@@ -569,6 +569,26 @@ class ExpiredOfferTests(TestCase):
         self.assertIn("ההצעה תקפה לשעה", msg)
         self.assertIn("לשלוח את ההזמנה מחדש", msg)
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_weekend_offer_says_delivery_is_on_sunday(self, mock_suggest, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00"),
+            "fewest_suppliers": _scenario("60.00"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+        }
+
+        for weekend in (True, False):
+            weekend_patch = patch("apps.orders.whatsapp.user_flow.is_weekend_order", return_value=weekend)
+            with self.subTest(weekend=weekend), weekend_patch:
+                cache.clear()
+                self._post("10 עגבניות")
+                _flush_draft(self.PHONE)
+                msg = mock_send.call_args[0][1]
+                self.assertEqual("ההזמנה תגיע ביום ראשון" in msg, weekend)
+
     @patch("apps.orders.order_parser.parse_customer_order")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_confirming_after_the_offer_expired_says_to_resend(self, mock_send, mock_parse):
