@@ -331,12 +331,17 @@ def _apply_single_modification(
     (keyed by order id, for one consolidated message per supplier) and
     `changes_made` in place.
 
-    Returns "ok", "not_found" (no supplier in the region carries it), or
-    "locked" (it's in an order its supplier already approved/shipped —
-    changing it would silently re-open something already signed off on).
+    Returns "ok", "not_found" (no supplier in the region carries it),
+    "below_minimum", or "locked": the customer asked for LESS (or the same)
+    of something its supplier already approved/shipped — that needs the
+    supplier's agreement. Asking for MORE is never refused: the difference
+    goes to the supplier as an addition (a new order in the batch, because an
+    approved order isn't silently re-opened), told apart from a new order by
+    the supplier's message.
     """
     from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
     from apps.orders.services import get_or_create_supplier_order, pick_supplier_for_addition
+    from .supplier_flow import supplier_total_note
 
     live_items = (
         OrderRequestProduct.objects
@@ -350,45 +355,66 @@ def _apply_single_modification(
     # existing item to update — treat it the same as "add" rather than
     # silently doing nothing for it.
     if intent == "update" and open_item:
+        # "Update to N" means N in total. Other lines of this product in the
+        # checkout (e.g. one the supplier already approved, plus this
+        # addition awaiting approval) keep what they have, so this line
+        # takes the rest.
+        others = sum((i.quantity for i in live_items if i.id != open_item.id), Decimal("0"))
+        target = Decimal(str(quantity)) - others
+        if target <= 0:
+            return "locked"
         old_qty = open_item.quantity
-        open_item.quantity = quantity
+        open_item.quantity = target
         open_item.save(update_fields=["quantity"])
         # The supplier confirmed the old quantity, not this one.
         SupplierConfirmation.objects.filter(order_request_product=open_item).delete()
         _recalc_order_total(open_item.order_request)
         _record_order_change(order_changes, open_item.order_request, created=False, line=(
-            f"🔄 {product.name}: {old_qty} → {quantity} {product.get_unit_display()}"
+            f"🔄 {product.name}: {old_qty} → {target} {product.get_unit_display()}"
+            f"{supplier_total_note(open_item.order_request, product, target)}"
         ))
         changes_made.append(
-            f"עודכן: {product.name} {old_qty}→{quantity} {product.get_unit_display()} "
+            f"עודכן: {product.name} {others + old_qty}→{quantity} {product.get_unit_display()} "
             f"(הזמנה #{open_item.order_request_id})"
         )
         return "ok"
 
+    add_quantity = Decimal(str(quantity))
+    update_from = None
     if intent == "update" and live_items.exists():
-        return "locked"
+        update_from = sum((i.quantity for i in live_items), Decimal("0"))
+        if add_quantity <= update_from:
+            return "locked"
+        add_quantity -= update_from
 
-    supplier, price, reason = pick_supplier_for_addition(batch, product, Decimal(str(quantity)), region)
+    supplier, price, reason = pick_supplier_for_addition(batch, product, add_quantity, region)
     if supplier is None:
         return reason if reason == "below_minimum" else "not_found"
 
     order, created = get_or_create_supplier_order(batch, supplier)
     orp, item_created = OrderRequestProduct.objects.get_or_create(
         order_request=order, product=product, supplier=supplier,
-        defaults={"quantity": quantity, "unit_price": price},
+        defaults={"quantity": add_quantity, "unit_price": price},
     )
     if not item_created:
-        orp.quantity += quantity
+        orp.quantity += add_quantity
         orp.save(update_fields=["quantity"])
         SupplierConfirmation.objects.filter(order_request_product=orp).delete()
     _recalc_order_total(order)
+    unit = product.get_unit_display()
+    total_note = supplier_total_note(order, product, add_quantity)
     _record_order_change(order_changes, order, created=created, line=(
-        f"➕ {product.name} x{quantity} {product.get_unit_display()}"
+        f"➕ {product.name} x{add_quantity} {unit}{total_note}"
     ))
-    changes_made.append(
-        f"נוסף: {product.name} x{quantity} {product.get_unit_display()} "
-        f"({supplier.name}, הזמנה #{order.id})"
-    )
+    if update_from is not None:
+        changes_made.append(
+            f"עודכן: {product.name} {update_from}→{quantity} {unit}, נוספו {add_quantity} "
+            f"({supplier.name}, הזמנה #{order.id})"
+        )
+    else:
+        changes_made.append(
+            f"נוסף: {product.name} x{add_quantity} {unit} ({supplier.name}, הזמנה #{order.id})"
+        )
     return "ok"
 
 
@@ -410,12 +436,12 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
     just the changed lines, or the supplier's "אישור" would leave the rest
     of the order unconfirmed forever.
     """
-    from .supplier_flow import _save_pending_for_order
+    from .supplier_flow import _save_pending_for_order, followup_header
 
     for entry in order_changes.values():
         order = entry["order"]
         if entry["created"]:
-            msg_lines = [f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
+            msg_lines = [followup_header(order, company) or f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
         else:
             msg_lines = [f"📝 *{company}* עדכן הזמנה #{order.id}:"]
         msg_lines += entry["lines"]
@@ -448,6 +474,7 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
 
     changes_made = []
     errors = []
+    blocked = []
     order_changes = {}
 
     for item in resolved_items:
@@ -459,9 +486,9 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
         if result == "not_found":
             errors.append(item["product_name"])
         elif result == "locked":
-            errors.append(f"{item['product_name']} (הספק כבר אישר — לא ניתן לשנות)")
+            blocked.append(f"{item['product_name']}: הספק כבר אישר. אפשר להוסיף כמות, אבל להפחית צריך לתאם מולו")
         elif result == "below_minimum":
-            errors.append(f"{item['product_name']} (מתחת למינימום של הספק)")
+            blocked.append(f"{item['product_name']}: מתחת למינימום של הספק")
 
     _dispatch_modification_batches(
         order_changes,
@@ -475,6 +502,9 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
         reply_lines += [f"  • {c}" for c in changes_made]
     if errors:
         reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
+    if blocked:
+        reply_lines.append("⚠️ לא בוצע:")
+        reply_lines += [f"  • {b}" for b in blocked]
     if not reply_lines:
         reply_lines = ["לא הצלחתי לזהות שינוי בהזמנה. נסה שוב."]
     validators.send_whatsapp_message(phone, "\n".join(reply_lines))
@@ -685,6 +715,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
 
     changes_made = []
     errors = []
+    blocked = []
     ambiguous = []
     # One entry per changed order (= per supplier): several changes in the
     # same message (or several messages before the supplier gets around to
@@ -734,9 +765,9 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
         if result == "not_found":
             errors.append(product.name)
         elif result == "locked":
-            errors.append(f"{product.name} (הספק כבר אישר — לא ניתן לשנות)")
+            blocked.append(f"{product.name}: הספק כבר אישר. אפשר להוסיף כמות, אבל להפחית צריך לתאם מולו")
         elif result == "below_minimum":
-            errors.append(f"{product.name} (מתחת למינימום של הספק)")
+            blocked.append(f"{product.name}: מתחת למינימום של הספק")
 
     if ambiguous:
         # Anything else in the same message already resolved cleanly and, for
@@ -756,7 +787,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
             extra={"context": "modification", "batch_id": batch.id, "intent": intent, "region": region},
         )
 
-    if not changes_made and not errors:
+    if not changes_made and not errors and not blocked:
         validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
         return HttpResponse(status=200)
 
@@ -768,6 +799,9 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
         reply_lines += [f"  • {c}" for c in changes_made]
     if errors:
         reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
+    if blocked:
+        reply_lines.append("⚠️ לא בוצע:")
+        reply_lines += [f"  • {b}" for b in blocked]
 
     validators.send_whatsapp_message(phone, "\n".join(reply_lines))
     return HttpResponse(status=200)
