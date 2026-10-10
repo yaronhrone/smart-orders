@@ -959,20 +959,48 @@ class OpenOrderServiceTests(TestCase):
         self.assertEqual(changes[0]["items"][0].quantity, Decimal("5"))  # what to ask the supplier to add
         self.assertEqual(not_added, [])
 
-    def test_add_opens_a_new_order_in_the_batch_when_the_supplier_already_approved(self):
+    def test_add_to_an_approved_order_reopens_it_for_the_supplier_to_confirm_again(self):
+        from apps.orders.models import SupplierConfirmation
         from apps.orders.services import add_items_to_batch
 
+        SupplierConfirmation.objects.create(order_request_product=self.line, confirmed_quantity=10)
         OrderRequest.objects.filter(pk=self.order.pk).update(status=OrderRequest.Status.APPROVED)
+
+        changes, _ = add_items_to_batch(
+            self.order.batch, [{"product": self.tomato, "quantity": Decimal("5")}], Region.CENTER,
+        )
+
+        order = changes[0]["order"]
+        self.line.refresh_from_db()
+        self.assertEqual((order.id, order.status), (self.order.id, OrderRequest.Status.SENT))
+        self.assertEqual((changes[0]["created"], changes[0]["reopened"]), (False, True))
+        self.assertEqual(self.line.quantity, Decimal("15"))
+        self.assertFalse(SupplierConfirmation.objects.filter(order_request_product=self.line).exists())
+
+    def test_add_does_not_reopen_an_order_that_already_shipped(self):
+        from apps.orders.services import add_items_to_batch
+
+        OrderRequest.objects.filter(pk=self.order.pk).update(status=OrderRequest.Status.SHIPPED)
 
         changes, _ = add_items_to_batch(
             self.order.batch, [{"product": self.lettuce, "quantity": Decimal("2")}], Region.CENTER,
         )
 
         new_order = changes[0]["order"]
-        self.assertTrue(changes[0]["created"])
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SHIPPED)
+        self.assertEqual((changes[0]["created"], changes[0]["reopened"]), (True, False))
         self.assertNotEqual(new_order.id, self.order.id)
-        self.assertEqual((new_order.batch_id, new_order.supplier, new_order.status),
-                         (self.order.batch_id, self.a, OrderRequest.Status.SENT))
+        self.assertEqual((new_order.batch_id, new_order.status), (self.order.batch_id, OrderRequest.Status.SENT))
+
+    def test_an_approved_order_can_go_back_to_sent_but_a_shipped_one_cannot(self):
+        approved = make_order(self.user, self.a, status=OrderRequest.Status.APPROVED)
+        approved.transition_to(OrderRequest.Status.SENT)
+        shipped = make_order(self.user, self.a, status=OrderRequest.Status.SHIPPED)
+
+        self.assertEqual(approved.status, OrderRequest.Status.SENT)
+        with self.assertRaises(ValueError):
+            shipped.transition_to(OrderRequest.Status.SENT)
 
     def test_add_reports_what_could_not_be_added(self):
         from apps.orders.services import add_items_to_batch

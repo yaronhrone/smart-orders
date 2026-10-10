@@ -606,6 +606,18 @@ class PlaceWithOpenOrderViewTests(APITestCase):
         customer_msgs = [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == "+972501112222"]
         self.assertIn("גזר", customer_msgs[-1])
 
+    def test_adding_to_an_order_the_supplier_approved_reopens_it(self):
+        OrderRequest.objects.filter(pk=self.open_order.pk).update(status=OrderRequest.Status.APPROVED)
+
+        res = self._place(merge_into_batch=self.open_order.batch_id)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.open_order.refresh_from_db()
+        self.assertEqual(self.open_order.status, OrderRequest.Status.SENT)
+        self.assertEqual(OrderRequest.objects.filter(batch=self.open_order.batch).count(), 1)
+        supplier_msgs = [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == self.a.whatsapp_number]
+        self.assertIn(f"מבקש להוסיף להזמנה #{self.open_order.id} שכבר אישרת", supplier_msgs[-1])
+
     def test_stale_merge_after_the_order_closed_is_refused(self):
         self.cutoff.return_value = False
 
@@ -634,4 +646,5 @@ class TestRunsCannotReachRealServicesTests(APITestCase):
         self.assertEqual((settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN), ("test", "test"))
         self.assertEqual(settings.ADMIN_WHATSAPP_NUMBER, "")
         self.assertEqual(os.environ["OPENAI_API_KEY"], "test")
+        self.assertIn("locmem", settings.CACHES["default"]["BACKEND"])
 

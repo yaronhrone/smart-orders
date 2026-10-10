@@ -127,7 +127,9 @@ def _handle_merge_offer_reply(phone: str, body: str):
         return HttpResponse(status=200)
 
     for change in changes:
-        notify_supplier_of_items(change["order"], change["items"], created=change["created"])
+        notify_supplier_of_items(
+            change["order"], change["items"], created=change["created"], reopened=change["reopened"],
+        )
     validators.send_whatsapp_message(phone, _format_additions(changes, not_added))
     return HttpResponse(status=200)
 
@@ -347,7 +349,7 @@ def _apply_single_modification(
     """
     from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
     from apps.orders.services import (
-        addition_shortfall, get_or_create_supplier_order, pick_supplier_for_addition,
+        addition_shortfall, get_or_reopen_supplier_order, pick_supplier_for_addition,
         product_total_in_batch, reduce_product_in_batch,
     )
     from .supplier_flow import fmt_qty, supplier_total_note
@@ -401,7 +403,7 @@ def _apply_single_modification(
             blocked.append(f"{product.name}: מתחת למינימום של הספק")
         return "blocked"
 
-    order, created = get_or_create_supplier_order(batch, supplier)
+    order, created, reopened = get_or_reopen_supplier_order(batch, supplier)
     orp, item_created = OrderRequestProduct.objects.get_or_create(
         order_request=order, product=product, supplier=supplier,
         defaults={"quantity": delta, "unit_price": price},
@@ -411,7 +413,7 @@ def _apply_single_modification(
         orp.save(update_fields=["quantity"])
         SupplierConfirmation.objects.filter(order_request_product=orp).delete()
     _recalc_order_total(order)
-    _record_order_change(order_changes, order, created=created, line=(
+    _record_order_change(order_changes, order, created=created, reopened=reopened, line=(
         f"➕ {product.name} x{fmt_qty(delta)} {unit}{supplier_total_note(order, product, delta)}"
     ))
     if intent == "update" and current > 0:
@@ -447,11 +449,14 @@ def _recalc_order_total(order) -> None:
 
 def _record_order_change(
     order_changes: dict, order, created: bool, line: str, needs_confirmation: bool = True,
+    reopened: bool = False,
 ) -> None:
     entry = order_changes.setdefault(
-        order.id, {"order": order, "created": created, "lines": [], "needs_confirmation": False},
+        order.id,
+        {"order": order, "created": created, "reopened": False, "lines": [], "needs_confirmation": False},
     )
     entry["created"] = entry["created"] or created
+    entry["reopened"] = entry["reopened"] or reopened
     entry["needs_confirmation"] = entry["needs_confirmation"] or needs_confirmation
     entry["lines"].append(line)
 
@@ -468,7 +473,7 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
     """
     from apps.orders.models import OrderRequest
     from .cache import clear_supplier_pending_for_order
-    from .supplier_flow import _save_pending_for_order, followup_header
+    from .supplier_flow import _save_pending_for_order, followup_header, reopened_header
 
     for entry in order_changes.values():
         order = entry["order"]
@@ -481,7 +486,9 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
             clear_supplier_pending_for_order(order.supplier.whatsapp_number, order.id)
             continue
         needs_confirmation = entry["needs_confirmation"]
-        if entry["created"]:
+        if entry["reopened"]:
+            msg_lines = [reopened_header(order, company)]
+        elif entry["created"]:
             msg_lines = [followup_header(order, company) or f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
         else:
             msg_lines = [f"📝 *{company}* עדכן הזמנה #{order.id}:"]

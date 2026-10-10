@@ -243,6 +243,8 @@ if TESTING:
     ADMIN_WHATSAPP_NUMBER = ""
     WHATSAPP_OVERRIDE_NUMBER = None
     os.environ["OPENAI_API_KEY"] = "test"
+    # An in-process cache: Redis would carry cached stats from the previous run into this one.
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
 _extra_cors = [o for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o]
 CORS_ALLOWED_ORIGINS = ["http://localhost:3000"] + _extra_cors

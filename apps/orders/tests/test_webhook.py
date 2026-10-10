@@ -2842,22 +2842,24 @@ class ModificationRulesTests(TestCase):
 
     # ─── more ───
 
-    def test_adding_after_approval_tells_the_supplier_it_is_an_addition_with_the_total(self):
+    def test_adding_after_approval_reopens_the_same_order_and_tells_the_supplier(self):
         self._approve_first_order()
 
         self._customer_says("add", "20")
 
-        new = self._new_order()
-        self.assertEqual((new.status, [p.quantity for p in new.products.all()]), (OrderRequest.Status.SENT, [Decimal("20")]))
         self.order.refresh_from_db()
-        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)  # the approved order is left alone
+        self.line.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)  # waiting for the new total
+        self.assertEqual(self.line.quantity, Decimal("50"))
+        self.assertFalse(SupplierConfirmation.objects.filter(order_request_product=self.line).exists())
+        self.assertEqual(OrderRequest.objects.filter(batch=self.order.batch).count(), 1)  # still one order
         msg = self._sent_to(self.supplier.whatsapp_number)[-1]
         self.assertIn(f"מבקש להוסיף להזמנה #{self.order.id} שכבר אישרת", msg)
-        self.assertIn(f"הזמנה נפרדת #{new.id}", msg)
-        self.assertIn('עגבניה x20 ק"ג (בסך הכול 50 ק"ג)', msg)
-        self.assertNotIn("מבקש להזמין", msg)
+        self.assertIn('➕ עגבניה x20 ק"ג (בסך הכול 50 ק"ג)', msg)
+        self.assertIn("אנא ענה *אישור*", msg)
+        self.assertNotIn("נפרדת", msg)
         customer = self._sent_to(self.PHONE)[-1]
-        self.assertIn("נוסף: עגבניה x20", customer)
+        self.assertIn(f'נוסף: עגבניה x20 ק"ג (ספק א, הזמנה #{self.order.id})', customer)
         self.assertIn("נעדכן אותך כשהספק יאשר", customer)
 
     def test_update_to_a_higher_total_adds_the_difference(self):
@@ -2865,10 +2867,10 @@ class ModificationRulesTests(TestCase):
 
         self._customer_says("update", "50")
 
-        self.assertEqual([p.quantity for p in self._new_order().products.all()], [Decimal("20")])
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("50"))
         self.assertIn("בסך הכול 50", self._sent_to(self.supplier.whatsapp_number)[-1])
-        customer = self._sent_to(self.PHONE)[-1]
-        self.assertIn('עודכן: עגבניה 30→50 ק"ג, נוספו 20', customer)
+        self.assertIn('עודכן: עגבניה 30→50 ק"ג, נוספו 20', self._sent_to(self.PHONE)[-1])
 
     def test_adding_before_approval_also_shows_the_total_so_the_supplier_knows_what_to_confirm(self):
         self._customer_says("add", "20")
@@ -2879,16 +2881,16 @@ class ModificationRulesTests(TestCase):
         self.assertIn(f"עדכן הזמנה #{self.order.id}", msg)
         self.assertIn('➕ עגבניה x20 ק"ג (בסך הכול 50 ק"ג)', msg)
 
-    def test_updating_the_total_again_while_an_addition_awaits_approval_keeps_the_approved_part(self):
+    def test_updating_the_total_again_while_the_addition_awaits_approval(self):
         self._approve_first_order()
         self._customer_says("add", "20")
-        new = self._new_order()
 
-        self._customer_says("update", "70")  # 70 in total: 30 approved + 40 to be approved
+        self._customer_says("update", "70")  # 70 in total
 
-        self.assertEqual([p.quantity for p in new.products.all()], [Decimal("40")])
-        self.assertEqual(OrderRequestProduct.objects.get(pk=self.line.pk).quantity, Decimal("30"))
-        self.assertIn("(בסך הכול 70", self._sent_to(self.supplier.whatsapp_number)[-1])
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("70"))
+        self.assertEqual(OrderRequest.objects.filter(batch=self.order.batch).count(), 1)
+        self.assertIn("בסך הכול 70", self._sent_to(self.supplier.whatsapp_number)[-1])
         self.assertIn("עודכן: עגבניה 50→70", self._sent_to(self.PHONE)[-1])
 
     def test_a_brand_new_order_still_reads_as_a_new_order(self):
@@ -2952,18 +2954,34 @@ class ModificationRulesTests(TestCase):
         self.assertIn("אנא ענה *אישור*", supplier_msg)
         self.assertIn("נעדכן אותך כשהספק יאשר", self._sent_to(self.PHONE)[-1])
 
-    def test_reducing_takes_the_unconfirmed_addition_before_the_approved_part(self):
+    def test_taking_back_an_unconfirmed_addition_approves_the_order_again_by_itself(self):
+        cucumber = make_product("מלפפון")
+        SupplierProduct.objects.create(supplier=self.supplier, product=cucumber, price_per_unit="4.00")
+        self._approve_first_order()
+        self._customer_says("add", "10", product="מלפפון")  # a new line in the reopened order
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+
+        self._customer_says("reduce", "10", product="מלפפון")  # changed their mind
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)  # nothing left to confirm
+        self.assertFalse(self.order.products.filter(product=cucumber).exists())
+        msg = self._sent_to(self.supplier.whatsapp_number)[-1]
+        self.assertIn("אין צורך באישור נוסף", msg)
+        self.assertNotIn("אנא ענה", msg)
+
+    def test_reducing_what_awaits_confirmation_keeps_the_order_waiting(self):
         self._approve_first_order()
         self._customer_says("add", "20")
-        new = self._new_order()
 
-        self._customer_says("update", "25")  # 50 -> 25: the whole pending 20, then 5 off the approved 30
+        self._customer_says("update", "25")  # 50 -> 25
 
-        new.refresh_from_db()
+        self.order.refresh_from_db()
         self.line.refresh_from_db()
-        self.assertEqual(new.status, OrderRequest.Status.CANCELLED)
         self.assertEqual(self.line.quantity, Decimal("25"))
-        self.assertIn(f"ביטל את הזמנה #{new.id}", self._sent_to(self.supplier.whatsapp_number)[-2])
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertIn("אנא ענה *אישור*", self._sent_to(self.supplier.whatsapp_number)[-1])
 
     def test_a_reduction_that_drops_a_supplier_under_its_minimum_is_not_applied(self):
         self._approve_first_order()
@@ -3051,17 +3069,49 @@ class ModificationRulesTests(TestCase):
 
     # ─── the supplier answers ───
 
-    def test_supplier_approving_the_addition_approves_that_order_and_tells_the_customer(self):
+    def test_supplier_approving_the_addition_approves_the_order_again_and_tells_the_customer(self):
         self._approve_first_order()
         self._customer_says("add", "20")
-        new = self._new_order()
 
         self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.supplier.whatsapp_number}", "Body": "אישור"})
 
-        new.refresh_from_db()
-        self.assertEqual(new.status, OrderRequest.Status.APPROVED)
-        self.assertTrue(any("ספק א* אישר" in m for m in self._sent_to(self.PHONE)))
+        self.order.refresh_from_db()
+        self.line.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+        self.assertEqual(SupplierConfirmation.objects.get(order_request_product=self.line).confirmed_quantity, Decimal("50"))
+        self.assertTrue(any("ספק א* אישר" in m and "x50" in m for m in self._sent_to(self.PHONE)))
 
+    def test_a_new_product_added_to_an_approved_order_only_asks_about_the_new_line(self):
+        cucumber = make_product("מלפפון")
+        SupplierProduct.objects.create(supplier=self.supplier, product=cucumber, price_per_unit="4.00")
+        self._approve_first_order()
+
+        self._customer_says("add", "10", product="מלפפון")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertTrue(SupplierConfirmation.objects.filter(order_request_product=self.line).exists())  # tomatoes stay approved
+        pending = json.loads(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
+        self.assertEqual([p["product_name"] for p in pending["products"]], ["מלפפון"])
+
+        self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.supplier.whatsapp_number}", "Body": "אישור"})
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+
+    def test_an_order_that_already_shipped_gets_a_separate_order_for_the_addition(self):
+        self._approve_first_order()
+        OrderRequest.objects.filter(pk=self.order.pk).update(status=OrderRequest.Status.SHIPPED)
+
+        self._customer_says("add", "20")
+
+        new = self._new_order()
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SHIPPED)  # the goods are on the way: untouched
+        self.assertEqual(new.status, OrderRequest.Status.SENT)
+        msg = self._sent_to(self.supplier.whatsapp_number)[-1]
+        self.assertIn(f"מבקש להוסיף להזמנה #{self.order.id}", msg)
+        self.assertIn(f"הזמנה נפרדת #{new.id}", msg)
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
 class ClarificationKeepsEveryItemTests(TestCase):
