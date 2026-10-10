@@ -3,6 +3,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from apps.catalog.models import Product
 from apps.orders.models import OrderRequest
+from apps.orders.services import NOT_ADDED_REASONS
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +42,8 @@ class PlaceOrderInputSerializer(serializers.Serializer):
         default="cheapest",
     )
     products = OrderItemInputSerializer(many=True, min_length=1)
+    # Set when the customer chose to add these items to their open order.
+    merge_into_batch = serializers.IntegerField(required=False, allow_null=True)
 # ---------------------------------------------------------------------------
 # Output — scenario
 # ---------------------------------------------------------------------------
@@ -102,13 +105,60 @@ class PlacedOrderSerializer(serializers.Serializer):
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
 
 
+class NotAddedItemSerializer(serializers.Serializer):
+    product_name = serializers.CharField(source="product.name")
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2)
+    reason = serializers.CharField()
+    reason_display = serializers.SerializerMethodField()
+
+    def get_reason_display(self, obj):
+        return NOT_ADDED_REASONS.get(obj["reason"], obj["reason"])
+
+
 class PlaceOrderResponseSerializer(serializers.Serializer):
-    """One checkout = one batch = one order per supplier."""
+    """
+    One checkout = one batch = one order per supplier. When merged is true
+    the items went into the customer's open order instead, and orders lists
+    only the supplier orders that changed.
+    """
     batch_id = serializers.IntegerField()
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     scenario = serializers.CharField()
     orders = PlacedOrderSerializer(many=True)
     whatsapp_links = WhatsAppLinkSerializer(many=True)
+    merged = serializers.BooleanField()
+    not_added = NotAddedItemSerializer(many=True)
+
+
+class OpenBatchItemSerializer(serializers.Serializer):
+    product_name = serializers.CharField(source="product.name")
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2)
+    unit_display = serializers.SerializerMethodField()
+
+    def get_unit_display(self, obj):
+        return obj.product.get_unit_display()
+
+
+class OpenBatchOrderSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField(source="id")
+    supplier_name = serializers.CharField(source="supplier.name")
+    status = serializers.CharField()
+    status_display = serializers.CharField(source="get_status_display")
+    items = OpenBatchItemSerializer(source="products", many=True)
+
+
+class OpenBatchSerializer(serializers.Serializer):
+    """The customer's open order today: what a new checkout would be added to."""
+    batch_id = serializers.IntegerField(source="id")
+    created_at = serializers.DateTimeField()
+    orders = serializers.SerializerMethodField()
+
+    def get_orders(self, batch):
+        live = (
+            batch.orders.exclude(status=OrderRequest.Status.CANCELLED)
+            .select_related("supplier").prefetch_related("products__product").order_by("id")
+        )
+        return OpenBatchOrderSerializer(live, many=True).data
 
 # ---------------------------------------------------------------------------
 # Output — order list / detail

@@ -1,3 +1,4 @@
+import logging
 from rest_framework import generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -13,6 +14,7 @@ from core.cache_utils import get_cache_version
 from core.pagination import LoadMorePagination, paginate, paginated_response_serializer
 from .models import OrderBatch, OrderRequest
 
+logger = logging.getLogger(__name__)
 ORDERS_CACHE_TTL = 300  # safety-net TTL; real invalidation happens via signals.py on any write
 from .serializers import (
     SuggestOrderInputSerializer,
@@ -24,10 +26,11 @@ from .serializers import (
     OrderDetailSerializer,
     OrderStatusUpdateSerializer,
     OrderStatsSerializer,
+    OpenBatchSerializer,
 )
 from decimal import Decimal
 from collections import defaultdict
-from .services import suggest_order, build_order
+from .services import add_items_to_batch, build_order, checkout_lock, get_open_batch, suggest_order
 from .spend import SPEND_STATUSES
 class SuggestOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -60,24 +63,65 @@ class PlaceOrderView(APIView):
         region = user.profile.region
         scenario = serializer.validated_data["scenario"]
         products = serializer.validated_data["products"]
+        merge_into = serializer.validated_data.get("merge_into_batch")
 
+        # One open order per customer per day: with one open, items only go
+        # in when the customer explicitly chose to add them to that order.
+        conflict, merged = False, None
         try:
-            batch, orders, whatsapp_links = build_order(
-                user=request.user,
-                region=region,
-                products=products,
-                scenario=scenario,
-            )
+            with checkout_lock(user):
+                open_batch = get_open_batch(user)
+                if open_batch is not None and merge_into == open_batch.id:
+                    merged = add_items_to_batch(open_batch, products, region)
+                elif open_batch is not None or merge_into is not None:
+                    conflict = True
+                else:
+                    batch, orders, whatsapp_links = build_order(
+                        user=user, region=region, products=products, scenario=scenario,
+                    )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if conflict:
+            if open_batch is None:
+                detail = "ההזמנה הפתוחה כבר נסגרה להוספות. אפשר לבצע הזמנה חדשה."
+            else:
+                detail = "יש לך כבר הזמנה פתוחה מהיום. אפשר להוסיף אליה את המוצרים."
+            return Response(
+                {"detail": detail, "open_batch": OpenBatchSerializer(open_batch).data if open_batch else None},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if merged is not None:
+            changes, not_added = merged
+            try:
+                from apps.orders.whatsapp import notify_customer_of_additions, notify_supplier_of_items
+                for change in changes:
+                    notify_supplier_of_items(change["order"], change["items"], created=change["created"])
+                notify_customer_of_additions(user, changes, not_added)
+            except Exception as exc:
+                logger.error("Failed to notify suppliers/customer for additions to batch %s: %s", open_batch.id, exc)
+            open_batch.refresh_from_db()
+            response_data = {
+                "batch_id": open_batch.id,
+                "total_price": sum(
+                    (o.total_price for o in open_batch.orders.exclude(status=OrderRequest.Status.CANCELLED)),
+                    Decimal(0),
+                ),
+                "scenario": scenario,
+                "orders": [change["order"] for change in changes],
+                "whatsapp_links": [],
+                "merged": True,
+                "not_added": not_added,
+            }
+            return Response(PlaceOrderResponseSerializer(response_data).data, status=status.HTTP_200_OK)
 
         try:
             from apps.orders.whatsapp import notify_customer_of_checkout, notify_suppliers_for_batch
             notify_suppliers_for_batch(orders)
             notify_customer_of_checkout(request.user, orders)
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error("Failed to notify suppliers/customer for batch %s: %s", batch.id, exc)
+            logger.error("Failed to notify suppliers/customer for batch %s: %s", batch.id, exc)
 
         response_data = {
             "batch_id": batch.id,
@@ -85,12 +129,24 @@ class PlaceOrderView(APIView):
             "scenario": scenario,
             "orders": orders,
             "whatsapp_links": list(whatsapp_links.values()),
+            "merged": False,
+            "not_added": [],
         }
 
         return Response(
             PlaceOrderResponseSerializer(response_data).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class OpenBatchView(APIView):
+    """GET /api/orders/open/ — the customer's open order today, which a new checkout would be added to."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        batch = get_open_batch(request.user)
+        return Response({"open_batch": OpenBatchSerializer(batch).data if batch else None})
 def _batches_queryset():
     """Batches with their orders (supplier + product_count) prefetched — the
     shape OrderBatchSerializer expects."""

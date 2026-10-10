@@ -855,3 +855,132 @@ class BatchHelpersTests(TestCase):
         refresh_order_after_changes(self.order_a.id)
         self.order_a.refresh_from_db()
         self.assertEqual(self.order_a.status, OrderRequest.Status.APPROVED)
+
+
+class OpenOrderServiceTests(TestCase):
+    """One open order per customer per day: what counts as open, and how items are added to it."""
+
+    def setUp(self):
+        from zoneinfo import ZoneInfo
+        self.il = ZoneInfo("Asia/Jerusalem")
+        self.user = make_user()
+        self.tomato = make_product("עגבנייה")
+        self.lettuce = make_product("חסה")
+        self.a = make_supplier("ספק א")
+        self.b = make_supplier("ספק ב")
+        set_price(self.a, self.tomato, "6.00")
+        set_price(self.a, self.lettuce, "7.00")
+        set_price(self.b, self.lettuce, "5.00")
+        self.order = make_order(self.user, self.a, status=OrderRequest.Status.SENT)
+        self.line = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.a, quantity=10, unit_price="6.00",
+        )
+
+    def _il_today_at(self, hour, minute=0):
+        from datetime import datetime, time
+        today = timezone.now().astimezone(self.il).date()
+        return datetime.combine(today, time(hour, minute), tzinfo=self.il)
+
+    def test_todays_order_is_open_until_23_israel_time(self):
+        from apps.orders.services import get_open_batch, todays_batch
+
+        self.assertEqual(get_open_batch(self.user, now=self._il_today_at(22, 30)), self.order.batch)
+        self.assertIsNone(get_open_batch(self.user, now=self._il_today_at(23, 30)))
+        self.assertEqual(todays_batch(self.user, now=self._il_today_at(23, 30)), self.order.batch)
+
+    def test_yesterdays_order_is_not_open(self):
+        from apps.orders.models import OrderBatch
+        from apps.orders.services import get_open_batch
+
+        OrderBatch.objects.filter(pk=self.order.batch_id).update(created_at=timezone.now() - timedelta(days=1))
+
+        self.assertIsNone(get_open_batch(self.user, now=self._il_today_at(10)))
+
+    def test_a_finished_order_is_not_open(self):
+        from apps.orders.services import get_open_batch
+
+        for finished in (OrderRequest.Status.CANCELLED, OrderRequest.Status.DELIVERED):
+            OrderRequest.objects.filter(pk=self.order.pk).update(status=finished)
+            self.assertIsNone(get_open_batch(self.user, now=self._il_today_at(10)), finished)
+
+    def test_another_customers_order_is_not_open_for_me(self):
+        from apps.orders.services import get_open_batch
+
+        self.assertIsNone(get_open_batch(make_user("other@test.com"), now=self._il_today_at(10)))
+
+    def test_addition_prefers_a_supplier_already_on_the_order_even_if_pricier(self):
+        from apps.orders.services import pick_supplier_for_addition
+
+        supplier, price, reason = pick_supplier_for_addition(self.order.batch, self.lettuce, Decimal("5"), Region.CENTER)
+
+        self.assertEqual((supplier, price, reason), (self.a, Decimal("7.00"), None))
+
+    def test_addition_falls_back_to_the_cheapest_supplier_that_clears_its_minimum(self):
+        from apps.orders.services import pick_supplier_for_addition
+
+        cucumber = make_product("מלפפון")
+        big = make_supplier("ספק גדול", minimum_order=500)
+        small = make_supplier("ספק קטן")
+        set_price(big, cucumber, "2.00")
+        set_price(small, cucumber, "3.00")
+
+        supplier, price, _ = pick_supplier_for_addition(self.order.batch, cucumber, Decimal("5"), Region.CENTER)
+        none_left = pick_supplier_for_addition(self.order.batch, make_product("שום"), Decimal("1"), Region.CENTER)
+
+        self.assertEqual((supplier, price), (small, Decimal("3.00")))  # the cheaper one needs ₪500
+        self.assertEqual(none_left, (None, None, "unavailable"))
+
+    def test_new_supplier_below_its_minimum_is_not_used(self):
+        from apps.orders.services import pick_supplier_for_addition
+
+        cucumber = make_product("מלפפון")
+        set_price(make_supplier("ספק גדול", minimum_order=500), cucumber, "2.00")
+
+        self.assertEqual(
+            pick_supplier_for_addition(self.order.batch, cucumber, Decimal("5"), Region.CENTER),
+            (None, None, "below_minimum"),
+        )
+
+    def test_add_merges_into_the_open_line_and_asks_the_supplier_to_reconfirm(self):
+        from apps.orders.models import SupplierConfirmation
+        from apps.orders.services import add_items_to_batch
+
+        SupplierConfirmation.objects.create(order_request_product=self.line, confirmed_quantity=10)
+
+        changes, not_added = add_items_to_batch(
+            self.order.batch, [{"product": self.tomato, "quantity": Decimal("5")}], Region.CENTER,
+        )
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("15"))
+        self.assertFalse(SupplierConfirmation.objects.filter(order_request_product=self.line).exists())
+        self.assertEqual(changes[0]["order"].total_price, Decimal("90.00"))
+        self.assertFalse(changes[0]["created"])
+        self.assertEqual(changes[0]["items"][0].quantity, Decimal("5"))  # what to ask the supplier to add
+        self.assertEqual(not_added, [])
+
+    def test_add_opens_a_new_order_in_the_batch_when_the_supplier_already_approved(self):
+        from apps.orders.services import add_items_to_batch
+
+        OrderRequest.objects.filter(pk=self.order.pk).update(status=OrderRequest.Status.APPROVED)
+
+        changes, _ = add_items_to_batch(
+            self.order.batch, [{"product": self.lettuce, "quantity": Decimal("2")}], Region.CENTER,
+        )
+
+        new_order = changes[0]["order"]
+        self.assertTrue(changes[0]["created"])
+        self.assertNotEqual(new_order.id, self.order.id)
+        self.assertEqual((new_order.batch_id, new_order.supplier, new_order.status),
+                         (self.order.batch_id, self.a, OrderRequest.Status.SENT))
+
+    def test_add_reports_what_could_not_be_added(self):
+        from apps.orders.services import add_items_to_batch
+
+        garlic = make_product("שום")
+        changes, not_added = add_items_to_batch(
+            self.order.batch, [{"product": garlic, "quantity": Decimal("1")}], Region.CENTER,
+        )
+
+        self.assertEqual(changes, [])
+        self.assertEqual(not_added, [{"product": garlic, "quantity": Decimal("1"), "reason": "unavailable"}])
