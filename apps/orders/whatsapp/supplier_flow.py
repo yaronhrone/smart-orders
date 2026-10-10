@@ -143,17 +143,25 @@ def supplier_total_note(order, product, added) -> str:
     return f" (בסך הכול {fmt_qty(total)} {product.get_unit_display()})"
 
 
-def notify_supplier_of_items(order, items, *, created: bool, note: str = "") -> None:
+def reopened_header(order, company) -> str:
+    return f"📝 *{company}* מבקש להוסיף להזמנה #{order.id} שכבר אישרת:"
+
+
+def notify_supplier_of_items(order, items, *, created: bool, reopened: bool = False, note: str = "") -> None:
     """
     Tell `order`'s supplier about items that just landed in it (a reroute, a
     redirect, a customer addition) and re-register the order's pending state.
     `created` — the order itself is new (first message to this supplier for
-    it) vs. items added to an order they already have open. `note` — an extra
+    it) vs. items added to an order they already have open. `reopened` — the
+    order was already approved and goes back to waiting for their confirmation
+    of the new total. `note` — an extra
     line for the supplier (e.g. sent below their minimum at the customer's
     request).
     """
     company, address, company_phone = _company_details(order)
-    if created:
+    if reopened:
+        msg_lines = [reopened_header(order, company)]
+    elif created:
         msg_lines = [followup_header(order, company) or f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
     else:
         msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה #{order.id}:"]

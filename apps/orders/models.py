@@ -48,7 +48,9 @@ class OrderRequest(models.Model):
         # DELIVERED direct from APPROVED stays allowed — SHIPPED is an
         # optional courtesy step, never a required gate a supplier could
         # forget and strand the customer behind.
-        Status.APPROVED:  [Status.SHIPPED, Status.DELIVERED, Status.CANCELLED],
+        # APPROVED -> SENT: a customer adds to an order the supplier already approved,
+        # so it waits for the supplier to confirm the new total.
+        Status.APPROVED:  [Status.SENT, Status.SHIPPED, Status.DELIVERED, Status.CANCELLED],
         Status.SHIPPED:   [Status.DELIVERED, Status.CANCELLED],
         Status.DELIVERED: [],
         Status.CANCELLED: [],

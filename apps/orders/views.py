@@ -99,7 +99,9 @@ class PlaceOrderView(APIView):
             try:
                 from apps.orders.whatsapp import notify_customer_of_additions, notify_supplier_of_items
                 for change in changes:
-                    notify_supplier_of_items(change["order"], change["items"], created=change["created"])
+                    notify_supplier_of_items(
+                        change["order"], change["items"], created=change["created"], reopened=change["reopened"],
+                    )
                 notify_customer_of_additions(user, changes, not_added)
             except Exception as exc:
                 logger.error("Failed to notify suppliers/customer for additions to batch %s: %s", open_batch.id, exc)

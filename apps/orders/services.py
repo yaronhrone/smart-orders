@@ -164,6 +164,30 @@ def get_or_create_supplier_order(batch, supplier):
     return order, True
 
 
+def get_or_reopen_supplier_order(batch, supplier):
+    """
+    The order in `batch` that a CUSTOMER'S addition for `supplier` should join:
+    one still waiting for the supplier (SENT), else one the supplier already
+    APPROVED, which goes back to SENT so the addition lands in the order the
+    supplier already knows and they just confirm the new total. An order that
+    already SHIPPED (or was delivered) is not touched, the goods are on the
+    way, so that gets a fresh order. (Reroutes and fallbacks keep using
+    get_or_create_supplier_order: they never reopen anything.)
+    Returns (order, created, reopened).
+    """
+    order = batch.orders.filter(supplier=supplier, status=OrderRequest.Status.SENT).order_by("-id").first()
+    if order:
+        return order, False, False
+    approved = batch.orders.filter(supplier=supplier, status=OrderRequest.Status.APPROVED).order_by("-id").first()
+    if approved:
+        approved.transition_to(OrderRequest.Status.SENT)
+        return approved, False, True
+    order = OrderRequest.objects.create(
+        user_id=batch.user_id, batch=batch, supplier=supplier, status=OrderRequest.Status.SENT,
+    )
+    return order, True, False
+
+
 def add_item_to_order(order, product, supplier, quantity, unit_price):
     """
     Add `quantity` of `product` to `order` — merging into an existing line
@@ -1096,16 +1120,22 @@ def reduce_product_in_batch(batch, product, reduce_by):
         entry["needs_confirmation"] = entry["needs_confirmation"] or not was_confirmed
     for entry in changes.values():
         entry["order"] = refresh_order_after_changes(entry["order"].id)
+        # Nothing left to confirm (e.g. only an unconfirmed addition was taken back and the rest
+        # is approved): the supplier is just told, and the order is approved again.
+        entry["needs_confirmation"] = (
+            entry["needs_confirmation"] and entry["order"].status == OrderRequest.Status.SENT
+        )
     return list(changes.values()), None
 
 
 def add_items_to_batch(batch, items, region):
     """
     Add [{"product", "quantity"}] to an open checkout. Returns (changes,
-    not_added): changes is one {"order", "created", "items"} per supplier
-    order touched, items being what was added (product, quantity) for the
-    supplier's "please add" message; not_added is [{"product", "quantity",
-    "reason"}].
+    not_added): changes is one {"order", "created", "reopened", "items"} per
+    supplier order touched ("reopened": it was approved and is waiting for
+    the supplier's confirmation again), items being what was added (product,
+    quantity) for the supplier's "please add" message; not_added is
+    [{"product", "quantity", "reason"}].
     """
     changes, not_added = {}, []
     for item in items:
@@ -1115,14 +1145,17 @@ def add_items_to_batch(batch, items, region):
             not_added.append({"product": product, "quantity": quantity, "reason": reason})
             continue
 
-        order, created = get_or_create_supplier_order(batch, supplier)
+        order, created, reopened = get_or_reopen_supplier_order(batch, supplier)
         existing = order.products.filter(product=product).first()
         if existing:
             # The supplier confirmed the old quantity, not the new total.
             SupplierConfirmation.objects.filter(order_request_product=existing).delete()
         add_item_to_order(order, product, supplier, quantity, price)
 
-        entry = changes.setdefault(order.id, {"order": order, "created": created, "items": []})
+        entry = changes.setdefault(
+            order.id, {"order": order, "created": created, "reopened": False, "items": []},
+        )
+        entry["reopened"] = entry["reopened"] or reopened
         entry["items"].append(SimpleNamespace(product=product, quantity=quantity, supplier=supplier))
 
     for entry in changes.values():
