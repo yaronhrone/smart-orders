@@ -92,6 +92,51 @@ def notify_suppliers_for_batch(orders) -> None:
         notify_suppliers_for_order(order)
 
 
+def _earlier_orders(order):
+    """The same supplier's other live orders in this checkout (e.g. one it already approved)."""
+    from apps.orders.models import OrderRequest
+
+    return list(
+        order.batch.orders
+        .filter(supplier=order.supplier).exclude(id=order.id)
+        .exclude(status=OrderRequest.Status.CANCELLED).order_by("id")
+    )
+
+
+def followup_header(order, company):
+    """
+    Opening line when a NEW order is opened for a supplier who already has an
+    earlier order in this checkout: it is an addition to that one, not a
+    brand-new order (an approved order isn't re-opened, so the extra goes in
+    its own order number). None when there is no earlier order.
+    """
+    from apps.orders.models import OrderRequest
+
+    earlier = _earlier_orders(order)
+    if not earlier:
+        return None
+    ids = ", ".join(f"#{o.id}" for o in earlier)
+    approved = all(o.status in (OrderRequest.Status.APPROVED, OrderRequest.Status.SHIPPED) for o in earlier)
+    already = " שכבר אישרת" if approved else ""
+    return f"📝 *{company}* מבקש להוסיף להזמנה {ids}{already}. התוספת, הזמנה נפרדת #{order.id}:"
+
+
+def supplier_total_note(order, product, added) -> str:
+    """What the supplier has of `product` across this whole checkout, as " (בסך הכול N unit)", when that is more than the `added` amount in the message."""
+    from django.db.models import Sum
+    from apps.orders.models import OrderRequest, OrderRequestProduct
+
+    total = (
+        OrderRequestProduct.objects
+        .filter(order_request__batch=order.batch, order_request__supplier=order.supplier, product=product)
+        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
+        .aggregate(total=Sum("quantity"))["total"]
+    )
+    if total is None or total == added:
+        return ""
+    return f" (בסך הכול {total} {product.get_unit_display()})"
+
+
 def notify_supplier_of_items(order, items, *, created: bool, note: str = "") -> None:
     """
     Tell `order`'s supplier about items that just landed in it (a reroute, a
@@ -103,11 +148,14 @@ def notify_supplier_of_items(order, items, *, created: bool, note: str = "") -> 
     """
     company, address, company_phone = _company_details(order)
     if created:
-        msg_lines = [f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
+        msg_lines = [followup_header(order, company) or f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
     else:
         msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה #{order.id}:"]
     for item in items:
-        msg_lines.append(f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}")
+        msg_lines.append(
+            f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}"
+            f"{supplier_total_note(order, item.product, item.quantity)}"
+        )
     if note:
         msg_lines.append(f"\n{note}")
     if address:
