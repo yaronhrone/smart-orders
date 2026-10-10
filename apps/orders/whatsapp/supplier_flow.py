@@ -121,6 +121,12 @@ def followup_header(order, company):
     return f"📝 *{company}* מבקש להוסיף להזמנה {ids}{already}. התוספת, הזמנה נפרדת #{order.id}:"
 
 
+def fmt_qty(value) -> str:
+    """20.00 -> "20", 2.50 -> "2.5": quantities as the customer and supplier would write them."""
+    d = Decimal(str(value))
+    return str(d.quantize(Decimal(1))) if d == d.to_integral_value() else format(d.normalize(), "f")
+
+
 def supplier_total_note(order, product, added) -> str:
     """What the supplier has of `product` across this whole checkout, as " (בסך הכול N unit)", when that is more than the `added` amount in the message."""
     from django.db.models import Sum
@@ -134,7 +140,7 @@ def supplier_total_note(order, product, added) -> str:
     )
     if total is None or total == added:
         return ""
-    return f" (בסך הכול {total} {product.get_unit_display()})"
+    return f" (בסך הכול {fmt_qty(total)} {product.get_unit_display()})"
 
 
 def notify_supplier_of_items(order, items, *, created: bool, note: str = "") -> None:
@@ -153,7 +159,7 @@ def notify_supplier_of_items(order, items, *, created: bool, note: str = "") -> 
         msg_lines = [f"שלום, *{company}* מבקש להוסיף להזמנה #{order.id}:"]
     for item in items:
         msg_lines.append(
-            f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}"
+            f"- {item.product.name} x{fmt_qty(item.quantity)} {item.product.get_unit_display()}"
             f"{supplier_total_note(order, item.product, item.quantity)}"
         )
     if note:

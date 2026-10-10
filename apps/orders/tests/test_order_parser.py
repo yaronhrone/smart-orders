@@ -15,6 +15,67 @@ def _openai_response(items: list, intent: str | None = None) -> MagicMock:
     return mock_resp
 
 
+class ParseModificationActionTests(TestCase):
+    """Each product in a message carries its own action: add, update (to a total) or reduce."""
+
+    def _parse(self, mock_get_client, payload, names=("עגבניה", "מלפפון")):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        response = MagicMock()
+        response.choices[0].message.content = json.dumps(payload)
+        client.chat.completions.create.return_value = response
+        from apps.orders.order_parser import parse_modification_intent
+        return parse_modification_intent("x", list(names)), client
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_every_item_keeps_its_own_action(self, mock_get_client):
+        result, _ = self._parse(mock_get_client, {"intent": "add", "items": [
+            {"product_name": "עגבניה", "quantity": "20", "action": "add"},
+            {"product_name": "מלפפון", "quantity": "15", "action": "update"},
+            {"product_name": "עגבניה", "quantity": "3", "action": "reduce"},
+        ]})
+
+        self.assertEqual([i["intent"] for i in result["items"]], ["add", "update", "reduce"])
+        self.assertEqual(result["intent"], "add")  # the first item's action
+        self.assertEqual(result["items"][1]["quantity"], Decimal("15"))
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_missing_or_unknown_action_falls_back_to_the_message_intent_then_add(self, mock_get_client):
+        result, _ = self._parse(mock_get_client, {"intent": "reduce", "items": [
+            {"product_name": "עגבניה", "quantity": "2"},
+            {"product_name": "מלפפון", "quantity": "2", "action": "bogus"},
+        ]})
+        self.assertEqual([i["intent"] for i in result["items"]], ["reduce", "reduce"])
+
+        result, _ = self._parse(mock_get_client, {"items": [{"product_name": "עגבניה", "quantity": "2"}]})
+        self.assertEqual(result["items"][0]["intent"], "add")
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_a_message_that_is_not_a_modification_has_no_intent(self, mock_get_client):
+        result, _ = self._parse(mock_get_client, {"intent": "none", "items": []})
+        self.assertEqual(result, {"intent": "none", "items": []})
+
+        result, _ = self._parse(mock_get_client, {"intent": "gibberish", "items": []})
+        self.assertEqual(result["intent"], "none")
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_bad_quantities_are_dropped(self, mock_get_client):
+        result, _ = self._parse(mock_get_client, {"intent": "add", "items": [
+            {"product_name": "עגבניה", "quantity": "הרבה", "action": "add"},
+            {"product_name": "מלפפון", "quantity": "0", "action": "add"},
+            {"product_name": "עגבניה", "quantity": "4", "action": "add"},
+        ]})
+        self.assertEqual([(i["product_name"], i["quantity"]) for i in result["items"]], [("עגבניה", Decimal("4"))])
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_prompt_defines_what_the_quantity_means_for_each_action(self, mock_get_client):
+        _, client = self._parse(mock_get_client, {"intent": "none", "items": []})
+
+        prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        for text in ("'add'", "'update'", "'reduce'", "NEW TOTAL", "amount to REMOVE", "ALWAYS 'add'", "תוריד"):
+            self.assertIn(text, prompt)
+
+
 class ParseModificationIntentTests(TestCase):
 
     @patch("apps.orders.order_parser._get_client")

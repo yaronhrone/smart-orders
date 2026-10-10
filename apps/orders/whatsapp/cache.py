@@ -43,6 +43,14 @@ def save_supplier_pending_order(supplier_phone: str, order_request_id: int, prod
     cache.set(key, json.dumps(data, cls=DecimalEncoder), timeout=SUPPLIER_SESSION_TTL)
 
 
+def clear_supplier_pending_for_order(supplier_phone: str, order_request_id: int):
+    """Forget the supplier's pending reply, but only if it's for this order (the slot is one per phone)."""
+    key = f"whatsapp_supplier_pending:{supplier_phone}"
+    raw = cache.get(key)
+    if raw and json.loads(raw).get("order_request_id") == order_request_id:
+        cache.delete(key)
+
+
 def save_pending_order(phone: str, cheapest: dict, fewest: dict,
                        products: list = None,
                        user_id: int = None,
