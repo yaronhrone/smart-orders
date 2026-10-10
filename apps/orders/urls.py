@@ -7,10 +7,12 @@ from .views import (
     OrderStatusUpdateView,
     OrderStatsView,
     AdminOrderBatchListView,
+    OpenBatchView,
 )
 urlpatterns = [
     path("suggest/", SuggestOrderView.as_view(), name="orders-suggest"),
     path("place/", PlaceOrderView.as_view(), name="orders-place"),
+    path("open/", OpenBatchView.as_view(), name="orders-open"),
     path("batches/", OrderBatchListView.as_view(), name="orders-batches"),
     path("admin/batches/", AdminOrderBatchListView.as_view(), name="orders-admin-batches"),
     path("<int:pk>/", OrderDetailView.as_view(), name="orders-detail"),

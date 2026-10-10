@@ -3,9 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ApiError,
+  fetchOpenBatch,
   fetchProducts,
   suggestOrder,
   placeOrder,
+  OpenBatch,
   Product,
   SuggestOrderResponse,
   PlaceOrderResponse,
@@ -48,6 +51,8 @@ export default function NewOrderPage() {
   const [suggestion, setSuggestion] = useState<SuggestOrderResponse | null>(null);
   const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [suggestError, setSuggestError] = useState("");
+  // Today's open order: new items are added to it instead of a second order.
+  const [openBatch, setOpenBatch] = useState<OpenBatch | null>(null);
 
   // Step 3
   const [placed, setPlaced] = useState<PlaceOrderResponse | null>(null);
@@ -98,10 +103,12 @@ export default function NewOrderPage() {
     setLoadingSuggest(true);
     setSuggestError("");
     try {
-      const result = await suggestOrder(
-        items.map((i) => ({ product_name: i.name, quantity: i.quantity }))
-      );
+      const [result, open] = await Promise.all([
+        suggestOrder(items.map((i) => ({ product_name: i.name, quantity: i.quantity }))),
+        fetchOpenBatch().catch(() => null),
+      ]);
       setSuggestion(result);
+      setOpenBatch(open);
       setStep(2);
     } catch (e: unknown) {
       setSuggestError(e instanceof Error ? e.message : "שגיאה בקבלת הצעות מחיר");
@@ -118,11 +125,16 @@ export default function NewOrderPage() {
     try {
       const result = await placeOrder(
         items.map((i) => ({ product_name: i.name, quantity: i.quantity })),
-        scenario
+        scenario,
+        openBatch?.batch_id
       );
       setPlaced(result);
       setStep(3);
     } catch (e: unknown) {
+      // 409: an order opened (WhatsApp) or closed (23:00) since this page loaded.
+      if (e instanceof ApiError && e.status === 409) {
+        setOpenBatch(await fetchOpenBatch().catch(() => null));
+      }
       setPlaceError(e instanceof Error ? e.message : "שגיאה בביצוע ההזמנה");
     } finally {
       setPlacing(false);
@@ -255,7 +267,51 @@ export default function NewOrderPage() {
       {/* ─── Step 2: Scenarios ────────────────────────────────────────── */}
       {step === 2 && suggestion && (
         <div className="space-y-5">
-          {(() => {
+          {openBatch && (
+            <div className="border-2 border-amber-400 bg-amber-50 rounded-xl p-4 flex flex-col gap-3">
+              <div>
+                <p className="text-sm font-bold text-amber-900">יש לך הזמנה פתוחה מהיום</p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  המוצרים שבחרת יתווספו להזמנה הזו ולא תיפתח הזמנה נוספת. אפשר להוסיף עד 23:00.
+                </p>
+              </div>
+              <div className="bg-white rounded-lg divide-y divide-gray-100">
+                {openBatch.orders.map((o) => (
+                  <div key={o.order_id} className="px-3 py-2">
+                    <p className="text-xs font-semibold text-gray-700">
+                      {o.supplier_name} — הזמנה #{o.order_id} · {o.status_display}
+                    </p>
+                    <ul className="text-xs text-gray-600 mt-1 space-y-0.5">
+                      {o.items.map((it, i) => (
+                        <li key={i}>{it.product_name} × {formatQty(it.quantity)} {it.unit_display}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-700 mb-1">יתווספו:</p>
+                <ul className="text-xs text-gray-600 space-y-0.5">
+                  {items.map((it, i) => {
+                    const unitDisplay = catalog.find((c) => c.name === it.name)?.unit_display ?? "";
+                    return <li key={i}>{it.name} × {formatQty(it.quantity)} {unitDisplay}</li>;
+                  })}
+                </ul>
+                <p className="text-xs text-gray-500 mt-2">
+                  כל מוצר נשלח קודם לספק שכבר נמצא בהזמנה. הספקים יאשרו את התוספת, ונעדכן אותך ב-WhatsApp.
+                </p>
+              </div>
+              <button
+                onClick={() => handlePlace(suggestion.recommended ?? "cheapest")}
+                disabled={placing}
+                className="w-full py-2 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 transition"
+              >
+                {placing ? "מוסיף..." : "הוסף את המוצרים להזמנה הקיימת"}
+              </button>
+            </div>
+          )}
+
+          {!openBatch && (() => {
             // One option only: the cheapest scenario that clears every
             // supplier's minimum (picked by the server). If none does, show
             // the cheapest one with what's missing, not orderable.
@@ -330,13 +386,36 @@ export default function NewOrderPage() {
       {step === 3 && placed && (
         <div className="space-y-5">
           <div className="bg-green-50 border border-green-200 rounded-xl p-5 text-center">
-            <p className="text-lg font-bold text-green-800">הזמנה בוצעה בהצלחה!</p>
-            <p className="text-sm text-green-700 mt-1">
-              סה&quot;כ {formatCurrency(placed.total_price)}
-              {placed.orders.length > 1 && ` — ${placed.orders.length} הזמנות, אחת לכל ספק`}
-            </p>
-            <p className="text-sm text-green-600 mt-2">הודעות WhatsApp נשלחו לספקים אוטומטית</p>
+            {placed.merged ? (
+              <>
+                <p className="text-lg font-bold text-green-800">המוצרים נוספו להזמנה הפתוחה</p>
+                <p className="text-sm text-green-700 mt-1">
+                  סה&quot;כ ההזמנה עכשיו {formatCurrency(placed.total_price)}
+                </p>
+                <p className="text-sm text-green-600 mt-2">הספקים יאשרו את התוספת, ונעדכן אותך ב-WhatsApp</p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-bold text-green-800">הזמנה בוצעה בהצלחה!</p>
+                <p className="text-sm text-green-700 mt-1">
+                  סה&quot;כ {formatCurrency(placed.total_price)}
+                  {placed.orders.length > 1 && ` — ${placed.orders.length} הזמנות, אחת לכל ספק`}
+                </p>
+                <p className="text-sm text-green-600 mt-2">הודעות WhatsApp נשלחו לספקים אוטומטית</p>
+              </>
+            )}
           </div>
+
+          {placed.not_added.length > 0 && (
+            <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-800">
+              <p className="font-semibold mb-1">לא נוספו:</p>
+              <ul className="space-y-0.5">
+                {placed.not_added.map((n, i) => (
+                  <li key={i}>{n.product_name} — {n.reason_display}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
             {placed.orders.map((o) => (
@@ -354,7 +433,7 @@ export default function NewOrderPage() {
 
           <div className="flex gap-3">
             <button
-              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); }}
+              onClick={() => { localStorage.removeItem("new-order-items"); setStep(1); setItems([]); setSuggestion(null); setPlaced(null); setOpenBatch(null); }}
               className="flex-1 border border-gray-300 rounded-xl py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition"
             >
               הזמנה חדשה

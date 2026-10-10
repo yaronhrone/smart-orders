@@ -342,22 +342,62 @@ export interface PlacedOrder {
   total_price: string;
 }
 
+export interface NotAddedItem {
+  product_name: string;
+  quantity: string;
+  reason: string;
+  reason_display: string;
+}
+
 export interface PlaceOrderResponse {
   batch_id: number;
   total_price: string;
   scenario: string;
   orders: PlacedOrder[];
   whatsapp_links: WhatsAppLink[];
+  /** true when the items were added to the customer's open order instead of a new one */
+  merged: boolean;
+  not_added: NotAddedItem[];
 }
 
+/** Pass mergeIntoBatch only after the customer chose to add to their open order (else 409). */
 export async function placeOrder(
   products: OrderProductInput[],
-  scenario: "cheapest" | "fewest_suppliers"
+  scenario: "cheapest" | "fewest_suppliers",
+  mergeIntoBatch?: number
 ): Promise<PlaceOrderResponse> {
   return request<PlaceOrderResponse>("/api/orders/place/", {
     method: "POST",
-    body: JSON.stringify({ products, scenario }),
+    body: JSON.stringify(
+      mergeIntoBatch === undefined ? { products, scenario } : { products, scenario, merge_into_batch: mergeIntoBatch }
+    ),
   });
+}
+
+export interface OpenBatchItem {
+  product_name: string;
+  quantity: string;
+  unit_display: string;
+}
+
+export interface OpenBatchOrder {
+  order_id: number;
+  supplier_name: string;
+  status: string;
+  status_display: string;
+  items: OpenBatchItem[];
+}
+
+export interface OpenBatch {
+  batch_id: number;
+  created_at: string;
+  orders: OpenBatchOrder[];
+}
+
+/** The customer's open order today (until 23:00), which a new checkout is added to. */
+export async function fetchOpenBatch(): Promise<OpenBatch | null> {
+  const res = await request<{ open_batch: OpenBatch | null }>("/api/orders/open/");
+  return res.open_batch;
 }
 
 // ─────────────── Catalog ───────────────

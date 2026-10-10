@@ -441,3 +441,92 @@ class OrderStatsViewTests(APITestCase):
         self.client.force_authenticate(user=None)
         res = self.client.get(reverse("orders-stats"))
         self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class PlaceWithOpenOrderViewTests(APITestCase):
+    """Site checkout when the customer already has an order open today."""
+
+    def setUp(self):
+        from unittest.mock import patch
+        from apps.catalog.models import SupplierProduct
+        from apps.users.models import Profile
+
+        self.user = make_user()
+        Profile.objects.create(user=self.user, phone="0501112222", region=Region.CENTER)
+        self.client.force_authenticate(user=self.user)
+        self.tomato = make_product("עגבנייה")
+        self.carrot = make_product("גזר")
+        self.a = make_supplier("ספק א")
+        SupplierProduct.objects.create(supplier=self.a, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.a, product=self.carrot, price_per_unit="3.00")
+        self.open_order = make_order(self.user, total="50.00", status_val=OrderRequest.Status.SENT, supplier=self.a)
+        make_order_item(self.open_order, self.tomato, quantity="10", price="5.00")
+
+        for target in ("apps.orders.tasks.send_supplier_order_notification_task",):
+            p = patch(target)
+            p.start()
+            self.addCleanup(p.stop)
+        send_patch = patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+        self.mock_send = send_patch.start()
+        self.addCleanup(send_patch.stop)
+        cutoff = patch("apps.orders.services.before_update_cutoff", return_value=True)
+        self.cutoff = cutoff.start()
+        self.addCleanup(cutoff.stop)
+
+    def _place(self, **extra):
+        body = {"products": [{"product_name": "גזר", "quantity": "4"}], "scenario": "cheapest", **extra}
+        return self.client.post(reverse("orders-place"), body, format="json")
+
+    def test_open_endpoint_shows_todays_open_order(self):
+        res = self.client.get(reverse("orders-open"))
+
+        batch = res.data["open_batch"]
+        self.assertEqual(batch["batch_id"], self.open_order.batch_id)
+        self.assertEqual(batch["orders"][0]["supplier_name"], "ספק א")
+        self.assertEqual(batch["orders"][0]["items"][0]["product_name"], "עגבנייה")
+
+    def test_open_endpoint_is_per_customer(self):
+        self.client.force_authenticate(user=make_user("other@test.com"))
+
+        self.assertIsNone(self.client.get(reverse("orders-open")).data["open_batch"])
+
+    def test_checkout_with_an_open_order_is_refused_until_the_customer_chooses_to_add(self):
+        from apps.orders.models import OrderBatch
+
+        res = self._place()
+
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(res.data["open_batch"]["batch_id"], self.open_order.batch_id)
+        self.assertEqual(OrderBatch.objects.filter(user=self.user).count(), 1)
+
+    def test_choosing_to_add_merges_into_the_open_order(self):
+        from apps.orders.models import OrderBatch
+
+        res = self._place(merge_into_batch=self.open_order.batch_id)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data["merged"])
+        self.assertEqual(res.data["batch_id"], self.open_order.batch_id)
+        self.assertEqual(OrderBatch.objects.filter(user=self.user).count(), 1)
+        self.assertTrue(OrderRequestProduct.objects.filter(order_request=self.open_order, product=self.carrot).exists())
+        self.assertEqual(float(res.data["total_price"]), 62.0)  # 50 + 4 * 3
+        supplier_msgs = [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == self.a.whatsapp_number]
+        self.assertIn(f"מבקש להוסיף להזמנה #{self.open_order.id}", supplier_msgs[-1])
+        customer_msgs = [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == "+972501112222"]
+        self.assertIn("גזר", customer_msgs[-1])
+
+    def test_stale_merge_after_the_order_closed_is_refused(self):
+        self.cutoff.return_value = False
+
+        res = self._place(merge_into_batch=self.open_order.batch_id)
+
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertIsNone(res.data["open_batch"])
+
+    def test_without_an_open_order_checkout_works_as_before(self):
+        OrderRequest.objects.filter(pk=self.open_order.pk).update(status=OrderRequest.Status.DELIVERED)
+
+        res = self._place()
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(res.data["merged"])

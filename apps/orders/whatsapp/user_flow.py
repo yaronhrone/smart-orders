@@ -8,9 +8,12 @@ from django.http import HttpResponse
 from django.utils import timezone
 
 from .cache import (
+    clear_merge_offer,
     clear_pending_clarification,
     DecimalEncoder,
+    get_merge_offer,
     get_pending_clarification,
+    save_merge_offer,
     MINIMUM_GRACE_SECONDS,
     MINIMUM_GRACE_TTL,
     save_draft_order,
@@ -20,19 +23,15 @@ from .cache import (
 )
 from .delivery_flow import _handle_delivery_flow
 from .fallback_flow import _handle_fallback_approval, _handle_reroute_grace_topup
+from apps.orders.services import NOT_ADDED_REASONS
 from . import validators
 
 logger = logging.getLogger(__name__)
 
-# After this hour, a message from a customer with an already-SENT order
-# starts a new order instead of tacking onto the old one — without a cutoff,
-# "update" would apply indefinitely, including to an order from days ago.
-DAILY_UPDATE_CUTOFF = dtime(23, 0)
-
-
 # A bare "yes" with no offer waiting means the offer expired (SESSION_TTL) or
 # never existed. Better to say so than to parse "אישור" as a new order.
 _CONFIRM_WORDS = {"אישור", "אשר", "מאשר", "אני מאשר", "כן", "אוקי", "אוקיי", "ok", "okay"}
+_DECLINE_WORDS = {"לא", "לא תודה", "no", "ביטול", "בטל"}
 
 
 def _offer_validity_text(seconds: int) -> str:
@@ -43,8 +42,113 @@ def _offer_validity_text(seconds: int) -> str:
     return f"ל-{seconds // 60} דקות"
 
 
+def _normalized_reply(body: str) -> str:
+    return body.strip().strip("!.").strip().casefold()
+
+
 def _is_bare_confirmation(body: str) -> bool:
-    return body.strip().strip("!.").strip().casefold() in _CONFIRM_WORDS
+    return _normalized_reply(body) in _CONFIRM_WORDS
+
+
+def _offer_merge(phone: str, user, batch, products: list, region: str, note: str = "") -> None:
+    """
+    The customer already has an open order today and just tried to start
+    another one: ask before adding anything ("לא" adds nothing at all).
+    products: [{"product": Product, "quantity": Decimal}].
+    """
+    from apps.orders.models import OrderRequest, OrderRequestProduct
+
+    save_merge_offer(
+        phone, batch.id, user.id, region,
+        [{"product_id": p["product"].id, "quantity": str(p["quantity"])} for p in products],
+    )
+    lines = ["📦 יש לך כבר הזמנה פתוחה מהיום:"]
+    existing = (
+        OrderRequestProduct.objects
+        .filter(order_request__batch=batch)
+        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
+        .select_related("product", "supplier")
+        .order_by("order_request_id", "id")
+    )
+    for item in existing:
+        lines.append(
+            f"  • {item.product.name} x{item.quantity} {item.product.get_unit_display()} — {item.supplier.name}"
+        )
+    lines.append("\nלהוסיף אליה גם:")
+    for p in products:
+        lines.append(f"  • {p['product'].name} x{p['quantity']} {p['product'].get_unit_display()}")
+    if note:
+        lines.append(f"\n{note}")
+    lines.append("\nענה *כן* להוספה או *לא* כדי לא להוסיף כלום. אפשר להוסיף עד 23:00.")
+    validators.send_whatsapp_message(phone, "\n".join(lines))
+
+
+def _handle_merge_offer_reply(phone: str, body: str):
+    """Answer to _offer_merge's question. Returns None when no such question is waiting."""
+    from django.contrib.auth import get_user_model
+    from apps.catalog.models import Product
+    from apps.orders.services import add_items_to_batch, checkout_lock, get_open_batch
+    from .supplier_flow import notify_supplier_of_items
+
+    offer = get_merge_offer(phone)
+    if not offer:
+        return None
+
+    reply = _normalized_reply(body)
+    if reply in _DECLINE_WORDS:
+        clear_merge_offer(phone)
+        validators.send_whatsapp_message(phone, "בסדר, לא הוספנו כלום. ההזמנה הפתוחה נשארת כמו שהיא.")
+        return HttpResponse(status=200)
+    if reply not in _CONFIRM_WORDS:
+        validators.send_whatsapp_message(phone, "ענה *כן* כדי להוסיף להזמנה הפתוחה, או *לא* כדי לא להוסיף כלום.")
+        return HttpResponse(status=200)
+
+    clear_merge_offer(phone)
+    user = get_user_model().objects.filter(id=offer["user_id"]).first()
+    products_by_id = Product.objects.in_bulk([i["product_id"] for i in offer["items"]])
+    items = [
+        {"product": products_by_id[i["product_id"]], "quantity": Decimal(i["quantity"])}
+        for i in offer["items"] if i["product_id"] in products_by_id
+    ]
+
+    batch = None
+    if user:
+        with checkout_lock(user):
+            batch = get_open_batch(user)
+            if batch is not None and batch.id == offer["batch_id"]:
+                changes, not_added = add_items_to_batch(batch, items, offer["region"])
+            else:
+                batch = None
+    if batch is None:
+        validators.send_whatsapp_message(
+            phone,
+            "⏰ ההזמנה הפתוחה כבר נסגרה להוספות (אפשר להוסיף עד 23:00). שלח את המוצרים מחדש כהזמנה חדשה.",
+        )
+        return HttpResponse(status=200)
+
+    for change in changes:
+        notify_supplier_of_items(change["order"], change["items"], created=change["created"])
+    validators.send_whatsapp_message(phone, _format_additions(changes, not_added))
+    return HttpResponse(status=200)
+
+
+def _format_additions(changes: list, not_added: list) -> str:
+    lines = []
+    if changes:
+        lines.append("📨 התוספת נשלחה לספקים לאישור; נעדכן אותך כשהספק יאשר:")
+        for change in changes:
+            for item in change["items"]:
+                lines.append(
+                    f"  • {item.product.name} x{item.quantity} {item.product.get_unit_display()} "
+                    f"— {item.supplier.name} (הזמנה #{change['order'].id})"
+                )
+    if not_added:
+        if lines:
+            lines.append("")
+        lines.append("⚠️ לא נוספו:")
+        for miss in not_added:
+            lines.append(f"  • {miss['product'].name} — {NOT_ADDED_REASONS.get(miss['reason'], miss['reason'])}")
+    return "\n".join(lines) or "לא נוסף שום מוצר."
 
 
 def _format_scenario(label, s):
@@ -68,15 +172,19 @@ def _format_minimum_warning(issues: list) -> str:
     return "\n".join(lines)
 
 
-def _build_and_send_confirmed_order(data: dict, scenario: str):
+MERGE_OFFERED = "merge_offered"
+
+
+def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None):
     """
     Build the checkout in DB (one order per supplier, one OrderBatch) and
-    send each supplier its order. Returns the list of created orders, or
-    None on failure.
+    send each supplier its order. Returns the list of created orders, None
+    on failure, or MERGE_OFFERED when the customer already has an open order
+    today (e.g. just placed on the site) and was asked whether to add to it.
     """
     from django.contrib.auth import get_user_model
     from apps.catalog.models import Product
-    from apps.orders.services import build_order
+    from apps.orders.services import build_order, checkout_lock, get_open_batch
     from .supplier_flow import notify_suppliers_for_batch
 
     user_id = data.get("user_id")
@@ -96,7 +204,13 @@ def _build_and_send_confirmed_order(data: dict, scenario: str):
             }
             for p in raw_products
         ]
-        _batch, orders, _links = build_order(user, region, products, scenario=scenario)
+        with checkout_lock(user):
+            open_batch = get_open_batch(user)
+            if open_batch is None:
+                _batch, orders, _links = build_order(user, region, products, scenario=scenario)
+        if open_batch is not None:
+            _offer_merge(phone, user, open_batch, products, region)
+            return MERGE_OFFERED
         notify_suppliers_for_batch(orders)
         return orders
     except Exception as exc:
@@ -125,6 +239,19 @@ def notify_customer_of_checkout(user, orders) -> None:
         validators.send_whatsapp_message(validators._local_to_e164(profile.phone), "\n".join(lines))
     except Exception as exc:
         logger.error("Failed to WhatsApp checkout confirmation to user %s: %s", user.id, exc)
+
+
+def notify_customer_of_additions(user, changes: list, not_added: list) -> None:
+    """WhatsApp the customer what a site checkout added to their open order. Skipped without a phone."""
+    profile = getattr(user, "profile", None)
+    if not profile or not profile.phone:
+        return
+    try:
+        validators.send_whatsapp_message(
+            validators._local_to_e164(profile.phone), _format_additions(changes, not_added),
+        )
+    except Exception as exc:
+        logger.error("Failed to WhatsApp order additions to user %s: %s", user.id, exc)
 
 
 def _resolve_profile(phone: str):
@@ -208,9 +335,8 @@ def _apply_single_modification(
     "locked" (it's in an order its supplier already approved/shipped —
     changing it would silently re-open something already signed off on).
     """
-    from apps.catalog.models import SupplierProduct
     from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
-    from apps.orders.services import _get_available_suppliers, get_or_create_supplier_order
+    from apps.orders.services import get_or_create_supplier_order, pick_supplier_for_addition
 
     live_items = (
         OrderRequestProduct.objects
@@ -242,20 +368,14 @@ def _apply_single_modification(
     if intent == "update" and live_items.exists():
         return "locked"
 
-    sp = (
-        SupplierProduct.objects
-        .filter(product=product, supplier__in=_get_available_suppliers(None, region))
-        .select_related("supplier")
-        .order_by("price_per_unit")
-        .first()
-    )
-    if not sp:
-        return "not_found"
+    supplier, price, reason = pick_supplier_for_addition(batch, product, Decimal(str(quantity)), region)
+    if supplier is None:
+        return reason if reason == "below_minimum" else "not_found"
 
-    order, created = get_or_create_supplier_order(batch, sp.supplier)
+    order, created = get_or_create_supplier_order(batch, supplier)
     orp, item_created = OrderRequestProduct.objects.get_or_create(
-        order_request=order, product=product, supplier=sp.supplier,
-        defaults={"quantity": quantity, "unit_price": sp.price_per_unit},
+        order_request=order, product=product, supplier=supplier,
+        defaults={"quantity": quantity, "unit_price": price},
     )
     if not item_created:
         orp.quantity += quantity
@@ -267,7 +387,7 @@ def _apply_single_modification(
     ))
     changes_made.append(
         f"נוסף: {product.name} x{quantity} {product.get_unit_display()} "
-        f"({sp.supplier.name}, הזמנה #{order.id})"
+        f"({supplier.name}, הזמנה #{order.id})"
     )
     return "ok"
 
@@ -340,6 +460,8 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
             errors.append(item["product_name"])
         elif result == "locked":
             errors.append(f"{item['product_name']} (הספק כבר אישר — לא ניתן לשנות)")
+        elif result == "below_minimum":
+            errors.append(f"{item['product_name']} (מתחת למינימום של הספק)")
 
     _dispatch_modification_batches(
         order_changes,
@@ -349,7 +471,7 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
 
     reply_lines = []
     if changes_made:
-        reply_lines.append("✅ השינויים נשלחו לספקים:")
+        reply_lines.append("📨 התוספת נשלחה לספקים לאישור; נעדכן אותך כשהספק יאשר:")
         reply_lines += [f"  • {c}" for c in changes_made]
     if errors:
         reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
@@ -376,7 +498,7 @@ def _suggest_and_respond(
     (second time), so a customer who never tops up doesn't get held forever.
     """
     from apps.catalog.models import Product
-    from apps.orders.services import suggest_order
+    from apps.orders.services import get_open_batch, suggest_order
 
     all_products_map = {p.name: p for p in Product.objects.all()}
     products = []
@@ -393,6 +515,14 @@ def _suggest_and_respond(
             phone,
             f"לא זיהיתי מוצרים ידועים בהזמנה.\nלא זוהה: {', '.join(unrecognized)}",
         )
+        return HttpResponse(status=200)
+
+    # Ordered on the site (or confirmed another offer) while this message was
+    # still in its debounce window: ask to add to that order, don't price a second one.
+    open_batch = get_open_batch(user)
+    if open_batch is not None:
+        note = f"⚠️ לא זוהה: {', '.join(unrecognized)}" if unrecognized else ""
+        _offer_merge(phone, user, open_batch, products, profile.region, note=note)
         return HttpResponse(status=200)
 
     try:
@@ -605,6 +735,8 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
             errors.append(product.name)
         elif result == "locked":
             errors.append(f"{product.name} (הספק כבר אישר — לא ניתן לשנות)")
+        elif result == "below_minimum":
+            errors.append(f"{product.name} (מתחת למינימום של הספק)")
 
     if ambiguous:
         # Anything else in the same message already resolved cleanly and, for
@@ -617,7 +749,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
         if changes_made:
             validators.send_whatsapp_message(
                 phone,
-                "✅ השינויים הבאים נשלחו לספקים:\n" + "\n".join(f"  • {c}" for c in changes_made),
+                "📨 השינויים הבאים נשלחו לספקים לאישור; נעדכן אותך כשהספק יאשר:\n" + "\n".join(f"  • {c}" for c in changes_made),
             )
         return _handle_ambiguous_products(
             phone, ambiguous, [],
@@ -632,7 +764,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
 
     reply_lines = []
     if changes_made:
-        reply_lines.append(f"✅ השינויים נשלחו לספקים:")
+        reply_lines.append("📨 התוספת נשלחה לספקים לאישור; נעדכן אותך כשהספק יאשר:")
         reply_lines += [f"  • {c}" for c in changes_made]
     if errors:
         reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
@@ -642,8 +774,6 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
 
 
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
-    from apps.orders.models import OrderRequest
-
     delivery_response = _handle_delivery_flow(phone, body)
     if delivery_response is not None:
         return delivery_response
@@ -655,6 +785,11 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     reroute_grace_response = _handle_reroute_grace_topup(phone, body)
     if reroute_grace_response is not None:
         return reroute_grace_response
+
+    # Before the pending-offer check, so its "כן" isn't taken as confirming an offer.
+    merge_response = _handle_merge_offer_reply(phone, body)
+    if merge_response is not None:
+        return merge_response
 
     clarify_raw = get_pending_clarification(phone)
     if clarify_raw:
@@ -673,22 +808,23 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
             )
             return HttpResponse(status=200)
 
-        # Check if user has a SENT order (awaiting supplier confirmation) → offer modification
-        profile = _resolve_profile(phone)
+        # Today's order is open for changes until 23:00 Israel time; after that
+        # (or with no order today) a message starts a new order.
+        from apps.orders.services import before_update_cutoff, todays_batch
 
+        profile = _resolve_profile(phone)
         if profile:
-            sent_order = (
-                OrderRequest.objects
-                .filter(user=profile.user, status=OrderRequest.Status.SENT)
-                .order_by("-created_at")
-                .first()
-            )
-            if sent_order:
-                if timezone.localtime().time() < DAILY_UPDATE_CUTOFF:
-                    return _handle_order_modification(phone, body, profile.user, sent_order.batch)
+            batch = todays_batch(profile.user)
+            if batch:
+                if before_update_cutoff():
+                    return _handle_order_modification(phone, body, profile.user, batch)
+                from apps.orders.models import OrderRequest
+                ids = ", ".join(
+                    f"#{order_id}" for order_id in batch.orders
+                    .exclude(status=OrderRequest.Status.CANCELLED).order_by("id").values_list("id", flat=True)
+                )
                 validators.send_whatsapp_message(
-                    phone,
-                    f"⏰ חלון העדכון להזמנה #{sent_order.id} נסגר ל-23:00. פותח הזמנה חדשה.",
+                    phone, f"⏰ חלון העדכון להזמנה של היום ({ids}) נסגר ב-23:00. פותח הזמנה חדשה.",
                 )
 
         return _handle_new_order(phone, body)
@@ -732,7 +868,9 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     cache.delete(key)
-    orders = _build_and_send_confirmed_order(data, scenario)
+    orders = _build_and_send_confirmed_order(data, scenario, phone)
+    if orders == MERGE_OFFERED:
+        return HttpResponse(status=200)
 
     if orders:
         confirm = _format_scenario(f"✅ אושר! {label}", chosen)

@@ -196,6 +196,21 @@ def clear_eta_request(supplier_phone: str):
     cache.delete(f"whatsapp_eta_request:{supplier_phone}")
 
 
+def save_merge_offer(phone: str, batch_id: int, user_id: int, region: str, items: list):
+    """The customer was asked "add these to your open order?"; items are [{product_id, quantity}]."""
+    payload = {"batch_id": batch_id, "user_id": user_id, "region": region, "items": items}
+    cache.set(f"whatsapp_merge_offer:{phone}", json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
+
+
+def get_merge_offer(phone: str):
+    raw = cache.get(f"whatsapp_merge_offer:{phone}")
+    return json.loads(raw) if raw else None
+
+
+def clear_merge_offer(phone: str):
+    cache.delete(f"whatsapp_merge_offer:{phone}")
+
+
 def _save_fallback_state(phone: str, state: dict):
     cache.set(f"whatsapp_fallback:{phone}", json.dumps(state, cls=DecimalEncoder), timeout=FALLBACK_TTL)
     try:

@@ -9,9 +9,10 @@ External dependencies mocked:
 Cache is overridden to LocMemCache so tests are isolated.
 """
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from django.core.cache import cache
 from django.test import TestCase, override_settings
@@ -19,7 +20,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone as django_timezone
 
 from apps.catalog.models import Product, Supplier, SupplierProduct, Region, Unit
-from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
+from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct, SupplierConfirmation
 from apps.orders.tests.factories import make_order
 from apps.orders.whatsapp import (
     _parse_delivery_eta,
@@ -762,6 +763,9 @@ class MinimumScenarioFilteringTests(TestCase):
             "minimum_issues": {"cheapest": [], "fewest_suppliers": _issue("ספק גדול")},
         }
         order = make_order(self.user, make_supplier("ספק זול"), total_price=Decimal("50.00"))
+        # Only stands in for build_order's return value; dated yesterday so it
+        # isn't mistaken for an order the customer already has open today.
+        OrderBatch.objects.filter(pk=order.batch_id).update(created_at=django_timezone.now() - timedelta(days=1))
         mock_build.return_value = (order.batch, [order], {})
 
         self._post("+972506666666", "10 עגבניות")
@@ -1043,6 +1047,9 @@ class OrderModificationTests(TestCase):
         )
         self.time_patcher.start()
         self.addCleanup(self.time_patcher.stop)
+        cutoff_patcher = patch("apps.orders.services.before_update_cutoff", return_value=True)
+        cutoff_patcher.start()
+        self.addCleanup(cutoff_patcher.stop)
 
     def _post(self, phone, body):
         return self.client.post("/whatsapp/webhook/", {
@@ -1842,9 +1849,12 @@ class DailyUpdateCutoffTests(TestCase):
         })
 
     def _at(self, hour, minute):
+        # The cutoff is 23:00 Israel time (the project's TIME_ZONE is UTC).
+        il = ZoneInfo("Asia/Jerusalem")
+        today = django_timezone.now().astimezone(il).date()
         return patch(
-            "apps.orders.whatsapp.user_flow.timezone.localtime",
-            return_value=django_timezone.make_aware(datetime(2026, 1, 1, hour, minute)),
+            "apps.orders.services.timezone.now",
+            return_value=datetime.combine(today, dtime(hour, minute), tzinfo=il),
         )
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
@@ -2264,10 +2274,7 @@ class PerSupplierOrderTests(TestCase):
         )
 
     def _before_cutoff(self):
-        return patch(
-            "apps.orders.whatsapp.user_flow.timezone.localtime",
-            return_value=django_timezone.make_aware(datetime(2026, 1, 1, 10, 0)),
-        )
+        return patch("apps.orders.services.before_update_cutoff", return_value=True)
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_supplier_confirmation_approves_only_its_own_order(self, mock_send):
@@ -2624,3 +2631,151 @@ class BatchApprovedSummaryTests(TestCase):
         self._post(self.a.whatsapp_number, "אישור")
 
         self.assertFalse(any("כל ההזמנה שלך אושרה" in m for m in self._customer_msgs(mock_send)))
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class OneOpenOrderWebhookTests(TestCase):
+    """
+    A customer with an order already open today (e.g. just placed on the
+    site) who starts another order on WhatsApp is asked whether to add to the
+    open one: כן adds, לא adds nothing, never a second order.
+    """
+
+    PHONE = "+972508888888"
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.lettuce = make_product("חסה")
+        self.a = make_supplier("ספק א")
+        self.b = make_supplier("ספק ב")
+        SupplierProduct.objects.create(supplier=self.a, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.a, product=self.lettuce, price_per_unit="7.00")
+        SupplierProduct.objects.create(supplier=self.b, product=self.lettuce, price_per_unit="4.00")
+        self.user = make_user_with_profile(phone=self.PHONE)
+        self.open_order = make_order(self.user, self.a, status=OrderRequest.Status.SENT, total_price=Decimal("50"))
+        OrderRequestProduct.objects.create(
+            order_request=self.open_order, product=self.tomato, supplier=self.a,
+            quantity=Decimal("10"), unit_price=Decimal("5.00"),
+        )
+        cutoff = patch("apps.orders.services.before_update_cutoff", return_value=True)
+        self.cutoff = cutoff.start()
+        self.addCleanup(cutoff.stop)
+
+    def _post(self, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": body})
+
+    def _seed_offer(self):
+        lettuce = {**_scenario("20.00")["products"][0], "product_id": self.lettuce.id, "product_name": "חסה"}
+        offer = {**_scenario("20.00"), "products": [lettuce]}
+        save_pending_order(
+            self.PHONE, offer, offer, single_scenario="cheapest",
+            products=[{"product_id": self.lettuce.id, "quantity": "5"}],
+            user_id=self.user.id, region=Region.CENTER,
+        )
+
+    def _messages_to(self, mock_send, phone):
+        return [c[0][1] for c in mock_send.call_args_list if c[0][0] == phone]
+
+    @patch("apps.orders.services.build_order")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_confirming_an_offer_with_an_order_open_asks_instead_of_ordering_twice(self, mock_send, mock_build):
+        self._seed_offer()
+
+        self._post("אישור")
+
+        mock_build.assert_not_called()
+        self.assertEqual(OrderBatch.objects.filter(user=self.user).count(), 1)
+        msg = mock_send.call_args[0][1]
+        self.assertIn("יש לך כבר הזמנה פתוחה מהיום", msg)
+        self.assertIn("עגבניה x10.00", msg)  # what's already in it
+        self.assertIn("חסה x5", msg)  # what would be added
+        self.assertIsNone(cache.get(f"whatsapp_order:{self.PHONE}"))
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_yes_adds_to_the_open_order_preferring_its_supplier(self, mock_send):
+        self._seed_offer()
+        self._post("אישור")
+
+        self._post("כן")
+
+        self.assertEqual(OrderBatch.objects.filter(user=self.user).count(), 1)
+        line = OrderRequestProduct.objects.get(order_request__batch=self.open_order.batch, product=self.lettuce)
+        self.assertEqual((line.supplier, line.quantity), (self.a, Decimal("5")))  # ספק א is on the order; ב is cheaper
+        supplier_msg = self._messages_to(mock_send, self.a.whatsapp_number)[-1]
+        self.assertIn(f"מבקש להוסיף להזמנה #{self.open_order.id}", supplier_msg)
+        self.assertIn("חסה x5", supplier_msg)
+        customer_msg = self._messages_to(mock_send, self.PHONE)[-1]
+        self.assertIn("נשלחה לספקים לאישור", customer_msg)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_no_adds_nothing(self, mock_send):
+        self._seed_offer()
+        self._post("אישור")
+
+        self._post("לא")
+
+        self.assertFalse(OrderRequestProduct.objects.filter(product=self.lettuce).exists())
+        self.assertIn("לא הוספנו כלום", mock_send.call_args[0][1])
+        self.assertEqual(OrderBatch.objects.filter(user=self.user).count(), 1)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_other_replies_ask_again_and_keep_the_question(self, mock_send):
+        self._seed_offer()
+        self._post("אישור")
+
+        self._post("מה?")
+
+        self.assertIn("ענה *כן*", mock_send.call_args[0][1])
+        self._post("כן")
+        self.assertTrue(OrderRequestProduct.objects.filter(product=self.lettuce).exists())
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_yes_after_the_order_closed_adds_nothing(self, mock_send):
+        self._seed_offer()
+        self._post("אישור")
+        self.cutoff.return_value = False  # 23:00 passed in between
+
+        self._post("כן")
+
+        self.assertFalse(OrderRequestProduct.objects.filter(product=self.lettuce).exists())
+        self.assertIn("כבר נסגרה להוספות", mock_send.call_args[0][1])
+
+    @patch("apps.orders.services.suggest_order")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_message_sent_alongside_a_site_checkout_asks_instead_of_offering(self, mock_send, mock_parse, mock_suggest):
+        # The open order is "placed on the site" after this message started its
+        # 3-minute debounce: move it out of today so the message drafts, then back.
+        OrderBatch.objects.filter(pk=self.open_order.batch_id).update(
+            created_at=django_timezone.now() - timedelta(days=1))
+        mock_parse.return_value = [{"product_name": "חסה", "quantity": Decimal("5")}]
+        self._post("5 חסה")
+        OrderBatch.objects.filter(pk=self.open_order.batch_id).update(created_at=django_timezone.now())
+
+        _flush_draft(self.PHONE)
+
+        mock_suggest.assert_not_called()
+        self.assertIn("יש לך כבר הזמנה פתוחה מהיום", mock_send.call_args[0][1])
+
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_explicit_add_goes_straight_in_with_a_supplier_already_on_the_order(self, mock_send, mock_parse):
+        mock_parse.return_value = {"intent": "add", "items": [{"product_name": "חסה", "quantity": Decimal("3")}]}
+
+        self._post("תוסיף 3 חסה")
+
+        line = OrderRequestProduct.objects.get(order_request__batch=self.open_order.batch, product=self.lettuce)
+        self.assertEqual(line.supplier, self.a)
+        self.assertIn("נשלחה לספקים לאישור", self._messages_to(mock_send, self.PHONE)[-1])
+
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_an_order_from_yesterday_is_not_reopened(self, mock_send, mock_parse):
+        OrderBatch.objects.filter(pk=self.open_order.batch_id).update(
+            created_at=django_timezone.now() - timedelta(days=1))
+        mock_parse.return_value = [{"product_name": "חסה", "quantity": Decimal("5")}]
+
+        self._post("5 חסה")
+
+        self.assertIsNotNone(get_draft_order(self.PHONE))  # a new order, not a change to yesterday's

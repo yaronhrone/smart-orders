@@ -1,6 +1,11 @@
+from contextlib import contextmanager
+from datetime import datetime, time
 from decimal import Decimal
 from collections import defaultdict
+from types import SimpleNamespace
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -878,3 +883,113 @@ def find_fallback_for_product(product, excluded_supplier_id: int, order_request_
     }
 
     return None
+
+
+# ─────────────── One open order per customer per day ───────────────
+
+IL_TZ = ZoneInfo("Asia/Jerusalem")
+# Project TIME_ZONE is UTC, so this is compared against Israel time explicitly.
+ORDER_UPDATE_CUTOFF = time(23, 0)
+NOT_ADDED_REASONS = {"unavailable": "אין ספק זמין באזור", "below_minimum": "מתחת למינימום של הספק"}
+OPEN_ORDER_STATUSES = (
+    OrderRequest.Status.PENDING,
+    OrderRequest.Status.SENT,
+    OrderRequest.Status.APPROVED,
+    OrderRequest.Status.SHIPPED,
+)
+
+
+def before_update_cutoff(now=None) -> bool:
+    return (now or timezone.now()).astimezone(IL_TZ).time() < ORDER_UPDATE_CUTOFF
+
+
+def todays_batch(user, now=None):
+    """The customer's latest checkout from today (Israel time) that still has a live order, ignoring the cutoff."""
+    local = (now or timezone.now()).astimezone(IL_TZ)
+    day_start = datetime.combine(local.date(), time.min, tzinfo=IL_TZ)
+    return (
+        OrderBatch.objects
+        .filter(user=user, created_at__gte=day_start, orders__status__in=OPEN_ORDER_STATUSES)
+        .order_by("-created_at")
+        .distinct()
+        .first()
+    )
+
+
+def get_open_batch(user, now=None):
+    """
+    The single definition of "the customer's open order": today's checkout,
+    until 23:00 Israel time. New items go into it instead of a second order.
+    """
+    if not before_update_cutoff(now):
+        return None
+    return todays_batch(user, now)
+
+
+@contextmanager
+def checkout_lock(user):
+    """
+    Serialises "is there an open order? then create or merge" per customer,
+    so a WhatsApp confirmation and a site checkout landing at the same moment
+    can't both see "no open order". Send WhatsApp messages after leaving it.
+    """
+    with transaction.atomic():
+        get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+        yield
+
+
+def pick_supplier_for_addition(batch, product, quantity, region):
+    """
+    Supplier for an item added to an open checkout: the cheapest supplier
+    already in the batch that carries it, else the cheapest available one
+    whose minimum this item alone clears (a new supplier sent less than its
+    minimum tends to cancel, which blocks it for 10 days).
+    Returns (supplier, price, None) or (None, None, "unavailable" | "below_minimum").
+    """
+    suppliers = _get_available_suppliers(batch.user, region)
+    options = _get_price_options([{"product": product, "quantity": quantity}], suppliers).get(product.id, [])
+    if not options:
+        return None, None, "unavailable"
+
+    in_batch = set(
+        batch.orders.exclude(status=OrderRequest.Status.CANCELLED).values_list("supplier_id", flat=True)
+    )
+    on_order = [(s, p) for s, p in options if s.id in in_batch]
+    if on_order:
+        supplier, price = min(on_order, key=lambda sp: sp[1])
+        return supplier, price, None
+    for supplier, price in options:  # cheapest first
+        if supplier.minimum_order <= quantity * price:
+            return supplier, price, None
+    return None, None, "below_minimum"
+
+
+def add_items_to_batch(batch, items, region):
+    """
+    Add [{"product", "quantity"}] to an open checkout. Returns (changes,
+    not_added): changes is one {"order", "created", "items"} per supplier
+    order touched, items being what was added (product, quantity) for the
+    supplier's "please add" message; not_added is [{"product", "quantity",
+    "reason"}].
+    """
+    changes, not_added = {}, []
+    for item in items:
+        product, quantity = item["product"], Decimal(item["quantity"])
+        supplier, price, reason = pick_supplier_for_addition(batch, product, quantity, region)
+        if supplier is None:
+            not_added.append({"product": product, "quantity": quantity, "reason": reason})
+            continue
+
+        order, created = get_or_create_supplier_order(batch, supplier)
+        existing = order.products.filter(product=product).first()
+        if existing:
+            # The supplier confirmed the old quantity, not the new total.
+            SupplierConfirmation.objects.filter(order_request_product=existing).delete()
+        add_item_to_order(order, product, supplier, quantity, price)
+
+        entry = changes.setdefault(order.id, {"order": order, "created": created, "items": []})
+        entry["items"].append(SimpleNamespace(product=product, quantity=quantity, supplier=supplier))
+
+    for entry in changes.values():
+        entry["order"] = refresh_order_after_changes(entry["order"].id)
+    return list(changes.values()), not_added
