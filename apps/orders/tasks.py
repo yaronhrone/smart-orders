@@ -134,3 +134,13 @@ def handle_fallback_timeout(phone: str, order_request_id: int):
             lines.append(f"  • {item}")
         lines.append("\nצור קשר עם המערכת אם ברצונך להוסיפם מחדש.")
         send_whatsapp_message(phone, "\n".join(lines))
+
+
+@shared_task
+def enforce_supplier_confirmation_deadline():
+    """Run by Celery beat every 15 minutes, 18:00-23:45 Israel time (CELERY_BEAT_SCHEDULE)."""
+    from apps.orders.whatsapp.deadline_flow import handle_overdue_orders
+
+    handled = handle_overdue_orders()
+    if handled:
+        logger.info("Supplier confirmation deadline: handled %s overdue order(s)", handled)

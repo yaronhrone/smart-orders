@@ -41,6 +41,9 @@ class OrderRequest(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Set once the supplier-confirmation deadline job has dealt with this
+    # order (rerouted it, or flagged it to the admin), so it's never handled twice.
+    deadline_handled_at = models.DateTimeField(null=True, blank=True)
 
     ALLOWED_TRANSITIONS = {
         Status.PENDING:   [Status.SENT, Status.CANCELLED],

@@ -43,6 +43,17 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  celery-beat:
+    build:
+      context: .
+    # Schedule file outside /app so the image doesn't need a writable app dir.
+    command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
+    env_file: .env.prod
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

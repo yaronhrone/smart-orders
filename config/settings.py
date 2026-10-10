@@ -215,6 +215,19 @@ JWT_COOKIE_SAMESITE = "Lax"
 CELERY_BROKER_URL = REDIS_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
+# Beat schedules below are in Israel time (Django's TIME_ZONE stays UTC).
+CELERY_TIMEZONE = "Asia/Jerusalem"
+
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # Orders a supplier hasn't confirmed by 18:00 (or within 2 hours of being
+    # sent) move to another supplier. Evenings only, so nothing is rerouted at night.
+    "supplier-confirmation-deadline": {
+        "task": "apps.orders.tasks.enforce_supplier_confirmation_deadline",
+        "schedule": crontab(minute="*/15", hour="18-23"),
+    },
+}
 
 AUTH_USER_MODEL = "users.User"
 
