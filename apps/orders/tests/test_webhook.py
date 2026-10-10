@@ -3061,3 +3061,63 @@ class ModificationRulesTests(TestCase):
         new.refresh_from_db()
         self.assertEqual(new.status, OrderRequest.Status.APPROVED)
         self.assertTrue(any("ספק א* אישר" in m for m in self._sent_to(self.PHONE)))
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class ClarificationKeepsEveryItemTests(TestCase):
+    """
+    The live bug: "30 קילו בצל לבן" + other items + an ambiguous "חסה". The
+    customer answered the lettuce question and the offer came back without
+    the onion, and with no warning (found testing in production).
+    """
+
+    PHONE = "+972508888111"
+    MESSAGE = "30 קילו בצל לבן\n40 קילו מלפפון\n30 יחידות חסה"
+
+    def setUp(self):
+        cache.clear()
+        self.supplier = make_supplier("ספק א")
+        self.supplier_b = make_supplier("ספק ב")
+        for name in ("בצל לבן", "מלפפון", "חסה סלנובה", "חסה קיסר"):
+            product = make_product(name)
+            SupplierProduct.objects.create(supplier=self.supplier, product=product, price_per_unit="5.00")
+        self.user = make_user_with_profile(phone=self.PHONE)
+
+    def _post(self, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": body})
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser._get_client")
+    def test_the_offer_after_the_clarification_still_has_every_item(self, mock_client, mock_send):
+        self._post(self.MESSAGE)
+        _flush_draft(self.PHONE)
+        self.assertIn("איזה בדיוק", mock_send.call_args[0][1])
+        self.assertIn("חסה", mock_send.call_args[0][1])
+
+        self._post("קיסר")
+
+        offer = mock_send.call_args[0][1]
+        for expected in ("בצל לבן x30", "מלפפון x40", "חסה קיסר x30"):
+            self.assertIn(expected, offer)
+        self.assertFalse(mock_client.return_value.chat.completions.create.called)  # the product's own name was enough
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser._get_client")
+    def test_an_item_only_the_ai_can_read_is_not_lost_either(self, mock_client, mock_send):
+        make_product("סלק אדום")
+        SupplierProduct.objects.create(
+            supplier=self.supplier, product=Product.objects.get(name="סלק אדום"), price_per_unit="6.00",
+        )
+        mock_client.return_value.chat.completions.create.return_value = MagicMock()
+        mock_client.return_value.chat.completions.create.return_value.choices[0].message.content = json.dumps(
+            {"items": [{"product_name": "סלק אדום", "quantity": "20"}]}
+        )
+
+        self._post("20 קילו סלק מיוחד\n30 יחידות חסה")
+        _flush_draft(self.PHONE)
+        self._post("קיסר")
+
+        offer = mock_send.call_args[0][1]
+        self.assertIn("סלק אדום x20", offer)
+        self.assertIn("חסה קיסר x30", offer)
+

@@ -206,3 +206,25 @@ class DbAliasResolutionTests(TestCase):
     def test_falls_back_to_json_file_when_no_db_alias(self):
         """No DB row for this text at all - the static file still resolves it as before."""
         self.assertEqual(resolve_alias("בצל לבן", ["בצל יבש"]), "בצל יבש")
+
+
+class OwnNameBeatsAliasTests(TestCase):
+    """A product's own name resolves to itself: aliases only help text that isn't already a product."""
+
+    def test_a_product_named_like_an_alias_is_not_redirected(self):
+        # "בצל לבן" is a static alias of "בצל יבש", but here it is a product of its own.
+        self.assertEqual(resolve_alias("בצל לבן", ["בצל לבן", "בצל יבש"]), "בצל לבן")
+
+    def test_a_product_whose_alias_target_is_missing_still_resolves(self):
+        # The alias file points "בצל לבן" at "בצל יבש", which this catalog doesn't have.
+        self.assertEqual(resolve_alias("בצל לבן", ["בצל לבן", "מלפפון"]), "בצל לבן")
+
+    def test_a_db_alias_cannot_hijack_an_existing_product_name(self):
+        red = Product.objects.create(name="בצל סגול", unit=Unit.KG)
+        ProductAlias.objects.create(product=red, alias="בצל לבן")
+
+        self.assertEqual(resolve_alias("בצל לבן", ["בצל לבן", "בצל סגול"]), "בצל לבן")
+
+    def test_matching_ignores_case_and_extra_spaces(self):
+        self.assertEqual(resolve_alias("  בצל   לבן ", ["בצל לבן"]), "בצל לבן")
+

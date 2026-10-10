@@ -75,6 +75,13 @@ def resolve_alias(text: str, known_product_names) -> str | None:
     so it can override the static file for the same alias text.
     """
     normalized = _normalize(text)
+    # A product's own name always wins: a catalog item called "בצל לבן" must not be
+    # redirected by an alias to some other product, nor missed because the alias
+    # points at a product this catalog doesn't have (it used to fall through to
+    # the AI, or to nothing at all when the same message had an ambiguous item).
+    for name in known_product_names:
+        if _normalize(name) == normalized:
+            return name
     canonical = _load_db_alias_index().get(normalized) or _load_json_alias_index().get(normalized)
     if canonical and canonical in known_product_names:
         return canonical
