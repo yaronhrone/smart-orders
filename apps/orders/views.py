@@ -7,7 +7,6 @@ from django.core.cache import cache
 from django.db.models import Count, Prefetch
 from django.db.models.functions import TruncMonth
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 
 from core.cache_utils import get_cache_version
@@ -30,7 +29,10 @@ from .serializers import (
 )
 from decimal import Decimal
 from collections import defaultdict
-from .services import add_items_to_batch, build_order, checkout_lock, get_open_batch, suggest_order
+from .services import (
+    IL_TZ, add_items_to_batch, build_order, checkout_lock, current_month, get_open_batch, month_bounds,
+    parse_month, suggest_order,
+)
 from .spend import SPEND_STATUSES
 class SuggestOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -166,15 +168,24 @@ def _batches_queryset():
 class OrderBatchListView(APIView):
     """GET /api/orders/batches/ — the customer's checkouts, newest first,
     each with its per-supplier orders (dashboard: one row per checkout that
-    expands into them)."""
+    expands into them). `?month=YYYY-MM` keeps only that calendar month
+    (Israel time) — cancelled orders included, so the customer sees them;
+    without it, the most recent checkouts."""
     permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(responses=paginated_response_serializer(OrderBatchSerializer))
     def get(self, request):
         limit = request.query_params.get("limit", "")
         offset = request.query_params.get("offset", "")
+        month_param = request.query_params.get("month", "")
+        bounds = None
+        if month_param:
+            try:
+                bounds = month_bounds(*parse_month(month_param))
+            except ValueError:
+                return Response({"detail": "פורמט חודש לא תקין, נדרש YYYY-MM"}, status=status.HTTP_400_BAD_REQUEST)
         version = get_cache_version("orders", request.user.id)
-        cache_key = f"orders:batches:{request.user.id}:v{version}:{limit}:{offset}"
+        cache_key = f"orders:batches:{request.user.id}:v{version}:{month_param}:{limit}:{offset}"
 
         cached = cache.get(cache_key)
         if cached is not None:
@@ -190,6 +201,8 @@ class OrderBatchListView(APIView):
             ])
             .distinct()
         )
+        if bounds:
+            batches = batches.filter(created_at__gte=bounds[0], created_at__lt=bounds[1])
         page, has_more = paginate(request, batches, default_limit=10)
         payload = {
             "results": OrderBatchSerializer(page, many=True).data,
@@ -298,18 +311,13 @@ class OrderStatsView(APIView):
         always lists every month the user has ever ordered in (newest first),
         for a month-tab UI — independent of which month was requested.
         """
-        month_param = request.query_params.get("month")
-        if month_param:
-            try:
-                year, mon = (int(part) for part in month_param.split("-"))
-                if not 1 <= mon <= 12:
-                    raise ValueError
-            except ValueError:
-                return Response({"detail": "פורמט חודש לא תקין, נדרש YYYY-MM"}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            now = timezone.localtime()
-            year, mon = now.year, now.month
-            month_param = f"{year:04d}-{mon:02d}"
+        month_param = request.query_params.get("month") or current_month()
+        try:
+            year, mon = parse_month(month_param)
+        except ValueError:
+            return Response({"detail": "פורמט חודש לא תקין, נדרש YYYY-MM"}, status=status.HTTP_400_BAD_REQUEST)
+        month_param = f"{year:04d}-{mon:02d}"
+        month_start, month_end = month_bounds(year, mon)
 
         version = get_cache_version("orders", request.user.id)
         cache_key = f"orders:stats:{request.user.id}:v{version}:{month_param}"
@@ -321,7 +329,7 @@ class OrderStatsView(APIView):
         all_orders = OrderRequest.objects.filter(user=request.user, status__in=SPEND_STATUSES)
         available_months = [
             m.strftime("%Y-%m") for m in
-            all_orders.annotate(month=TruncMonth("created_at"))
+            all_orders.annotate(month=TruncMonth("created_at", tzinfo=IL_TZ))
             .order_by("-month").values_list("month", flat=True).distinct()
             if m
         ]
@@ -332,7 +340,7 @@ class OrderStatsView(APIView):
 
         orders = (
             all_orders
-            .filter(created_at__year=year, created_at__month=mon)
+            .filter(created_at__gte=month_start, created_at__lt=month_end)
             .prefetch_related("products__supplier")
         )
 

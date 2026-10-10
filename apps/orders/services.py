@@ -899,6 +899,26 @@ OPEN_ORDER_STATUSES = (
 )
 
 
+def parse_month(value: str):
+    """'YYYY-MM' -> (year, month). Raises ValueError on anything else."""
+    year, mon = (int(part) for part in value.split("-"))
+    if not 1 <= mon <= 12:
+        raise ValueError(value)
+    return year, mon
+
+
+def month_bounds(year: int, mon: int):
+    """[start, end) of a calendar month in Israel time. TIME_ZONE is UTC, so the dashboard asks for this explicitly."""
+    start = datetime(year, mon, 1, tzinfo=IL_TZ)
+    end = datetime(year + (mon == 12), mon % 12 + 1, 1, tzinfo=IL_TZ)
+    return start, end
+
+
+def current_month(now=None) -> str:
+    local = (now or timezone.now()).astimezone(IL_TZ)
+    return f"{local.year:04d}-{local.month:02d}"
+
+
 def before_update_cutoff(now=None) -> bool:
     return (now or timezone.now()).astimezone(IL_TZ).time() < ORDER_UPDATE_CUTOFF
 
