@@ -621,3 +621,17 @@ class PlaceWithOpenOrderViewTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertFalse(res.data["merged"])
+
+
+class TestRunsCannotReachRealServicesTests(APITestCase):
+    """A local `manage.py test` once sent real WhatsApp alerts to the admin's phone."""
+
+    def test_twilio_openai_and_the_admin_phone_are_neutralised_under_test(self):
+        import os
+        from django.conf import settings
+
+        self.assertTrue(settings.TESTING)
+        self.assertEqual((settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN), ("test", "test"))
+        self.assertEqual(settings.ADMIN_WHATSAPP_NUMBER, "")
+        self.assertEqual(os.environ["OPENAI_API_KEY"], "test")
+

@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 
 import os
+import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -230,6 +231,18 @@ TWILIO_SKIP_SIGNATURE_VALIDATION = (
 # When set, the system sends a WhatsApp alert whenever a supplier mentions
 # a product that is not in the catalog.
 ADMIN_WHATSAPP_NUMBER = os.environ.get("ADMIN_WHATSAPP_NUMBER", "")
+
+# `manage.py test` must never reach the real Twilio account, the admin's real
+# phone or a paid OpenAI key, whatever .env holds: a local run once sent
+# "unrecognized products" alerts to the admin's phone. CI already runs with
+# dummy values; this makes a local run behave the same.
+TESTING = sys.argv[1:2] == ["test"]
+if TESTING:
+    TWILIO_ACCOUNT_SID = "test"
+    TWILIO_AUTH_TOKEN = "test"
+    ADMIN_WHATSAPP_NUMBER = ""
+    WHATSAPP_OVERRIDE_NUMBER = None
+    os.environ["OPENAI_API_KEY"] = "test"
 
 _extra_cors = [o for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o]
 CORS_ALLOWED_ORIGINS = ["http://localhost:3000"] + _extra_cors

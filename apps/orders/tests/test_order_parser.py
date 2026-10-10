@@ -107,6 +107,61 @@ class ParseModificationIntentTests(TestCase):
         self.assertIn("פלפל ירוק", sent_prompt)
 
 
+class AmbiguousWithLeftoverTests(TestCase):
+    """
+    A message with an ambiguous product ("חסה") AND a segment the dictionary
+    can't read used to lose the second one without a word: the customer was
+    asked about the lettuce and the final offer had no trace of the rest.
+    """
+
+    MESSAGE = "30 קילו סלק מיוחד\n30 יחידות חסה\n40 קילו מלפפון"
+    NAMES = ["חסה סלנובה", "חסה קיסר", "מלפפון", "סלק אדום"]
+
+    def _parse(self, mock_get_client, ai_items):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        client.chat.completions.create.return_value = _openai_response(ai_items)
+        from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
+        with self.assertRaises(AmbiguousProductError) as ctx:
+            parse_customer_order(self.MESSAGE, self.NAMES)
+        return ctx.exception, client
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_the_ai_reads_what_the_dictionary_could_not_and_it_rides_along(self, mock_get_client):
+        exc, client = self._parse(mock_get_client, [{"product_name": "סלק אדום", "quantity": "30"}])
+
+        self.assertEqual([a["query"] for a in exc.ambiguous], ["חסה"])
+        self.assertEqual(
+            sorted((r["product_name"], r["quantity"]) for r in exc.resolved),
+            [("מלפפון", Decimal("40")), ("סלק אדום", Decimal("30"))],
+        )
+        sent = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("סלק מיוחד", sent)
+        self.assertNotIn("חסה", sent.split("Message:")[1])  # only the leftover goes to the AI
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_when_the_ai_fails_the_customer_is_told_instead_of_silently_losing_items(self, mock_get_client):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        client.chat.completions.create.side_effect = RuntimeError("network")
+        from apps.orders.order_parser import parse_customer_order
+
+        with self.assertRaises(ValueError):
+            parse_customer_order(self.MESSAGE, self.NAMES)
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_nothing_left_over_means_no_ai_call(self, mock_get_client):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
+
+        with self.assertRaises(AmbiguousProductError) as ctx:
+            parse_customer_order("30 יחידות חסה\n40 קילו מלפפון", self.NAMES)
+
+        self.assertFalse(client.chat.completions.create.called)
+        self.assertEqual([r["product_name"] for r in ctx.exception.resolved], ["מלפפון"])
+
+
 class ParseCustomerOrderTests(TestCase):
 
     @patch("apps.orders.order_parser._get_client")

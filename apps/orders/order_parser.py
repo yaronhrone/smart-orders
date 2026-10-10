@@ -167,18 +167,6 @@ def parse_customer_order(message: str, product_names: list) -> list:
     """
     dict_resolved, ambiguous, remaining_message = match_order_items(message, product_names)
 
-    if ambiguous:
-        # Don't also hand remaining_message to the AI here: this message needs
-        # a clarifying answer before it means anything, and mixing an AI guess
-        # for an unrelated leftover segment into that reply would be more
-        # confusing than just asking about the ambiguous part first.
-        raise AmbiguousProductError(
-            ambiguous=[
-                {**item, "quantity": Decimal(item["quantity"])} for item in ambiguous
-            ],
-            resolved=_to_decimal_items(dict_resolved),
-        )
-
     items = list(dict_resolved)
     if remaining_message:
         known = ", ".join(product_names) if product_names else "—"
@@ -210,6 +198,19 @@ def parse_customer_order(message: str, product_names: list) -> list:
         except Exception as exc:
             logger.error("OpenAI order parsing failed: %s", exc)
             raise ValueError(f"AI parsing failed: {exc}")
+
+    if ambiguous:
+        # The customer is asked which variant they meant, but everything else in
+        # the message rides along, including what only the AI could read. A segment
+        # the dictionary couldn't resolve used to be dropped here without a word:
+        # a customer who also wrote "בצל לבן" got an order without it, no warning,
+        # and the supplier never heard of it.
+        raise AmbiguousProductError(
+            ambiguous=[
+                {**item, "quantity": Decimal(item["quantity"])} for item in ambiguous
+            ],
+            resolved=_to_decimal_items(items),
+        )
 
     result = _to_decimal_items(items)
 
