@@ -202,7 +202,10 @@ export interface OrderBatchSummary {
   orders: BatchOrderSummary[];
 }
 
-export async function fetchOrderBatches(params: PageParams = {}): Promise<Paginated<OrderBatchSummary>> {
+/** `month` ("YYYY-MM") keeps only that month's checkouts, cancelled ones included; without it, the most recent. */
+export async function fetchOrderBatches(
+  params: PageParams & { month?: string } = {}
+): Promise<Paginated<OrderBatchSummary>> {
   return request<Paginated<OrderBatchSummary>>(`/api/orders/batches/${toQueryString(params)}`);
 }
 

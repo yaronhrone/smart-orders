@@ -1,11 +1,12 @@
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 from django.urls import reverse
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.contrib.auth import get_user_model
 
 from apps.catalog.models import Product, Supplier, Region, Unit
-from apps.orders.models import OrderRequest, OrderRequestProduct
+from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct
 from apps.orders.tests.factories import make_order as make_supplier_order
 
 User = get_user_model()
@@ -145,6 +146,70 @@ class OrderBatchListViewTests(APITestCase):
         res = self.client.get(reverse("orders-batches"))
 
         self.assertEqual(len(res.data["results"]), 1)
+
+
+    # ─── ?month=YYYY-MM ───
+
+    def _batch_in(self, created_at, status_val=OrderRequest.Status.SENT, total="100.00", user=None):
+        order = make_order(user or self.user, total=total, status_val=status_val)
+        OrderBatch.objects.filter(pk=order.batch_id).update(created_at=created_at)
+        return order
+
+    def _utc(self, *args):
+        from datetime import datetime, timezone as dt_timezone
+        return datetime(*args, tzinfo=dt_timezone.utc)
+
+    def test_month_filter_keeps_only_that_calendar_month(self):
+        sept = self._batch_in(self._utc(2026, 9, 15, 10))
+        octo = self._batch_in(self._utc(2026, 10, 3, 10))
+
+        sept_ids = [b["id"] for b in self.client.get(reverse("orders-batches"), {"month": "2026-09"}).data["results"]]
+        oct_ids = [b["id"] for b in self.client.get(reverse("orders-batches"), {"month": "2026-10"}).data["results"]]
+        all_ids = [b["id"] for b in self.client.get(reverse("orders-batches")).data["results"]]
+
+        self.assertEqual(sept_ids, [sept.batch_id])
+        self.assertEqual(oct_ids, [octo.batch_id])
+        self.assertEqual(all_ids, [octo.batch_id, sept.batch_id])  # no month: the most recent
+
+    def test_cancelled_orders_are_listed_in_their_month(self):
+        cancelled = self._batch_in(self._utc(2026, 10, 3, 10), OrderRequest.Status.CANCELLED, total="80.00")
+
+        res = self.client.get(reverse("orders-batches"), {"month": "2026-10"})
+
+        batch = res.data["results"][0]
+        self.assertEqual(batch["id"], cancelled.batch_id)
+        self.assertEqual(batch["status"], "cancelled")
+        self.assertEqual(float(batch["total_price"]), 0.0)  # shown, but worth nothing
+
+    def test_months_follow_israel_time(self):
+        # 22:30 UTC on 30 Sept is already 01:30 on 1 Oct in Israel (UTC+3).
+        late = self._batch_in(self._utc(2026, 9, 30, 22, 30))
+
+        in_oct = self.client.get(reverse("orders-batches"), {"month": "2026-10"}).data["results"]
+        in_sept = self.client.get(reverse("orders-batches"), {"month": "2026-09"}).data["results"]
+
+        self.assertEqual([b["id"] for b in in_oct], [late.batch_id])
+        self.assertEqual(in_sept, [])
+
+    def test_month_list_pages_with_load_more(self):
+        for day in range(1, 4):
+            self._batch_in(self._utc(2026, 10, day, 10))
+
+        first = self.client.get(reverse("orders-batches"), {"month": "2026-10", "limit": 2})
+        second = self.client.get(reverse("orders-batches"), {"month": "2026-10", "limit": 2, "offset": 2})
+
+        self.assertEqual((len(first.data["results"]), first.data["has_more"]), (2, True))
+        self.assertEqual((len(second.data["results"]), second.data["has_more"]), (1, False))
+
+    def test_other_customers_batches_never_appear_in_a_month(self):
+        self._batch_in(self._utc(2026, 10, 3, 10), user=self.other)
+
+        self.assertEqual(self.client.get(reverse("orders-batches"), {"month": "2026-10"}).data["results"], [])
+
+    def test_invalid_month_is_rejected(self):
+        for bad in ("october", "2026-13", "2026-1x", "2026"):
+            with self.subTest(month=bad):
+                self.assertEqual(self.client.get(reverse("orders-batches"), {"month": bad}).status_code, 400)
 
 
 class OrderDetailViewTests(APITestCase):
@@ -386,16 +451,42 @@ class OrderStatsViewTests(APITestCase):
         self.assertEqual(res.data["order_count"], 1)
         self.assertEqual(float(res.data["total_spent"]), 50.0)
 
+    def test_months_follow_israel_time(self):
+        from datetime import datetime, timezone as dt_timezone
+        # 22:30 UTC on 30 Sept is already 1 Oct in Israel (UTC+3).
+        late = datetime(2026, 9, 30, 22, 30, tzinfo=dt_timezone.utc)
+        self._order(self.user, self.supplier_a, late)
+
+        october = self.client.get(reverse("orders-stats"), {"month": "2026-10"})
+        september = self.client.get(reverse("orders-stats"), {"month": "2026-09"})
+
+        self.assertEqual(float(october.data["total_spent"]), 50.0)
+        self.assertEqual(float(september.data["total_spent"]), 0.0)
+        self.assertEqual(october.data["available_months"][0], "2026-10")
+
+    def test_month_total_matches_the_month_list_apart_from_cancelled_orders(self):
+        from datetime import datetime, timezone as dt_timezone
+        when = datetime(2026, 10, 3, 10, tzinfo=dt_timezone.utc)
+        sent = self._order(self.user, self.supplier_a, when)
+        cancelled = self._order(self.user, self.supplier_a, when, status_val=OrderRequest.Status.CANCELLED)
+        OrderBatch.objects.filter(pk__in=[sent.batch_id, cancelled.batch_id]).update(created_at=when)
+
+        stats = self.client.get(reverse("orders-stats"), {"month": "2026-10"}).data
+        listed = self.client.get(reverse("orders-batches"), {"month": "2026-10"}).data["results"]
+
+        self.assertEqual(len(listed), 2)  # the cancelled one is shown...
+        self.assertEqual(sum(float(b["total_price"]) for b in listed), float(stats["total_spent"]))  # ...but not counted
+
     def test_defaults_to_the_current_month(self):
         now = self.timezone.now()
         self._order(self.user, self.supplier_a, now)
-        last_month = now.replace(day=1) - self.timezone.timedelta(days=1)
+        last_month = now.replace(day=1, hour=12) - self.timezone.timedelta(days=1)
         self._order(self.user, self.supplier_a, last_month)
 
         res = self.client.get(reverse("orders-stats"))
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["month"], now.strftime("%Y-%m"))
+        self.assertEqual(res.data["month"], now.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m"))
         self.assertEqual(res.data["order_count"], 1)  # only this month's order
         self.assertEqual(float(res.data["total_spent"]), 50.0)
 
@@ -422,7 +513,7 @@ class OrderStatsViewTests(APITestCase):
         self.assertEqual(res.data["available_months"][:2], ["2026-10", "2026-08"])
 
     def test_current_month_listed_as_available_even_with_no_orders_yet(self):
-        current = self.timezone.now().strftime("%Y-%m")
+        current = self.timezone.now().astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m")
         res = self.client.get(reverse("orders-stats"))
         self.assertIn(current, res.data["available_months"])
         self.assertEqual(res.data["order_count"], 0)

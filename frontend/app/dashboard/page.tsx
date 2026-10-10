@@ -18,9 +18,12 @@ export default function DashboardPage() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // The month's stats and its orders list always cover the same month, so the
+  // stats come first (the server picks the current month) and the list follows.
   useEffect(() => {
-    Promise.all([fetchOrderBatches({ limit: ORDERS_PAGE_SIZE }), fetchStats()])
-      .then(([b, s]) => {
+    fetchStats()
+      .then(async (s) => {
+        const b = await fetchOrderBatches({ limit: ORDERS_PAGE_SIZE, month: s.month });
         setBatches(b.results);
         setHasMore(b.has_more);
         setStats(s);
@@ -34,7 +37,14 @@ export default function DashboardPage() {
     if (statsLoading || month === stats?.month) return;
     setStatsLoading(true);
     try {
-      setStats(await fetchStats(month));
+      const [s, b] = await Promise.all([
+        fetchStats(month),
+        fetchOrderBatches({ limit: ORDERS_PAGE_SIZE, month }),
+      ]);
+      setStats(s);
+      setBatches(b.results);
+      setHasMore(b.has_more);
+      setExpanded(b.results.length > 0 ? b.results[0].id : null);
     } catch {
       setError("שגיאה בטעינת נתוני החודש");
     } finally {
@@ -43,10 +53,10 @@ export default function DashboardPage() {
   }
 
   async function loadMore() {
-    if (!batches) return;
+    if (!batches || !stats) return;
     setLoadingMore(true);
     try {
-      const res = await fetchOrderBatches({ limit: ORDERS_PAGE_SIZE, offset: batches.length });
+      const res = await fetchOrderBatches({ limit: ORDERS_PAGE_SIZE, offset: batches.length, month: stats.month });
       setBatches((prev) => [...(prev ?? []), ...res.results]);
       setHasMore(res.has_more);
     } catch {
@@ -149,11 +159,13 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Recent orders — one row per checkout, expanding into its per-supplier orders */}
-      <section>
-        <h2 className="text-base font-semibold text-green-900 mb-3">הזמנות אחרונות</h2>
+      {/* The selected month's orders — one row per checkout, expanding into its per-supplier orders */}
+      <section className={`transition-opacity ${statsLoading ? "opacity-50" : ""}`}>
+        <h2 className="text-base font-semibold text-green-900 mb-3">
+          הזמנות — {monthLabel(stats.month)}
+        </h2>
         {batches.length === 0 ? (
-          <p className="text-sm text-gray-600">אין הזמנות עדיין.</p>
+          <p className="text-sm text-gray-600">אין הזמנות ב-{monthLabel(stats.month)}.</p>
         ) : (
           <div className="space-y-2">
             {batches.map((b) => {
@@ -161,7 +173,10 @@ export default function DashboardPage() {
               const liveOrders = b.orders.filter((o) => o.status !== "cancelled");
               const progress = deliveredSummary(b.orders);
               return (
-                <div key={b.id} className="bg-white rounded-xl shadow-md overflow-hidden">
+                <div
+                  key={b.id}
+                  className={`bg-white rounded-xl shadow-md overflow-hidden ${b.status === "cancelled" ? "opacity-60" : ""}`}
+                >
                   <button
                     onClick={() => setExpanded(isOpen ? null : b.id)}
                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-green-50 transition text-right"
@@ -169,7 +184,11 @@ export default function DashboardPage() {
                     <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm items-center min-w-0">
                       <span className="font-medium text-gray-800">{formatDateTime(b.created_at)}</span>
                       <span className="text-gray-500">
-                        {liveOrders.length === 1 ? liveOrders[0].supplier_name : `${liveOrders.length} ספקים`}
+                        {(() => {
+                          // A cancelled checkout has no live orders: name its suppliers instead of "0 ספקים".
+                          const shown = liveOrders.length > 0 ? liveOrders : b.orders;
+                          return shown.length === 1 ? shown[0].supplier_name : `${shown.length} ספקים`;
+                        })()}
                       </span>
                       <span className="font-semibold text-green-700">{formatCurrency(b.total_price)}</span>
                       <span className="flex items-center gap-2">
@@ -215,6 +234,15 @@ export default function DashboardPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+        {batches.length > 0 && (
+          <div className="mt-3 flex items-center justify-between rounded-xl bg-green-50 border border-green-200 px-4 py-3">
+            <span className="text-sm text-green-900">
+              סה&quot;כ {monthLabel(stats.month)}
+              <span className="text-xs text-green-700 mr-2">(לא כולל הזמנות שבוטלו)</span>
+            </span>
+            <span className="text-lg font-bold text-green-800">{formatCurrency(stats.total_spent)}</span>
           </div>
         )}
         {hasMore && (
