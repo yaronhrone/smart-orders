@@ -321,101 +321,123 @@ def _handle_clarification_reply(phone: str, body: str, raw_state: str) -> HttpRe
 
 def _apply_single_modification(
     product, quantity: Decimal, intent: str, batch, region: str,
-    order_changes: dict, changes_made: list,
+    order_changes: dict, changes_made: list, blocked: list,
 ) -> str:
     """
-    Resolve one already-identified Product + quantity into an add/update on
-    the checkout `batch`: an update changes the item in whichever of the
-    batch's orders holds it; an add goes to the cheapest supplier's open
-    order in the batch (or a new order in it). Appends to `order_changes`
-    (keyed by order id, for one consolidated message per supplier) and
-    `changes_made` in place.
+    Apply one customer request about one product to the open checkout `batch`.
+    Everything is expressed as a target total of that product in the whole
+    checkout (all suppliers, approved or not):
 
-    Returns "ok", "not_found" (no supplier in the region carries it),
-    "below_minimum", or "locked": the customer asked for LESS (or the same)
-    of something its supplier already approved/shipped — that needs the
-    supplier's agreement. Asking for MORE is never refused: the difference
-    goes to the supplier as an addition (a new order in the batch, because an
-    approved order isn't silently re-opened), told apart from a new order by
-    the supplier's message.
+    - "add"    -> total + quantity        ("תוסיף 20", "עוד 20", "גם 20")
+    - "update" -> quantity                ("תעדכן ל-50", "במקום 30 תביא 50")
+    - "reduce" -> total - quantity        ("תוריד 10", "הקטן ב-10")
+
+    More than today: the difference is added (to the supplier already holding
+    the product, else one already on the order, else the cheapest that clears
+    its minimum), even if that supplier already approved: it goes in its own
+    order, because an approved order isn't silently re-opened. Less than
+    today: taken out even after approval and the supplier is just told, unless
+    that would push the supplier under its minimum order, in which case
+    nothing changes and the customer is told how much more is needed.
+
+    Appends to `order_changes` (one consolidated supplier message per order),
+    `changes_made` (what the customer is told) and `blocked` (what couldn't be
+    done, and why). Returns "ok", "not_found" (no supplier in the region
+    carries it) or "blocked".
     """
     from apps.orders.models import OrderRequest, OrderRequestProduct, SupplierConfirmation
-    from apps.orders.services import get_or_create_supplier_order, pick_supplier_for_addition
-    from .supplier_flow import supplier_total_note
-
-    live_items = (
-        OrderRequestProduct.objects
-        .filter(order_request__batch=batch, product=product)
-        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
-        .select_related("order_request", "supplier")
+    from apps.orders.services import (
+        addition_shortfall, get_or_create_supplier_order, pick_supplier_for_addition,
+        product_total_in_batch, reduce_product_in_batch,
     )
-    open_item = live_items.filter(order_request__status=OrderRequest.Status.SENT).first()
+    from .supplier_flow import fmt_qty, supplier_total_note
 
-    # "update" a product that isn't actually in the order yet has no
-    # existing item to update — treat it the same as "add" rather than
-    # silently doing nothing for it.
-    if intent == "update" and open_item:
-        # "Update to N" means N in total. Other lines of this product in the
-        # checkout (e.g. one the supplier already approved, plus this
-        # addition awaiting approval) keep what they have, so this line
-        # takes the rest.
-        others = sum((i.quantity for i in live_items if i.id != open_item.id), Decimal("0"))
-        target = Decimal(str(quantity)) - others
-        if target <= 0:
-            return "locked"
-        old_qty = open_item.quantity
-        open_item.quantity = target
-        open_item.save(update_fields=["quantity"])
-        # The supplier confirmed the old quantity, not this one.
-        SupplierConfirmation.objects.filter(order_request_product=open_item).delete()
-        _recalc_order_total(open_item.order_request)
-        _record_order_change(order_changes, open_item.order_request, created=False, line=(
-            f"🔄 {product.name}: {old_qty} → {target} {product.get_unit_display()}"
-            f"{supplier_total_note(open_item.order_request, product, target)}"
-        ))
-        changes_made.append(
-            f"עודכן: {product.name} {others + old_qty}→{quantity} {product.get_unit_display()} "
-            f"(הזמנה #{open_item.order_request_id})"
-        )
+    amount = Decimal(str(quantity))
+    current = product_total_in_batch(batch, product)
+    unit = product.get_unit_display()
+    if intent == "reduce":
+        if current <= 0:
+            blocked.append(f"{product.name}: אין כרגע בהזמנה")
+            return "blocked"
+        target = max(current - amount, Decimal(0))
+    elif intent == "update":
+        target = amount
+    else:
+        target = current + amount
+    delta = target - current
+
+    if delta == 0:
+        blocked.append(f"{product.name}: כבר {fmt_qty(current)} {unit} בהזמנה, אין שינוי")
+        return "blocked"
+
+    if delta < 0:
+        changes, problem = reduce_product_in_batch(batch, product, -delta)
+        if problem:
+            blocked.append(_describe_reduction_problem(product, problem))
+            return "blocked"
+        for change in changes:
+            order = change["order"]
+            for line in change["lines"]:
+                _record_order_change(order_changes, order, created=False, line=(
+                    f"🔽 {product.name}: {fmt_qty(line['old'])} → {fmt_qty(line['new'])} {unit}"
+                ), needs_confirmation=change["needs_confirmation"])
+            changes_made.append(
+                f"הופחת: {product.name} {fmt_qty(current)}→{fmt_qty(target)} {unit} "
+                f"({change['lines'][0]['supplier'].name}, הזמנה #{order.id})"
+            )
         return "ok"
 
-    add_quantity = Decimal(str(quantity))
-    update_from = None
-    if intent == "update" and live_items.exists():
-        update_from = sum((i.quantity for i in live_items), Decimal("0"))
-        if add_quantity <= update_from:
-            return "locked"
-        add_quantity -= update_from
-
-    supplier, price, reason = pick_supplier_for_addition(batch, product, add_quantity, region)
+    supplier, price, reason = pick_supplier_for_addition(batch, product, delta, region)
     if supplier is None:
-        return reason if reason == "below_minimum" else "not_found"
+        if reason != "below_minimum":
+            return "not_found"
+        shortfall = addition_shortfall(batch, product, delta, region)
+        if shortfall:
+            blocked.append(
+                f"{product.name}: אצל {shortfall[0].name} המינימום להזמנה הוא ₪{shortfall[0].minimum_order:.2f}. "
+                f"חסר עוד ₪{shortfall[1]:.2f}. אפשר להוסיף עוד מוצרים בסכום הזה ולשלוח שוב"
+            )
+        else:
+            blocked.append(f"{product.name}: מתחת למינימום של הספק")
+        return "blocked"
 
     order, created = get_or_create_supplier_order(batch, supplier)
     orp, item_created = OrderRequestProduct.objects.get_or_create(
         order_request=order, product=product, supplier=supplier,
-        defaults={"quantity": add_quantity, "unit_price": price},
+        defaults={"quantity": delta, "unit_price": price},
     )
     if not item_created:
-        orp.quantity += add_quantity
+        orp.quantity += delta
         orp.save(update_fields=["quantity"])
         SupplierConfirmation.objects.filter(order_request_product=orp).delete()
     _recalc_order_total(order)
-    unit = product.get_unit_display()
-    total_note = supplier_total_note(order, product, add_quantity)
     _record_order_change(order_changes, order, created=created, line=(
-        f"➕ {product.name} x{add_quantity} {unit}{total_note}"
+        f"➕ {product.name} x{fmt_qty(delta)} {unit}{supplier_total_note(order, product, delta)}"
     ))
-    if update_from is not None:
+    if intent == "update" and current > 0:
         changes_made.append(
-            f"עודכן: {product.name} {update_from}→{quantity} {unit}, נוספו {add_quantity} "
+            f"עודכן: {product.name} {fmt_qty(current)}→{fmt_qty(target)} {unit}, נוספו {fmt_qty(delta)} "
             f"({supplier.name}, הזמנה #{order.id})"
         )
     else:
-        changes_made.append(
-            f"נוסף: {product.name} x{add_quantity} {unit} ({supplier.name}, הזמנה #{order.id})"
-        )
+        changes_made.append(f"נוסף: {product.name} x{fmt_qty(delta)} {unit} ({supplier.name}, הזמנה #{order.id})")
     return "ok"
+
+
+def _describe_reduction_problem(product, problem: dict) -> str:
+    reason = problem["reason"]
+    if reason == "below_minimum":
+        return (
+            f"{product.name} לא הופחת: ההזמנה אצל {problem['supplier'].name} תרד ל-₪{problem['after']:.2f}, "
+            f"מתחת למינימום של ₪{problem['minimum']:.2f}. חסר עוד ₪{problem['missing']:.2f}. "
+            "אפשר להוסיף עוד מוצרים בסכום הזה (או יותר) ולנסות שוב"
+        )
+    if reason == "would_empty":
+        return (
+            f"{product.name}: ההפחתה תרוקן לגמרי את ההזמנה אצל {problem['supplier'].name}. "
+            "לביטול הזמנה שלמה פנה אלינו"
+        )
+    return f"{product.name}: אין כרגע בהזמנה"
 
 
 def _recalc_order_total(order) -> None:
@@ -423,33 +445,63 @@ def _recalc_order_total(order) -> None:
     order.save(update_fields=["total_price"])
 
 
-def _record_order_change(order_changes: dict, order, created: bool, line: str) -> None:
-    entry = order_changes.setdefault(order.id, {"order": order, "created": created, "lines": []})
+def _record_order_change(
+    order_changes: dict, order, created: bool, line: str, needs_confirmation: bool = True,
+) -> None:
+    entry = order_changes.setdefault(
+        order.id, {"order": order, "created": created, "lines": [], "needs_confirmation": False},
+    )
     entry["created"] = entry["created"] or created
+    entry["needs_confirmation"] = entry["needs_confirmation"] or needs_confirmation
     entry["lines"].append(line)
 
 
 def _dispatch_modification_batches(order_changes: dict, company: str, address: str) -> None:
     """
-    One consolidated message per changed order (= per supplier), and
-    re-register everything still unconfirmed in that order as pending — not
-    just the changed lines, or the supplier's "אישור" would leave the rest
-    of the order unconfirmed forever.
+    One consolidated message per changed order (= per supplier). When
+    something in it still needs the supplier's answer, everything still
+    unconfirmed in that order is re-registered as pending (not just the
+    changed lines, or the supplier's "אישור" would leave the rest of the order
+    unconfirmed forever). A pure reduction of what the supplier already
+    approved only informs it: no question, and its pending reply (one slot per
+    phone, maybe for another order) is left alone.
     """
+    from apps.orders.models import OrderRequest
+    from .cache import clear_supplier_pending_for_order
     from .supplier_flow import _save_pending_for_order, followup_header
 
     for entry in order_changes.values():
         order = entry["order"]
+        if order.status == OrderRequest.Status.CANCELLED:
+            # Everything in it was reduced away (an addition the customer took back).
+            validators.send_whatsapp_message(
+                order.supplier.whatsapp_number,
+                f"❌ *{company}* ביטל את הזמנה #{order.id}. אין צורך לספק אותה.",
+            )
+            clear_supplier_pending_for_order(order.supplier.whatsapp_number, order.id)
+            continue
+        needs_confirmation = entry["needs_confirmation"]
         if entry["created"]:
             msg_lines = [followup_header(order, company) or f"שלום, *{company}* מבקש להזמין (הזמנה #{order.id}):"]
         else:
             msg_lines = [f"📝 *{company}* עדכן הזמנה #{order.id}:"]
         msg_lines += entry["lines"]
-        if address:
-            msg_lines.append(f"📍 {address}")
-        msg_lines.append("\nאנא ענה *אישור* לאישור.")
+        if needs_confirmation:
+            if address:
+                msg_lines.append(f"📍 {address}")
+            msg_lines.append("\nאנא ענה *אישור* לאישור.")
+        else:
+            msg_lines.append("\nאין צורך באישור נוסף. זו הקטנה של מה שכבר אישרת.")
         validators.send_whatsapp_message(order.supplier.whatsapp_number, "\n".join(msg_lines))
-        _save_pending_for_order(order)
+        if needs_confirmation:
+            _save_pending_for_order(order)
+
+
+def _modification_header(order_changes: dict) -> str:
+    """How the customer is told their changes went out."""
+    if any(entry["needs_confirmation"] for entry in order_changes.values()):
+        return "📨 השינויים נשלחו לספקים לאישור; נעדכן אותך כשהספק יאשר:"
+    return "📨 עדכנו את הספקים:"
 
 
 def _complete_modification_after_clarification(phone: str, extra: dict, resolved_items: list) -> HttpResponse:
@@ -480,15 +532,14 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
     for item in resolved_items:
         product = all_products_map.get(item["product_name"])
         result = (
-            _apply_single_modification(product, item["quantity"], intent, batch, region, order_changes, changes_made)
+            _apply_single_modification(
+                product, item["quantity"], item.get("intent") or intent, batch, region,
+                order_changes, changes_made, blocked,
+            )
             if product else "not_found"
         )
         if result == "not_found":
             errors.append(item["product_name"])
-        elif result == "locked":
-            blocked.append(f"{item['product_name']}: הספק כבר אישר. אפשר להוסיף כמות, אבל להפחית צריך לתאם מולו")
-        elif result == "below_minimum":
-            blocked.append(f"{item['product_name']}: מתחת למינימום של הספק")
 
     _dispatch_modification_batches(
         order_changes,
@@ -498,7 +549,7 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
 
     reply_lines = []
     if changes_made:
-        reply_lines.append("📨 התוספת נשלחה לספקים לאישור; נעדכן אותך כשהספק יאשר:")
+        reply_lines.append(_modification_header(order_changes))
         reply_lines += [f"  • {c}" for c in changes_made]
     if errors:
         reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
@@ -760,14 +811,11 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
                     continue
 
         result = _apply_single_modification(
-            product, item["quantity"], intent, batch, region, order_changes, changes_made
+            product, item["quantity"], item.get("intent") or intent, batch, region,
+            order_changes, changes_made, blocked,
         )
         if result == "not_found":
             errors.append(product.name)
-        elif result == "locked":
-            blocked.append(f"{product.name}: הספק כבר אישר. אפשר להוסיף כמות, אבל להפחית צריך לתאם מולו")
-        elif result == "below_minimum":
-            blocked.append(f"{product.name}: מתחת למינימום של הספק")
 
     if ambiguous:
         # Anything else in the same message already resolved cleanly and, for
@@ -780,7 +828,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
         if changes_made:
             validators.send_whatsapp_message(
                 phone,
-                "📨 השינויים הבאים נשלחו לספקים לאישור; נעדכן אותך כשהספק יאשר:\n" + "\n".join(f"  • {c}" for c in changes_made),
+                _modification_header(order_changes) + "\n" + "\n".join(f"  • {c}" for c in changes_made),
             )
         return _handle_ambiguous_products(
             phone, ambiguous, [],
@@ -795,7 +843,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
 
     reply_lines = []
     if changes_made:
-        reply_lines.append("📨 התוספת נשלחה לספקים לאישור; נעדכן אותך כשהספק יאשר:")
+        reply_lines.append(_modification_header(order_changes))
         reply_lines += [f"  • {c}" for c in changes_made]
     if errors:
         reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")

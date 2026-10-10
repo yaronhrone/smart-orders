@@ -2373,8 +2373,7 @@ class PerSupplierOrderTests(TestCase):
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_modification_intent")
-    def test_reducing_an_item_the_supplier_already_approved_is_refused(self, mock_parse, mock_send):
-        # Asking for MORE after approval is an addition (AddAfterApprovalTests); only less needs the supplier's OK.
+    def test_reducing_an_item_the_supplier_already_approved_is_applied_and_the_supplier_informed(self, mock_parse, mock_send):
         self.order_a.transition_to(OrderRequest.Status.APPROVED)
         mock_parse.return_value = {"intent": "update", "items": [{"product_name": "עגבניה", "quantity": Decimal("5")}]}
 
@@ -2382,8 +2381,11 @@ class PerSupplierOrderTests(TestCase):
             self._post(self.customer_phone, "תעדכן עגבניות ל-5")
 
         self.item_a.refresh_from_db()
-        self.assertEqual(self.item_a.quantity, Decimal("10"))
-        self.assertIn("כבר אישר", mock_send.call_args[0][1])
+        self.order_a.refresh_from_db()
+        self.assertEqual(self.item_a.quantity, Decimal("5"))
+        self.assertEqual(self.order_a.status, OrderRequest.Status.APPROVED)
+        supplier_msgs = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.supplier_a.whatsapp_number]
+        self.assertIn("אין צורך באישור נוסף", supplier_msgs[-1])
 
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
@@ -2768,7 +2770,7 @@ class OneOpenOrderWebhookTests(TestCase):
 
         line = OrderRequestProduct.objects.get(order_request__batch=self.open_order.batch, product=self.lettuce)
         self.assertEqual(line.supplier, self.a)
-        self.assertIn("נשלחה לספקים לאישור", self._messages_to(mock_send, self.PHONE)[-1])
+        self.assertIn("נשלחו לספקים לאישור", self._messages_to(mock_send, self.PHONE)[-1])
 
     @patch("apps.orders.order_parser.parse_customer_order")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
@@ -2783,11 +2785,17 @@ class OneOpenOrderWebhookTests(TestCase):
 
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
-class AddAfterApprovalTests(TestCase):
+class ModificationRulesTests(TestCase):
     """
-    A supplier approved 30 kg and the customer wants more. The extra is never
-    refused: the supplier gets a message that says it is an addition to the
-    order it already approved (with the new total), and approves that.
+    What happens to an open order when the customer asks for more, a
+    different total, or less, with or without the supplier's approval:
+
+    - more is always added, even after approval (own order number; the
+      supplier is told it extends an approved order, with the new total);
+    - "update to N" sets the total; "reduce" takes an amount off, even after
+      approval (the supplier is only informed), unless that pushes a
+      supplier under its minimum, in which case nothing changes and the
+      customer is told how much more is needed.
     """
 
     PHONE = "+972507777777"
@@ -2814,11 +2822,12 @@ class AddAfterApprovalTests(TestCase):
         SupplierConfirmation.objects.create(order_request_product=self.line, confirmed_quantity=Decimal("30"))
         OrderRequest.objects.filter(pk=self.order.pk).update(status=OrderRequest.Status.APPROVED)
 
-    def _customer_says(self, intent, quantity):
+    def _customer_says(self, intent, quantity, product="עגבניה"):
+        self._customer_says_items(intent, [{"product_name": product, "quantity": Decimal(quantity)}])
+
+    def _customer_says_items(self, intent, items):
         with patch("apps.orders.order_parser.parse_modification_intent") as parse:
-            parse.return_value = {
-                "intent": intent, "items": [{"product_name": "עגבניה", "quantity": Decimal(quantity)}],
-            }
+            parse.return_value = {"intent": intent, "items": items}
             self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": "x"})
 
     def _sent_to(self, phone):
@@ -2826,6 +2835,12 @@ class AddAfterApprovalTests(TestCase):
 
     def _new_order(self):
         return OrderRequest.objects.filter(batch=self.order.batch).exclude(pk=self.order.pk).get()
+
+    def _set_minimum(self, amount):
+        self.supplier.minimum_order = Decimal(amount)
+        self.supplier.save(update_fields=["minimum_order"])
+
+    # ─── more ───
 
     def test_adding_after_approval_tells_the_supplier_it_is_an_addition_with_the_total(self):
         self._approve_first_order()
@@ -2839,36 +2854,30 @@ class AddAfterApprovalTests(TestCase):
         msg = self._sent_to(self.supplier.whatsapp_number)[-1]
         self.assertIn(f"מבקש להוסיף להזמנה #{self.order.id} שכבר אישרת", msg)
         self.assertIn(f"הזמנה נפרדת #{new.id}", msg)
-        self.assertIn('עגבניה x20 ק"ג (בסך הכול 50.00 ק"ג)', msg)
+        self.assertIn('עגבניה x20 ק"ג (בסך הכול 50 ק"ג)', msg)
         self.assertNotIn("מבקש להזמין", msg)
         customer = self._sent_to(self.PHONE)[-1]
         self.assertIn("נוסף: עגבניה x20", customer)
-        self.assertNotIn("לא נמצאו", customer)
+        self.assertIn("נעדכן אותך כשהספק יאשר", customer)
 
-    def test_asking_for_more_by_updating_the_quantity_adds_the_difference(self):
+    def test_update_to_a_higher_total_adds_the_difference(self):
         self._approve_first_order()
 
         self._customer_says("update", "50")
 
-        new = self._new_order()
-        self.assertEqual([p.quantity for p in new.products.all()], [Decimal("20.00")])
-        self.assertIn("בסך הכול 50.00", self._sent_to(self.supplier.whatsapp_number)[-1])
+        self.assertEqual([p.quantity for p in self._new_order().products.all()], [Decimal("20")])
+        self.assertIn("בסך הכול 50", self._sent_to(self.supplier.whatsapp_number)[-1])
         customer = self._sent_to(self.PHONE)[-1]
-        self.assertIn("עודכן: עגבניה 30.00→50", customer)
-        self.assertIn("נוספו 20.00", customer)
+        self.assertIn('עודכן: עגבניה 30→50 ק"ג, נוספו 20', customer)
 
-    def test_asking_for_less_after_approval_is_refused_with_a_clear_reason(self):
-        self._approve_first_order()
+    def test_adding_before_approval_also_shows_the_total_so_the_supplier_knows_what_to_confirm(self):
+        self._customer_says("add", "20")
 
-        for quantity in ("20", "30"):
-            with self.subTest(quantity=quantity):
-                self._customer_says("update", quantity)
-
-                customer = self._sent_to(self.PHONE)[-1]
-                self.assertIn("לא בוצע", customer)
-                self.assertIn("להפחית צריך לתאם מולו", customer)
-                self.assertNotIn("לא נמצאו", customer)
-                self.assertEqual(OrderRequest.objects.filter(batch=self.order.batch).count(), 1)
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("50"))
+        msg = self._sent_to(self.supplier.whatsapp_number)[-1]
+        self.assertIn(f"עדכן הזמנה #{self.order.id}", msg)
+        self.assertIn('➕ עגבניה x20 ק"ג (בסך הכול 50 ק"ג)', msg)
 
     def test_updating_the_total_again_while_an_addition_awaits_approval_keeps_the_approved_part(self):
         self._approve_first_order()
@@ -2880,17 +2889,167 @@ class AddAfterApprovalTests(TestCase):
         self.assertEqual([p.quantity for p in new.products.all()], [Decimal("40")])
         self.assertEqual(OrderRequestProduct.objects.get(pk=self.line.pk).quantity, Decimal("30"))
         self.assertIn("(בסך הכול 70", self._sent_to(self.supplier.whatsapp_number)[-1])
-        self.assertIn("עודכן: עגבניה 50.00→70", self._sent_to(self.PHONE)[-1])
+        self.assertIn("עודכן: עגבניה 50→70", self._sent_to(self.PHONE)[-1])
 
-    def test_updating_the_total_below_what_is_already_approved_is_refused(self):
+    def test_a_brand_new_order_still_reads_as_a_new_order(self):
+        other = make_supplier("ספק ב")
+        cucumber = make_product("מלפפון")
+        SupplierProduct.objects.create(supplier=other, product=cucumber, price_per_unit="4.00")
+
+        self._customer_says("add", "10", product="מלפפון")
+
+        msg = self._sent_to(other.whatsapp_number)[-1]
+        self.assertIn("מבקש להזמין (הזמנה #", msg)
+        self.assertNotIn("מבקש להוסיף להזמנה", msg)
+
+    def test_a_new_supplier_below_its_minimum_tells_the_customer_how_much_is_missing(self):
+        other = make_supplier("ספק ב", minimum_order=500)
+        cucumber = make_product("מלפפון")
+        SupplierProduct.objects.create(supplier=other, product=cucumber, price_per_unit="4.00")
+
+        self._customer_says("add", "10", product="מלפפון")  # ₪40 of a ₪500 minimum
+
+        customer = self._sent_to(self.PHONE)[-1]
+        self.assertIn("אצל ספק ב המינימום להזמנה הוא ₪500.00", customer)
+        self.assertIn("חסר עוד ₪460.00", customer)
+        self.assertEqual(self._sent_to(other.whatsapp_number), [])
+
+    # ─── less ───
+
+    def test_reducing_after_approval_is_applied_and_only_informs_the_supplier(self):
+        self._approve_first_order()
+
+        self._customer_says("update", "20")
+
+        self.line.refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("20"))
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+        self.assertEqual(SupplierConfirmation.objects.get(order_request_product=self.line).confirmed_quantity, Decimal("20"))
+        supplier_msg = self._sent_to(self.supplier.whatsapp_number)[-1]
+        self.assertIn('🔽 עגבניה: 30 → 20 ק"ג', supplier_msg)
+        self.assertIn("אין צורך באישור נוסף", supplier_msg)
+        self.assertNotIn("אנא ענה", supplier_msg)
+        self.assertIsNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
+        customer = self._sent_to(self.PHONE)[-1]
+        self.assertIn("עדכנו את הספקים", customer)
+        self.assertIn('הופחת: עגבניה 30→20 ק"ג', customer)
+
+    def test_reduce_by_an_amount(self):
+        self._approve_first_order()
+
+        self._customer_says("reduce", "10")
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("20"))
+
+    def test_reducing_an_order_not_yet_approved_still_asks_the_supplier_to_confirm(self):
+        self._customer_says("reduce", "10")
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("20"))
+        supplier_msg = self._sent_to(self.supplier.whatsapp_number)[-1]
+        self.assertIn("אנא ענה *אישור*", supplier_msg)
+        self.assertIn("נעדכן אותך כשהספק יאשר", self._sent_to(self.PHONE)[-1])
+
+    def test_reducing_takes_the_unconfirmed_addition_before_the_approved_part(self):
         self._approve_first_order()
         self._customer_says("add", "20")
         new = self._new_order()
 
-        self._customer_says("update", "25")  # less than the 30 the supplier approved
+        self._customer_says("update", "25")  # 50 -> 25: the whole pending 20, then 5 off the approved 30
 
-        self.assertEqual([p.quantity for p in new.products.all()], [Decimal("20")])
-        self.assertIn("להפחית צריך לתאם מולו", self._sent_to(self.PHONE)[-1])
+        new.refresh_from_db()
+        self.line.refresh_from_db()
+        self.assertEqual(new.status, OrderRequest.Status.CANCELLED)
+        self.assertEqual(self.line.quantity, Decimal("25"))
+        self.assertIn(f"ביטל את הזמנה #{new.id}", self._sent_to(self.supplier.whatsapp_number)[-2])
+
+    def test_a_reduction_that_drops_a_supplier_under_its_minimum_is_not_applied(self):
+        self._approve_first_order()
+        self._set_minimum("140")
+        sent_before = len(self._sent_to(self.supplier.whatsapp_number))
+
+        self._customer_says("reduce", "10")  # ₪150 -> ₪100, minimum ₪140
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))
+        customer = self._sent_to(self.PHONE)[-1]
+        self.assertIn("עגבניה לא הופחת", customer)
+        self.assertIn("תרד ל-₪100.00", customer)
+        self.assertIn("מתחת למינימום של ₪140.00", customer)
+        self.assertIn("חסר עוד ₪40.00", customer)
+        self.assertEqual(len(self._sent_to(self.supplier.whatsapp_number)), sent_before)  # supplier not bothered
+
+    def test_a_reduction_that_stays_at_or_over_the_minimum_is_applied(self):
+        self._approve_first_order()
+        self._set_minimum("100")
+
+        self._customer_says("reduce", "10")  # exactly ₪100
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("20"))
+
+    def test_an_order_already_under_the_minimum_can_still_be_reduced(self):
+        self._approve_first_order()
+        self._set_minimum("500")  # e.g. sent anyway earlier
+
+        self._customer_says("reduce", "10")
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("20"))
+
+    def test_removing_everything_the_supplier_has_is_refused(self):
+        self._approve_first_order()
+
+        for amount in ("30", "99"):
+            with self.subTest(amount=amount):
+                self._customer_says("reduce", amount)
+                self.line.refresh_from_db()
+                self.assertEqual(self.line.quantity, Decimal("30"))
+                self.assertIn("תרוקן לגמרי", self._sent_to(self.PHONE)[-1])
+
+    def test_reducing_something_that_is_not_in_the_order(self):
+        cucumber = make_product("מלפפון")
+
+        self._customer_says("reduce", "5", product="מלפפון")
+
+        self.assertIn("מלפפון: אין כרגע בהזמנה", self._sent_to(self.PHONE)[-1])
+
+    def test_asking_for_the_same_total_changes_nothing(self):
+        self._approve_first_order()
+        sent_before = len(self.mock_send.call_args_list)
+
+        self._customer_says("update", "30")
+
+        self.assertIn("כבר 30 ק\"ג בהזמנה, אין שינוי", self._sent_to(self.PHONE)[-1])
+        self.assertEqual(len(self._sent_to(self.supplier.whatsapp_number)), 0)
+        self.assertEqual(OrderRequest.objects.filter(batch=self.order.batch).count(), 1)
+
+    # ─── several products in one message ───
+
+    def test_each_product_in_a_message_gets_its_own_action(self):
+        other = make_supplier("ספק ב")
+        cucumber = make_product("מלפפון")
+        SupplierProduct.objects.create(supplier=other, product=cucumber, price_per_unit="4.00")
+        order_b = make_order(self.user, other, batch=self.order.batch, status=OrderRequest.Status.SENT, total_price=Decimal("40"))
+        cuke_line = OrderRequestProduct.objects.create(
+            order_request=order_b, product=cucumber, supplier=other, quantity=Decimal("10"), unit_price=Decimal("4.00"),
+        )
+
+        self._customer_says_items("add", [
+            {"product_name": "עגבניה", "quantity": Decimal("20"), "intent": "add"},
+            {"product_name": "מלפפון", "quantity": Decimal("15"), "intent": "update"},
+        ])
+
+        self.line.refresh_from_db()
+        cuke_line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("50"))   # +20
+        self.assertEqual(cuke_line.quantity, Decimal("15"))   # set to 15
+        self.assertEqual(len(self._sent_to(self.supplier.whatsapp_number)), 1)
+        self.assertEqual(len(self._sent_to(other.whatsapp_number)), 1)
+
+    # ─── the supplier answers ───
 
     def test_supplier_approving_the_addition_approves_that_order_and_tells_the_customer(self):
         self._approve_first_order()
@@ -2902,25 +3061,3 @@ class AddAfterApprovalTests(TestCase):
         new.refresh_from_db()
         self.assertEqual(new.status, OrderRequest.Status.APPROVED)
         self.assertTrue(any("ספק א* אישר" in m for m in self._sent_to(self.PHONE)))
-
-    def test_adding_before_approval_also_shows_the_total_so_the_supplier_knows_what_to_confirm(self):
-        self._customer_says("add", "20")
-
-        self.line.refresh_from_db()
-        self.assertEqual(self.line.quantity, Decimal("50"))
-        msg = self._sent_to(self.supplier.whatsapp_number)[-1]
-        self.assertIn(f"עדכן הזמנה #{self.order.id}", msg)
-        self.assertIn('➕ עגבניה x20 ק"ג (בסך הכול 50.00 ק"ג)', msg)
-
-    def test_a_brand_new_order_still_reads_as_a_new_order(self):
-        # Another supplier, nothing earlier from it in this checkout: no "addition" wording.
-        other = make_supplier("ספק ב")
-        cucumber = make_product("מלפפון")
-        SupplierProduct.objects.create(supplier=other, product=cucumber, price_per_unit="4.00")
-        with patch("apps.orders.order_parser.parse_modification_intent") as parse:
-            parse.return_value = {"intent": "add", "items": [{"product_name": "מלפפון", "quantity": Decimal("10")}]}
-            self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": "x"})
-
-        msg = self._sent_to(other.whatsapp_number)[-1]
-        self.assertIn("מבקש להזמין (הזמנה #", msg)
-        self.assertNotIn("מבקש להוסיף להזמנה", msg)

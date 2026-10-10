@@ -971,17 +971,132 @@ def pick_supplier_for_addition(batch, product, quantity, region):
     if not options:
         return None, None, "unavailable"
 
+    # A supplier already holding this product keeps it (more of the same
+    # product stays in one place), then any supplier already on the order.
+    holders = set(
+        OrderRequestProduct.objects
+        .filter(order_request__batch=batch, product=product)
+        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
+        .values_list("supplier_id", flat=True)
+    )
     in_batch = set(
         batch.orders.exclude(status=OrderRequest.Status.CANCELLED).values_list("supplier_id", flat=True)
     )
-    on_order = [(s, p) for s, p in options if s.id in in_batch]
-    if on_order:
-        supplier, price = min(on_order, key=lambda sp: sp[1])
-        return supplier, price, None
+    for group in (holders, in_batch):
+        on_order = [(s, p) for s, p in options if s.id in group]
+        if on_order:
+            supplier, price = min(on_order, key=lambda sp: sp[1])
+            return supplier, price, None
     for supplier, price in options:  # cheapest first
         if supplier.minimum_order <= quantity * price:
             return supplier, price, None
     return None, None, "below_minimum"
+
+
+def addition_shortfall(batch, product, quantity, region):
+    """
+    For an addition that failed with "below_minimum": the cheapest supplier
+    that carries it and how much more (in money) the order would need to
+    reach that supplier's minimum. Returns (supplier, missing_amount) or None.
+    """
+    suppliers = _get_available_suppliers(batch.user, region)
+    options = _get_price_options([{"product": product, "quantity": quantity}], suppliers).get(product.id, [])
+    if not options:
+        return None
+    supplier, price = options[0]
+    return supplier, max(Decimal(0), supplier.minimum_order - quantity * price)
+
+
+def product_total_in_batch(batch, product) -> Decimal:
+    """How much of `product` the open checkout holds across every supplier (cancelled orders excluded)."""
+    lines = (
+        OrderRequestProduct.objects
+        .filter(order_request__batch=batch, product=product)
+        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
+    )
+    return sum((line.quantity for line in lines), Decimal(0))
+
+
+def reduce_product_in_batch(batch, product, reduce_by):
+    """
+    Take `reduce_by` of `product` out of the open checkout, even after a
+    supplier approved it — unconfirmed lines first, then confirmed ones,
+    newest first. A supplier's approval of a bigger amount still covers a
+    smaller one, so the supplier is only informed.
+
+    Nothing is changed (returns ([], blocked)) when the reduction would:
+    - drop a supplier's whole order in this checkout under its minimum
+      order ("below_minimum", with the amount still missing), unless it was
+      already under before; or
+    - leave a supplier with nothing at all ("would_empty").
+    Otherwise returns (changes, None): one {"order", "lines", "needs_confirmation"}
+    per supplier order touched, each line being {"product", "old", "new", "supplier"}.
+    """
+    lines = list(
+        OrderRequestProduct.objects
+        .filter(order_request__batch=batch, product=product)
+        .exclude(order_request__status=OrderRequest.Status.CANCELLED)
+        .select_related("order_request", "supplier")
+    )
+    total = sum((line.quantity for line in lines), Decimal(0))
+    if total <= 0:
+        return [], {"reason": "not_in_order"}
+    reduce_by = min(Decimal(reduce_by), total)
+
+    confirmed = {
+        c.order_request_product_id: c
+        for c in SupplierConfirmation.objects.filter(order_request_product__in=lines)
+    }
+    approved_statuses = (OrderRequest.Status.APPROVED, OrderRequest.Status.SHIPPED, OrderRequest.Status.DELIVERED)
+
+    def is_approved(line):
+        # Every line of an approved order counts, whether or not a confirmation row exists for it.
+        return line.id in confirmed or line.order_request.status in approved_statuses
+
+    plan, left = [], reduce_by
+    for line in sorted(lines, key=lambda l: (is_approved(l), -l.id)):
+        if left <= 0:
+            break
+        take = min(line.quantity, left)
+        plan.append((line, line.quantity - take))
+        left -= take
+
+    totals = batch_supplier_totals(batch.id)
+    removed = defaultdict(Decimal)
+    suppliers = {}
+    for line, new_qty in plan:
+        removed[line.supplier_id] += (line.quantity - new_qty) * line.unit_price
+        suppliers[line.supplier_id] = line.supplier
+    for supplier_id, value in removed.items():
+        supplier, before = suppliers[supplier_id], totals.get(supplier_id, Decimal(0))
+        after = before - value
+        if after <= 0:
+            return [], {"reason": "would_empty", "supplier": supplier}
+        if supplier.minimum_order and after < supplier.minimum_order <= before:
+            return [], {
+                "reason": "below_minimum", "supplier": supplier, "after": after,
+                "minimum": supplier.minimum_order, "missing": supplier.minimum_order - after,
+            }
+
+    changes = {}
+    for line, new_qty in plan:
+        order, old_qty, was_confirmed = line.order_request, line.quantity, is_approved(line)
+        if new_qty <= 0:
+            line.delete()
+        else:
+            line.quantity = new_qty
+            line.save(update_fields=["quantity"])
+            conf = confirmed.get(line.id)
+            if conf and conf.confirmed_quantity > new_qty:
+                conf.confirmed_quantity = new_qty
+                conf.save(update_fields=["confirmed_quantity"])
+        entry = changes.setdefault(order.id, {"order": order, "lines": [], "needs_confirmation": False})
+        entry["lines"].append({"product": product, "old": old_qty, "new": max(new_qty, Decimal(0)), "supplier": line.supplier})
+        # A line the supplier hasn't approved yet still waits for its answer.
+        entry["needs_confirmation"] = entry["needs_confirmation"] or not was_confirmed
+    for entry in changes.values():
+        entry["order"] = refresh_order_after_changes(entry["order"].id)
+    return list(changes.values()), None
 
 
 def add_items_to_batch(batch, items, region):

@@ -81,18 +81,36 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
 
     prompt = (
         "You are an order-modification parser for a Hebrew vegetable ordering system.\n"
-        "Determine if the customer wants to ADD new products or UPDATE existing quantities.\n"
-        f"Known products: {known}\n"
-        "Rules:\n"
-        "1. 'add'  — customer wants to add something new to the order.\n"
-        "2. 'update' — customer wants to change the quantity of an existing item.\n"
-        "3. 'none' — message is not a modification request.\n"
+        "The customer already has an open order. For EACH product they mention, decide the action "
+        "and what the quantity means:\n"
+        "1. 'add' — MORE of it on top of what they already have. quantity = the amount to ADD. "
+        "Cues: תוסיף, הוסף, עוד, גם, תביא עוד, תגדיל ב-X. A product with a quantity and NO other cue "
+        "(for example 'עגבניות 20' or '50 עגבניות') is ALWAYS 'add', whatever the number: when unsure, "
+        "choose 'add', which never removes anything the customer already has.\n"
+        "2. 'update' — change the TOTAL. quantity = the NEW TOTAL. "
+        "Cues: תעדכן ל-X, שנה ל-X, תהפוך ל-X, תקטין ל-X, במקום 30 תביא 50 (total 50).\n"
+        "3. 'reduce' — LESS of it. quantity = the amount to REMOVE. "
+        "Cues: תוריד X, תפחית X, תקטין ב-X, X פחות.\n"
+        "4. 'none' (top-level only) — the message is not a request to change the order "
+        "(a question, thanks, a greeting).\n"
+        "Examples (product known as עגבניה):\n"
+        '  "תוסיף 20 קילו עגבניות" -> add 20\n'
+        '  "גם 20 עגבניות" -> add 20\n'
+        '  "עגבניות 20" -> add 20\n'
+        '  "50 עגבניות" -> add 50\n'
+        '  "תגדיל את העגבניות ב-10" -> add 10\n'
+        '  "תעדכן עגבניות ל-50" -> update 50\n'
+        '  "במקום 30 עגבניות תביא 50" -> update 50\n'
+        '  "תקטין את העגבניות ל-20" -> update 20\n'
+        '  "תוריד 10 קילו עגבניות" -> reduce 10\n'
+        '  "תוסיף 20 עגבניות ותעדכן מלפפונים ל-15" -> add עגבניה 20 AND update מלפפון 15\n'
         "Match product names to known products using fuzzy Hebrew matching, but always return "
         "the exact known product name from the list above, never a paraphrase or synonym — "
         "the caller looks it up by exact string match against the known list.\n"
         f"{families_note}"
         "Return ONLY JSON: "
-        '{"intent": "add"|"update"|"none", "items": [{"product_name": "...", "quantity": "5.0"}]}\n'
+        '{"intent": "add"|"update"|"reduce"|"none", "items": '
+        '[{"product_name": "...", "quantity": "5.0", "action": "add"|"update"|"reduce"}]}\n'
         f"Message: {message}"
     )
     try:
@@ -107,6 +125,7 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
         logger.error("OpenAI modification parsing failed: %s", exc)
         return {"intent": "none", "items": []}
 
+    actions = ("add", "update", "reduce")
     intent = data.get("intent", "none")
     raw_items = data.get("items", [])
     items = []
@@ -117,11 +136,18 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
             continue
         try:
             qty = Decimal(qty_raw)
-            if qty > 0:
-                items.append({"product_name": name, "quantity": qty})
         except InvalidOperation:
-            pass
+            continue
+        if qty > 0:
+            # Each product carries its own action (a message can mix "add X" and
+            # "update Y to N"); fall back to the message-level intent, then "add".
+            action = entry.get("action") if entry.get("action") in actions else (intent if intent in actions else "add")
+            items.append({"product_name": name, "quantity": qty, "intent": action})
 
+    if intent not in actions:
+        intent = "none"
+    elif items:
+        intent = items[0]["intent"]
     return {"intent": intent, "items": items}
 
 
