@@ -1440,6 +1440,23 @@ class SupplierButtonTests(TestCase):
         self.assertIn("*חסר עגבניה*", mock_send.call_args[0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_tap_that_arrives_with_only_the_button_text_still_works(self, mock_send):
+        self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier.whatsapp_number}", "ButtonText": "חסר", "Body": "חסר",
+        })
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertIn("*חסר עגבניה*", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_bare_missing_word_asks_which_product_instead_of_failing(self, mock_send):
+        self._type("חסר")
+
+        self.assertIn("איזה מוצר חסר", mock_send.call_args[0][1])
+        self.assertNotIn("לא הצלחתי להבין", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_a_missing_product_typed_after_the_tap_is_handled_as_before(self, mock_send):
         self._tap("missing", "חסר")
         with patch("apps.orders.whatsapp.supplier_flow._handle_missing_items") as handler:

@@ -787,6 +787,15 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
 
         return HttpResponse(status=200)
 
+    if not confirmed and not missing and body.strip() in ("חסר", "חסרים", "חסרה"):
+        names = [p["product_name"] for p in products]
+        validators.send_whatsapp_message(
+            phone,
+            f"איזה מוצר חסר בהזמנה #{order_request_id}? שלח *חסר* ואחריו שם המוצר, למשל: *חסר {names[0]}*\n"
+            f"במוצרים: {', '.join(names)}",
+        )
+        return HttpResponse(status=200)
+
     if not confirmed and not missing:
         validators.send_whatsapp_message(
             phone,
