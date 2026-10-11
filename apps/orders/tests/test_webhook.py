@@ -1248,6 +1248,99 @@ class DeliveryConfirmationWordTests(TestCase):
         self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
 
 
+# ─────────────────────── Customer: buttons ───────────────────────
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class CustomerButtonTests(TestCase):
+    """Buttons on the customer's questions: a tap is the same as typing its word, and a
+    decline word on a waiting offer cancels it (it used to confirm a single offer)."""
+
+    PHONE = "+972507777777"
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.supplier_a = make_supplier("ספק א", minimum_order=0)
+        self.supplier_b = make_supplier("ספק ב", minimum_order=0)
+        SupplierProduct.objects.create(supplier=self.supplier_a, product=self.tomato, price_per_unit="5.00")
+        SupplierProduct.objects.create(supplier=self.supplier_b, product=self.tomato, price_per_unit="6.00")
+        self.user = make_user_with_profile(phone=self.PHONE)
+
+    def _tap(self, payload, body=""):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.PHONE}", "ButtonPayload": payload, "Body": body,
+        })
+
+    def _seed_offer(self):
+        cheapest = _scenario("50.00")
+        save_pending_order(
+            self.PHONE, cheapest, cheapest, single_scenario="cheapest",
+            products=[{"product_id": self.tomato.id, "quantity": "10"}],
+            user_id=self.user.id, region=Region.CENTER,
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_decline_word_cancels_a_waiting_offer_instead_of_confirming_it(self, mock_send):
+        self._seed_offer()
+
+        for word in ("ביטול", "לא"):
+            with self.subTest(word=word):
+                self._seed_offer()
+                self._tap("cancel" if word == "ביטול" else "no")
+
+                self.assertIsNone(cache.get(f"whatsapp_order:{self.PHONE}"))
+                self.assertFalse(OrderRequest.objects.filter(user=self.user).exists())
+                self.assertIn("ההזמנה בוטלה", mock_send.call_args[0][1])
+
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_confirm_places_the_order(self, mock_send, mock_send_wa, mock_task):
+        self._seed_offer()
+
+        self._tap("confirm")
+
+        self.assertTrue(OrderRequest.objects.filter(user=self.user).exists())
+
+    @patch("apps.orders.whatsapp.validators.send_with_buttons")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_the_fallback_question_goes_out_with_yes_no_buttons_and_a_tap_answers_it(self, mock_send, mock_buttons):
+        order = make_order(self.user, self.supplier_a, status=OrderRequest.Status.SENT, total_price="50.00")
+        orp = OrderRequestProduct.objects.create(
+            order_request=order, product=self.tomato, supplier=self.supplier_a, quantity="10", unit_price="5.00",
+        )
+        from apps.orders.whatsapp.fallback_flow import _handle_missing_items
+        _handle_missing_items(
+            self.supplier_a, [{"orp_id": orp.id, "product_name": "עגבניה", "quantity": "10", "unit": 'ק"ג'}], order.id,
+        )
+
+        args = mock_buttons.call_args
+        self.assertEqual(args[0][2], "yesno")
+        self.assertIn("ספק ב", args[0][1])
+        self.assertIsNotNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
+        self._tap("yes")
+
+        orp.refresh_from_db()
+        self.assertEqual(orp.supplier, self.supplier_b)  # "yes" moved it, as typing כן does
+        self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
+    @patch("apps.orders.whatsapp.validators.Client")
+    def test_customer_buttons_are_sent_through_the_content_template(self, client_cls):
+        from apps.orders.whatsapp import validators
+        client_cls.return_value.messages.create.return_value.sid = "SM1"
+
+        with override_settings(
+            WHATSAPP_CONTENT_SID_YESNO="HXyesno", WHATSAPP_OVERRIDE_NUMBER=None,
+            TWILIO_ACCOUNT_SID="t", TWILIO_AUTH_TOKEN="t", TWILIO_WHATSAPP_NUMBER="+10000000000",
+        ):
+            validators.send_with_buttons(self.PHONE, "שאלה\nענה *כן* או *לא*.", "yesno", strip=("ענה *כן* או *לא*.",))
+
+        kwargs = client_cls.return_value.messages.create.call_args.kwargs
+        self.assertEqual(kwargs["content_sid"], "HXyesno")
+        self.assertEqual(json.loads(kwargs["content_variables"]), {"1": "שאלה"})
+
+
 # ─────────────────────── Supplier: buttons ───────────────────────
 
 @override_settings(

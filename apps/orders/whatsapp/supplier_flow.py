@@ -27,6 +27,11 @@ SUPPLIER_REPLY_INSTRUCTIONS = (
 )
 
 
+GRACE_SEND_LINE = "• *שלח* — לשלוח כמו שזה; הספק יאשר או יסרב"
+GRACE_CANCEL_LINE = "• *ביטול* — לוותר על הפריטים האלה"
+GRACE_PROMPT = GRACE_SEND_LINE + "\n" + GRACE_CANCEL_LINE + "\n"
+
+
 def _company_details(order):
     profile = getattr(order.user, "profile", None)
     if not profile:
@@ -336,8 +341,8 @@ def process_reroute(
         lines += [
             f"\nמה לעשות? (יש לך {MINIMUM_GRACE_SECONDS // 3600} שעות)",
             "• להוסיף מוצרים/כמות — פשוט שלח אותם (למשל: עוד 10 מלפפון)",
-            "• *שלח* — לשלוח כמו שזה; הספק יאשר או יסרב",
-            "• *ביטול* — לוותר על הפריטים האלה",
+            GRACE_SEND_LINE,
+            GRACE_CANCEL_LINE,
             "אם לא תענה — הפריטים האלה יבוטלו אוטומטית.",
         ]
         outcome = "grace"
@@ -356,7 +361,10 @@ def process_reroute(
     if reroute["unavailable"]:
         lines.append(f"\n❌ אין ספק חלופי עבור: {', '.join(reroute['unavailable'])}")
     if customer_phone:
-        validators.send_whatsapp_message(customer_phone, "\n".join(lines))
+        if outcome == "grace":
+            validators.send_with_buttons(customer_phone, "\n".join(lines), "send", strip=(GRACE_PROMPT,))
+        else:
+            validators.send_whatsapp_message(customer_phone, "\n".join(lines))
     return outcome
 
 
