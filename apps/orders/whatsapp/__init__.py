@@ -57,6 +57,7 @@ from .validators import _normalize_phone, _validate_twilio_signature, send_whats
 
 logger = logging.getLogger(__name__)
 
+SUPPLIER_BUTTON_IDS = {"אישור": "confirm", "חסר": "missing", "ביטול": "cancel", "יצא למשלוח": "shipped"}
 CUSTOMER_BUTTON_WORDS = {"yes": "כן", "no": "לא", "confirm": "אישור", "cancel": "ביטול", "send": "שלח", "received": "קיבלתי"}
 
 
@@ -84,6 +85,13 @@ def whatsapp_webhook(request):
         supplier = Supplier.objects.filter(whatsapp_number=phone).first()
         if supplier:
             payload = request.POST.get("ButtonPayload", "")
+            button_text = request.POST.get("ButtonText", "")
+            if payload or button_text:
+                logger.info(
+                    "Supplier %s tapped a button: payload=%r text=%r body=%r", supplier.id, payload, button_text, body,
+                )
+                # The payload is the button's id; if Twilio doesn't send it, the button's title is as good.
+                payload = payload or SUPPLIER_BUTTON_IDS.get(button_text or body, "")
             if payload:
                 return _handle_supplier_button(phone, supplier, payload, body)
             return _handle_supplier_flow(phone, supplier, body)
