@@ -46,7 +46,7 @@ class ProviderSwitchTests(SimpleTestCase):
 
     def test_each_provider_has_its_default_model_and_llm_model_overrides_it(self):
         with patch.dict(os.environ, {"LLM_PROVIDER": "anthropic", "LLM_MODEL": ""}):
-            self.assertEqual(llm.model(), "claude-opus-5-5")
+            self.assertEqual(llm.model(), "claude-sonnet-5-5")
         with patch.dict(os.environ, {"LLM_PROVIDER": "deepseek", "LLM_MODEL": ""}):
             self.assertEqual(llm.model(), "deepseek-chat")
         with patch.dict(os.environ, {"LLM_PROVIDER": "Anthropic", "LLM_MODEL": "claude-sonnet-5-5"}):
@@ -87,7 +87,7 @@ class AnthropicTests(SimpleTestCase):
 
         self.assertEqual(data["items"][0]["product_name"], "עגבניה")
         kwargs = self.client.beta.messages.create.call_args.kwargs
-        self.assertEqual(kwargs["model"], "claude-opus-5-5")
+        self.assertEqual(kwargs["model"], "claude-sonnet-5-5")
         self.assertEqual(kwargs["fallbacks"], "default")
         self.assertNotIn("temperature", kwargs)  # rejected by this model
 

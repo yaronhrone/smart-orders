@@ -3,7 +3,7 @@ Which AI model the system talks to, chosen in .env so models can be compared
 without touching code:
 
     LLM_PROVIDER=openai     (default)  OPENAI_API_KEY     model gpt-4o-mini
-    LLM_PROVIDER=anthropic             ANTHROPIC_API_KEY  model claude-opus-5-5
+    LLM_PROVIDER=anthropic             ANTHROPIC_API_KEY  model claude-sonnet-5-5
     LLM_PROVIDER=deepseek              DEEPSEEK_API_KEY   model deepseek-chat
     LLM_MODEL=...           optional, overrides the provider's default model
 
@@ -21,7 +21,7 @@ OPENAI, ANTHROPIC, DEEPSEEK = "openai", "anthropic", "deepseek"
 
 DEFAULT_MODELS = {
     OPENAI: "gpt-4o-mini",
-    ANTHROPIC: "claude-opus-5-5",
+    ANTHROPIC: "claude-sonnet-5-5",
     DEEPSEEK: "deepseek-chat",
 }
 API_KEY_ENV = {OPENAI: "OPENAI_API_KEY", ANTHROPIC: "ANTHROPIC_API_KEY", DEEPSEEK: "DEEPSEEK_API_KEY"}
