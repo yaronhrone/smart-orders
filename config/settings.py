@@ -243,6 +243,9 @@ if TESTING:
     ADMIN_WHATSAPP_NUMBER = ""
     WHATSAPP_OVERRIDE_NUMBER = None
     os.environ["OPENAI_API_KEY"] = "test"
+    # Whatever model .env picks, tests run (mocked) against the OpenAI path.
+    os.environ["LLM_PROVIDER"] = "openai"
+    os.environ.pop("LLM_MODEL", None)
     # An in-process cache: Redis would carry cached stats from the previous run into this one.
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 

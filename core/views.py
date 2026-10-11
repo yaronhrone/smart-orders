@@ -1,7 +1,8 @@
 from django.http import JsonResponse
 from django.db import connection
 from django.core.cache import cache
-import os
+
+from core import llm
 
 
 def health_check(request):
@@ -27,7 +28,7 @@ def health_check(request):
         services["redis"] = "failed"
         status = "unhealthy"
 
-    if os.environ.get("OPENAI_API_KEY"):
+    if llm.api_key_configured():
         services["ai_service"] = "ok"
     else:
         services["ai_service"] = "missing_api_key"

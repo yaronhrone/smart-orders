@@ -1,10 +1,9 @@
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 
-from openai import OpenAI
+from core import llm
 
 from .models import AssistantCall
 from .prompt import ERROR_MESSAGE, FALLBACK_MESSAGE, OFF_TOPIC_MESSAGE, build_system_prompt
@@ -12,17 +11,12 @@ from .tools import ToolContext, build_tool_schemas, execute_tool
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o-mini"
 MAX_TOOL_ROUNDS = 5
-
-_client = None
 
 
 def _get_client():
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=30, max_retries=1)
-    return _client
+    """The OpenAI-SDK client (OpenAI or DeepSeek); unused when LLM_PROVIDER=anthropic. See core/llm.py."""
+    return llm.openai_client(timeout=30, max_retries=1)
 
 
 @dataclass
@@ -59,26 +53,19 @@ def ask(ctx: ToolContext, message: str, history: list) -> AskResult:
     started = time.monotonic()
     result = AskResult(answer=FALLBACK_MESSAGE, outcome=AssistantCall.Outcome.ROUND_LIMIT)
     tool_results = []
-    messages = [
-        {"role": "system", "content": build_system_prompt(ctx)},
-        *history,
-        {"role": "user", "content": message},
-    ]
-    schemas = build_tool_schemas(ctx.is_admin)
 
     try:
-        client = _get_client()
+        chat = llm.chat_session(
+            build_system_prompt(ctx), history, message, build_tool_schemas(ctx.is_admin),
+            openai_client_factory=_get_client,
+        )
         for round_no in range(MAX_TOOL_ROUNDS + 1):
-            response = client.chat.completions.create(
-                model=MODEL, temperature=0, messages=messages, tools=schemas,
-            )
-            usage = getattr(response, "usage", None)
-            result.prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
-            result.completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
-            reply = response.choices[0].message
+            reply = chat.send()
+            result.prompt_tokens += reply.prompt_tokens
+            result.completion_tokens += reply.completion_tokens
 
             if not reply.tool_calls:
-                answer = (reply.content or "").strip()
+                answer = reply.text
                 if OFF_TOPIC_MESSAGE in answer:
                     result.answer, result.outcome = OFF_TOPIC_MESSAGE, AssistantCall.Outcome.OFF_TOPIC
                 elif answer:
@@ -88,25 +75,13 @@ def ask(ctx: ToolContext, message: str, history: list) -> AskResult:
                 break
 
             result.tool_rounds += 1
-            messages.append({
-                "role": "assistant",
-                "content": reply.content,
-                "tool_calls": [
-                    {
-                        "id": call.id, "type": "function",
-                        "function": {"name": call.function.name, "arguments": call.function.arguments},
-                    }
-                    for call in reply.tool_calls
-                ],
-            })
+            outputs = []
             for call in reply.tool_calls:
-                output = execute_tool(ctx, call.function.name, call.function.arguments)
+                output = execute_tool(ctx, call.name, call.arguments)
                 tool_results.append(output)
-                result.tools_called.append(call.function.name)
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "content": json.dumps(output, ensure_ascii=False),
-                })
+                result.tools_called.append(call.name)
+                outputs.append((call.id, json.dumps(output, ensure_ascii=False)))
+            chat.add_tool_results(reply, outputs)
     except Exception as exc:
         logger.error("assistant request failed: %s", type(exc).__name__)
         result.answer = ERROR_MESSAGE

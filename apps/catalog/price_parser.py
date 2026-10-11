@@ -1,31 +1,23 @@
 """
-Parses a free-text price message from a supplier using OpenAI,
+Parses a free-text price message from a supplier using the AI model (core/llm.py),
 then updates SupplierProduct prices in the DB.
 
 The catalog is the single source of truth for product names.
 The AI tries to match supplier text to EXISTING catalog names only.
 Unrecognized products are collected and reported to the admin via WhatsApp.
 """
-import json
 import logging
-import os
 from decimal import Decimal, InvalidOperation
-
-from openai import OpenAI
 
 from apps.catalog.models import Product, SupplierProduct
 from apps.catalog.product_matcher import match_price_items
+from core import llm
 
 logger = logging.getLogger(__name__)
 
-_client = None
-
-
 def _get_client():
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _client
+    """The OpenAI-SDK client (OpenAI or DeepSeek); unused when LLM_PROVIDER=anthropic. See core/llm.py."""
+    return llm.openai_client()
 
 
 _UNIT_MAP = {
@@ -96,15 +88,7 @@ def _parse_with_ai(message: str, product_names: list[str]) -> dict:
         f"הודעת הספק: {message}"
     )
 
-    response = _get_client().chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-
-    raw = response.choices[0].message.content
-    data = json.loads(raw)
+    data = llm.complete_json(prompt, _get_client)
 
     return {
         "items": data.get("items", []) if isinstance(data, dict) else [],
