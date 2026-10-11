@@ -15,6 +15,8 @@ from . import validators
 
 logger = logging.getLogger(__name__)
 
+FALLBACK_PROMPT = "ענה *כן* להעברה לספק חלופי, *לא* לביטול."
+
 
 def _recalculate_order_total(order_request_id: int):
     """
@@ -286,7 +288,7 @@ def _handle_missing_items(
             )
 
     if redirects:
-        lines.append("\nענה *כן* להעברה לספק חלופי, *לא* לביטול.")
+        lines.append("\n" + FALLBACK_PROMPT)
         _save_fallback_state(customer_phone, {
             "order_request_id": order_request_id,
             "original_supplier_name": original_supplier.name,
@@ -295,7 +297,10 @@ def _handle_missing_items(
     elif not lines[1:]:
         pass  # Only auto-removed items with no fallback — nothing to confirm
 
-    validators.send_whatsapp_message(customer_phone, "\n".join(lines))
+    if redirects:
+        validators.send_with_buttons(customer_phone, "\n".join(lines), "yesno", strip=(FALLBACK_PROMPT,))
+    else:
+        validators.send_whatsapp_message(customer_phone, "\n".join(lines))
 
 
 def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
@@ -316,10 +321,10 @@ def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
         return _remove_missing_items(phone, state)
     else:
         supplier_name = state.get("original_supplier_name", "הספק")
-        validators.send_whatsapp_message(
+        validators.send_with_buttons(
             phone,
-            f"⏳ ממתין לתשובתך: *{supplier_name}* דיווח על פריטים חסרים.\n"
-            "ענה *כן* להעברה לספק חלופי, *לא* לביטול.",
+            f"⏳ ממתין לתשובתך: *{supplier_name}* דיווח על פריטים חסרים.\n" + FALLBACK_PROMPT,
+            "yesno", strip=(FALLBACK_PROMPT,),
         )
         return HttpResponse(status=200)
 

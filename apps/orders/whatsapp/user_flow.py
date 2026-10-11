@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Ends a message to a supplier that waits for its answer; left out when buttons carry the answer.
 CONFIRM_PROMPT = "\nאנא ענה *אישור* לאישור."
+# Typed instructions that buttons replace (see validators.send_with_buttons).
+MERGE_PROMPT = "ענה *כן* להוספה או *לא* כדי לא להוסיף כלום. "
+ORDER_PROMPT = "ענה *אישור* לאישור. "
 
 # A bare "yes" with no offer waiting means the offer expired (SESSION_TTL) or
 # never existed. Better to say so than to parse "אישור" as a new order.
@@ -82,8 +85,8 @@ def _offer_merge(phone: str, user, batch, products: list, region: str, note: str
         lines.append(f"  • {p['product'].name} x{p['quantity']} {p['product'].get_unit_display()}")
     if note:
         lines.append(f"\n{note}")
-    lines.append("\nענה *כן* להוספה או *לא* כדי לא להוסיף כלום. אפשר להוסיף עד 23:00.")
-    validators.send_whatsapp_message(phone, "\n".join(lines))
+    lines.append("\n" + MERGE_PROMPT + "אפשר להוסיף עד 23:00.")
+    validators.send_with_buttons(phone, "\n".join(lines), "yesno", strip=(MERGE_PROMPT,))
 
 
 def _handle_merge_offer_reply(phone: str, body: str):
@@ -656,7 +659,7 @@ def _suggest_and_respond(
         save_pending_order(phone, cheapest, fewest, single_scenario=recommended, **pending_kwargs)
         msg = _format_scenario("ההזמנה שלך", chosen)
         msg += (
-            "\n\nענה *אישור* לאישור. "
+            "\n\n" + ORDER_PROMPT +
             f"ההצעה תקפה {_offer_validity_text(SESSION_TTL)}; אחרי זה צריך לשלוח את ההזמנה מחדש."
         )
     else:
@@ -698,7 +701,10 @@ def _suggest_and_respond(
     if unavailable_products:
         msg += f"\n\n⚠️ אין ספק שיכול לספק: {', '.join(unavailable_products)} (לא נכלל בהזמנה)"
 
-    validators.send_whatsapp_message(phone, msg)
+    if recommended:
+        validators.send_with_buttons(phone, msg, "confirm", strip=(ORDER_PROMPT,))
+    else:
+        validators.send_whatsapp_message(phone, msg)
     return HttpResponse(status=200)
 
 
@@ -927,6 +933,11 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     data = json.loads(raw)
     cheapest = data["cheapest"]
     fewest = data["fewest"]
+
+    if _normalized_reply(body) in _DECLINE_WORDS:
+        cache.delete(key)
+        validators.send_whatsapp_message(phone, "בסדר, ההזמנה בוטלה. אפשר לשלוח הזמנה חדשה בכל זמן.")
+        return HttpResponse(status=200)
 
     same = cheapest["total_price"] == fewest["total_price"]
     single_scenario = data.get("single_scenario")

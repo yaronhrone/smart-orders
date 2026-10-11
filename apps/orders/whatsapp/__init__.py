@@ -57,6 +57,8 @@ from .validators import _normalize_phone, _validate_twilio_signature, send_whats
 
 logger = logging.getLogger(__name__)
 
+CUSTOMER_BUTTON_WORDS = {"yes": "כן", "no": "לא", "confirm": "אישור", "cancel": "ביטול", "send": "שלח", "received": "קיבלתי"}
+
 
 @csrf_exempt
 def whatsapp_webhook(request):
@@ -86,6 +88,8 @@ def whatsapp_webhook(request):
                 return _handle_supplier_button(phone, supplier, payload, body)
             return _handle_supplier_flow(phone, supplier, body)
 
+        # A customer's tap on a button: the same as typing its word.
+        body = CUSTOMER_BUTTON_WORDS.get(request.POST.get("ButtonPayload", ""), body)
         return _handle_user_flow(phone, body)
     except Exception:
         # An unhandled exception here (most often the outbound Twilio send

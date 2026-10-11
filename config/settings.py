@@ -225,6 +225,10 @@ TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
 # Quick-reply button templates for suppliers (manage.py create_whatsapp_buttons); empty = plain text.
 WHATSAPP_CONTENT_SID_ACTIONS = os.environ.get("WHATSAPP_CONTENT_SID_ACTIONS", "")
 WHATSAPP_CONTENT_SID_SHIPPED = os.environ.get("WHATSAPP_CONTENT_SID_SHIPPED", "")
+WHATSAPP_CONTENT_SID_YESNO = os.environ.get("WHATSAPP_CONTENT_SID_YESNO", "")
+WHATSAPP_CONTENT_SID_CONFIRM = os.environ.get("WHATSAPP_CONTENT_SID_CONFIRM", "")
+WHATSAPP_CONTENT_SID_SEND = os.environ.get("WHATSAPP_CONTENT_SID_SEND", "")
+WHATSAPP_CONTENT_SID_RECEIVED = os.environ.get("WHATSAPP_CONTENT_SID_RECEIVED", "")
 WHATSAPP_OVERRIDE_NUMBER = os.environ.get("WHATSAPP_OVERRIDE_NUMBER")
 TWILIO_SKIP_SIGNATURE_VALIDATION = (
     os.environ.get("TWILIO_SKIP_SIGNATURE_VALIDATION", "0") == "1"
@@ -247,6 +251,10 @@ if TESTING:
     WHATSAPP_OVERRIDE_NUMBER = None
     WHATSAPP_CONTENT_SID_ACTIONS = ""
     WHATSAPP_CONTENT_SID_SHIPPED = ""
+    WHATSAPP_CONTENT_SID_YESNO = ""
+    WHATSAPP_CONTENT_SID_CONFIRM = ""
+    WHATSAPP_CONTENT_SID_SEND = ""
+    WHATSAPP_CONTENT_SID_RECEIVED = ""
     os.environ["OPENAI_API_KEY"] = "test"
     # Whatever model .env picks, tests run (mocked) against the OpenAI path.
     os.environ["LLM_PROVIDER"] = "openai"
