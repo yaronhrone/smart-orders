@@ -1,22 +1,14 @@
-import json
 import logging
-import os
 from decimal import Decimal, InvalidOperation
 
-from openai import OpenAI
-
 from apps.catalog.product_matcher import list_ambiguous_families, match_order_items
+from core import llm
 
 logger = logging.getLogger(__name__)
 
-_client = None
-
-
 def _get_client():
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _client
+    """The OpenAI-SDK client (OpenAI or DeepSeek); unused when LLM_PROVIDER=anthropic. See core/llm.py."""
+    return llm.openai_client()
 
 
 class AmbiguousProductError(Exception):
@@ -114,15 +106,9 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
         f"Message: {message}"
     )
     try:
-        response = _get_client().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-        data = json.loads(response.choices[0].message.content)
+        data = llm.complete_json(prompt, _get_client)
     except Exception as exc:
-        logger.error("OpenAI modification parsing failed: %s", exc)
+        logger.error("AI modification parsing failed: %s", exc)
         return {"intent": "none", "items": []}
 
     actions = ("add", "update", "reduce")
@@ -184,19 +170,12 @@ def parse_customer_order(message: str, product_names: list) -> list:
         )
 
         try:
-            response = _get_client().chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0,
-            )
-            raw = response.choices[0].message.content
-            data = json.loads(raw)
+            data = llm.complete_json(prompt, _get_client)
             if isinstance(data, dict):
                 data = data.get("items", next(iter(data.values()), []))
             items += data if isinstance(data, list) else []
         except Exception as exc:
-            logger.error("OpenAI order parsing failed: %s", exc)
+            logger.error("AI order parsing failed: %s", exc)
             raise ValueError(f"AI parsing failed: {exc}")
 
     if ambiguous:
