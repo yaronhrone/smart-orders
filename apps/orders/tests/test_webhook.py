@@ -3068,7 +3068,7 @@ class ModificationRulesTests(TestCase):
         self.assertIn("אנא ענה *אישור*", supplier_msg)
         self.assertIn("נעדכן אותך כשהספק יאשר", self._sent_to(self.PHONE)[-1])
 
-    def test_taking_back_an_unconfirmed_addition_approves_the_order_again_by_itself(self):
+    def test_taking_back_an_unconfirmed_addition_still_needs_the_supplier_to_confirm(self):
         cucumber = make_product("מלפפון")
         SupplierProduct.objects.create(supplier=self.supplier, product=cucumber, price_per_unit="4.00")
         self._approve_first_order()
@@ -3079,11 +3079,17 @@ class ModificationRulesTests(TestCase):
         self._customer_says("reduce", "10", product="מלפפון")  # changed their mind
 
         self.order.refresh_from_db()
-        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)  # nothing left to confirm
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)  # every change to an approved order is confirmed
         self.assertFalse(self.order.products.filter(product=cucumber).exists())
         msg = self._sent_to(self.supplier.whatsapp_number)[-1]
-        self.assertIn("אין צורך באישור נוסף", msg)
-        self.assertNotIn("אנא ענה", msg)
+        self.assertIn("אנא ענה *אישור*", msg)
+        self.assertNotIn("אין צורך באישור נוסף", msg)
+
+        self._supplier_says("אישור")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+        self.assertEqual(self.order.products.get().quantity, Decimal("30"))
 
     def test_reducing_what_awaits_confirmation_keeps_the_order_waiting(self):
         self._approve_first_order()
