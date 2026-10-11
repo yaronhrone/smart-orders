@@ -687,7 +687,19 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
     confirmed, missing = _parse_supplier_reply(body, products)
     eta_time = _parse_delivery_eta(body)
 
+    from apps.orders.models import OrderRequest
+    from apps.orders.services import order_was_reopened
+    reopened_order = order_was_reopened(OrderRequest.objects.get(id=order_request_id))
+
     CANCEL_KEYWORDS = ["ביטול", "לא מאשר", "מבטל", "cancel", "לא רוצה"]
+    if any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS) and reopened_order:
+        # The order was already approved and only the customer's change is refused: it is
+        # not a cancellation of the order, so no reroute of what was approved and no block.
+        cache.delete(key)
+        validators.send_whatsapp_message(phone, f"✅ קיבלנו: השינויים בהזמנה #{order_request_id} לא אושרו. ההזמנה נשארת כפי שאישרת קודם.")
+        _handle_missing_items(supplier, products, order_request_id, refused_all=True)
+        return HttpResponse(status=200)
+
     if any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS):
         cache.delete(key)
         validators.send_whatsapp_message(phone, "✅ ביטול ההזמנה התקבל.")
@@ -818,7 +830,7 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             # (the pending cache was always cleared below regardless). See
             # the `unaddressed` handling above.
             ack_lines.append(f"  ⏳ {p['product_name']} — טרם אושר")
-    if missing:
+    if missing and not reopened_order:
         ack_lines.append(
             "\n🚫 סימנו את המוצרים החסרים כלא זמינים אצלך — הם לא יוצעו בהזמנות חדשות. "
             "שלח לנו מחיר מעודכן כשהם חוזרים למלאי."
