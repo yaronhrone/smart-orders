@@ -902,6 +902,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         # a completely undocumented feature nobody would discover on their own.
         ack_lines.append(SHIPPED_HINT)
         validators.send_with_buttons(phone, "\n".join(ack_lines), "shipped", strip=(SHIPPED_HINT,))
+    elif unaddressed:
+        # Still waiting for its answer on part of the order: the same buttons again.
+        validators.send_with_buttons(phone, "\n".join(ack_lines), "actions")
     else:
         validators.send_whatsapp_message(phone, "\n".join(ack_lines))
 
