@@ -19,6 +19,9 @@ from . import validators
 logger = logging.getLogger(__name__)
 
 
+# Tells a supplier whose order is approved that it can report the shipment; a button replaces it.
+SHIPPED_HINT = '\n📦 כשההזמנה יוצאת אליכם לדרך, אפשר לשלוח "יצא למשלוח" ונעדכן את הלקוח.'
+
 SUPPLIER_REPLY_INSTRUCTIONS = (
     "\nענה:\n• *אישור* — לאישור הכל\n• *חסר [שם מוצר]* — אם פריט לא זמין\n• *ביטול* — לביטול ההזמנה"
 )
@@ -177,7 +180,9 @@ def notify_supplier_of_items(order, items, *, created: bool, reopened: bool = Fa
     if company_phone:
         msg_lines.append(f"📞 {company_phone}")
     msg_lines.append(SUPPLIER_REPLY_INSTRUCTIONS)
-    validators.send_whatsapp_message(order.supplier.whatsapp_number, "\n".join(msg_lines))
+    validators.send_with_buttons(
+        order.supplier.whatsapp_number, "\n".join(msg_lines), "actions", strip=(SUPPLIER_REPLY_INSTRUCTIONS,),
+    )
     _save_pending_for_order(order)
 
 
@@ -651,12 +656,58 @@ def _handle_eta_update_reply(phone: str, supplier, body: str, eta_request: dict)
     return HttpResponse(status=200)
 
 
+CANCEL_CONFIRM_TTL = 600
+
+
+def _handle_supplier_button(phone: str, supplier, payload: str, body: str) -> HttpResponse:
+    """
+    A tap on one of the buttons sent with an order message (see
+    validators.send_with_buttons): "confirm" and "shipped" are the same as typing
+    אישור / יצא למשלוח; "missing" asks which product, because a button can't say
+    it; "cancel" asks for a second answer first, since cancelling blocks the
+    supplier for 10 days and a button is easy to hit by accident.
+    """
+    if payload == "confirm":
+        return _handle_supplier_flow(phone, supplier, "אישור")
+    if payload == "shipped":
+        return _handle_supplier_flow(phone, supplier, "יצא למשלוח")
+
+    raw = cache.get(f"whatsapp_supplier_pending:{phone}")
+    if payload not in ("missing", "cancel"):
+        return _handle_supplier_flow(phone, supplier, body)
+    if not raw:
+        validators.send_whatsapp_message(phone, "אין כרגע הזמנה שממתינה לתשובה שלך.")
+        return HttpResponse(status=200)
+    data = json.loads(raw)
+    order_id, names = data["order_request_id"], [p["product_name"] for p in data["products"]]
+
+    if payload == "missing":
+        validators.send_whatsapp_message(
+            phone,
+            f"איזה מוצר חסר בהזמנה #{order_id}? שלח *חסר* ואחריו שם המוצר, למשל: *חסר {names[0] if names else 'עגבניות'}*\n"
+            f"במוצרים: {', '.join(names)}",
+        )
+    else:
+        cache.set(f"whatsapp_supplier_cancel_confirm:{phone}", order_id, timeout=CANCEL_CONFIRM_TTL)
+        validators.send_whatsapp_message(
+            phone,
+            f"לבטל את כל הזמנה #{order_id}? ענה *כן* לביטול. כל תשובה אחרת משאירה את ההזמנה כמו שהיא.",
+        )
+    return HttpResponse(status=200)
+
+
 def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse:
     from apps.orders.models import OrderRequestProduct, SupplierConfirmation
 
     eta_request = get_eta_request(phone)
     if eta_request is not None:
         return _handle_eta_update_reply(phone, supplier, body, eta_request)
+
+    cancel_key = f"whatsapp_supplier_cancel_confirm:{phone}"
+    if cache.get(cancel_key) is not None:
+        cache.delete(cancel_key)
+        if body.strip() in ("כן", "yes", "Yes"):
+            body = "ביטול"
 
     key = f"whatsapp_supplier_pending:{phone}"
     raw = cache.get(key)
@@ -849,8 +900,10 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         # Nothing left to do on this order right now — let the supplier know
         # the "shipped" update exists at all; SHIPPING_KEYWORDS is otherwise
         # a completely undocumented feature nobody would discover on their own.
-        ack_lines.append('\n📦 כשההזמנה יוצאת אליכם לדרך, אפשר לשלוח "יצא למשלוח" ונעדכן את הלקוח.')
-    validators.send_whatsapp_message(phone, "\n".join(ack_lines))
+        ack_lines.append(SHIPPED_HINT)
+        validators.send_with_buttons(phone, "\n".join(ack_lines), "shipped", strip=(SHIPPED_HINT,))
+    else:
+        validators.send_whatsapp_message(phone, "\n".join(ack_lines))
 
     # Notify customer about confirmed items
     try:

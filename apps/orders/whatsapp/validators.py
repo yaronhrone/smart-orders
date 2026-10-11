@@ -1,3 +1,4 @@
+import json
 import logging
 
 from django.conf import settings
@@ -25,6 +26,42 @@ def send_whatsapp_message(to_number: str, body: str) -> str:
     to_wa = f"whatsapp:{actual_to}"
     message = client.messages.create(body=body, from_=from_wa, to=to_wa)
     return message.sid
+
+
+def send_with_buttons(to_number: str, text: str, kind: str, strip=()) -> str:
+    """
+    Send `text` to a supplier with WhatsApp quick-reply buttons: kind "actions"
+    (אישור / חסר / ביטול) or "shipped" (יצא למשלוח). The Twilio content template
+    for each kind is created once with `manage.py create_whatsapp_buttons`, its SID
+    in WHATSAPP_CONTENT_SID_ACTIONS / WHATSAPP_CONTENT_SID_SHIPPED.
+
+    `strip`: trailing text that only explains how to reply by typing, left out when
+    buttons carry the answer. Buttons are an addition, never a dependency: with no
+    SID configured, or if Twilio refuses the content message (e.g. the template is
+    not approved for a message that opens the conversation), the supplier gets the
+    plain text, typed instructions included, exactly as before.
+    """
+    content_sid = getattr(settings, f"WHATSAPP_CONTENT_SID_{kind.upper()}", "")
+    if content_sid:
+        body = text
+        for trailer in strip:
+            body = body.replace(trailer, "")
+        body = body.rstrip()
+        try:
+            override = getattr(settings, "WHATSAPP_OVERRIDE_NUMBER", None)
+            actual_to = override if override else to_number
+            if override and override != to_number:
+                body = f"[בדיקה — מיועד ל: {to_number}]\n\n{body}"
+            logger.info("WhatsApp (buttons: %s) -> %s:\n%s", kind, actual_to, body)
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            message = client.messages.create(
+                from_=f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}", to=f"whatsapp:{actual_to}",
+                content_sid=content_sid, content_variables=json.dumps({"1": body}, ensure_ascii=False),
+            )
+            return message.sid
+        except Exception:
+            logger.exception("WhatsApp buttons message to %s failed, sending plain text instead", to_number)
+    return send_whatsapp_message(to_number, text)
 
 
 def _normalize_phone(phone: str) -> str:
