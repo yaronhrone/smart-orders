@@ -32,6 +32,9 @@ ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 _clients = {}
 
+# Tokens used by the latest complete_json() call, for core's compare_models command.
+last_usage = {"input": 0, "output": 0}
+
 
 def provider() -> str:
     name = os.environ.get("LLM_PROVIDER", OPENAI).strip().lower()
@@ -116,6 +119,7 @@ def complete_json(prompt: str, openai_client_factory=None) -> dict:
             system="Reply with a single JSON object only, no other text.",
             messages=[{"role": "user", "content": prompt}],
         )
+        last_usage.update(input=response.usage.input_tokens or 0, output=response.usage.output_tokens or 0)
         return _parse_json(_anthropic_text(response))
 
     client = (openai_client_factory or openai_client)()
@@ -124,6 +128,10 @@ def complete_json(prompt: str, openai_client_factory=None) -> dict:
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0,
+    )
+    usage = getattr(response, "usage", None)
+    last_usage.update(
+        input=int(getattr(usage, "prompt_tokens", 0) or 0), output=int(getattr(usage, "completion_tokens", 0) or 0),
     )
     return json.loads(response.choices[0].message.content)
 
