@@ -41,6 +41,10 @@ class OrderRequest(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Lines the customer removed entirely from this order after the supplier approved
+    # it ({"product_id", "quantity", "unit_price"}), put back if the supplier refuses
+    # the change. Cleared when the order is approved again.
+    removed_lines = models.JSONField(default=list, blank=True)
 
     ALLOWED_TRANSITIONS = {
         Status.PENDING:   [Status.SENT, Status.CANCELLED],
@@ -64,6 +68,12 @@ class OrderRequest(models.Model):
             raise ValueError(f"לא ניתן לעבור מ-'{current_display}' ל-'{new_display}'")
         self.status = new_status
         self.save(update_fields=["status"])
+        if new_status == self.Status.APPROVED:
+            # Whatever was added or changed is now confirmed: no pre-change snapshot to fall back to.
+            self.products.filter(approved_quantity__isnull=False).update(approved_quantity=None)
+            if self.removed_lines:
+                self.removed_lines = []
+                OrderRequest.objects.filter(pk=self.pk).update(removed_lines=[])
 
     def __str__(self):
         return f"הזמנה #{self.id} - {self.user.email} ({self.get_status_display()})"
@@ -83,6 +93,11 @@ class OrderRequestProduct(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
     )
+    # What the supplier had approved before the customer changed an APPROVED order
+    # (the order went back to SENT). Set on every line then; a line created
+    # afterwards stays null, i.e. nothing of it was ever approved. Null on all
+    # lines = an order that was never reopened. Cleared when the order is approved again.
+    approved_quantity = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     @property
     def subtotal(self):

@@ -7,7 +7,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from apps.catalog.models import SupplierProduct, Supplier
 from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct, SupplierConfirmation
@@ -180,6 +180,8 @@ def get_or_reopen_supplier_order(batch, supplier):
         return order, False, False
     approved = batch.orders.filter(supplier=supplier, status=OrderRequest.Status.APPROVED).order_by("-id").first()
     if approved:
+        # Remember what the supplier approved: if it refuses the addition, that is what stays.
+        approved.products.update(approved_quantity=F("quantity"))
         approved.transition_to(OrderRequest.Status.SENT)
         return approved, False, True
     order = OrderRequest.objects.create(
@@ -982,7 +984,7 @@ def checkout_lock(user):
         yield
 
 
-def pick_supplier_for_addition(batch, product, quantity, region):
+def pick_supplier_for_addition(batch, product, quantity, region, exclude_supplier_id=None):
     """
     Supplier for an item added to an open checkout: the cheapest supplier
     already in the batch that carries it, else the cheapest available one
@@ -990,7 +992,9 @@ def pick_supplier_for_addition(batch, product, quantity, region):
     minimum tends to cancel, which blocks it for 10 days).
     Returns (supplier, price, None) or (None, None, "unavailable" | "below_minimum").
     """
-    suppliers = _get_available_suppliers(batch.user, region)
+    suppliers = _get_available_suppliers(
+        batch.user, region, exclude_supplier_ids=[exclude_supplier_id] if exclude_supplier_id else None,
+    )
     options = _get_price_options([{"product": product, "quantity": quantity}], suppliers).get(product.id, [])
     if not options:
         return None, None, "unavailable"
@@ -1046,7 +1050,8 @@ def reduce_product_in_batch(batch, product, reduce_by):
     Take `reduce_by` of `product` out of the open checkout, even after a
     supplier approved it — unconfirmed lines first, then confirmed ones,
     newest first. A supplier's approval of a bigger amount still covers a
-    smaller one, so the supplier is only informed.
+    smaller one, but the supplier must still answer: the reduced lines lose
+    their confirmation and an APPROVED order goes back to SENT.
 
     Nothing is changed (returns ([], blocked)) when the reduction would:
     - drop a supplier's whole order in this checkout under its minimum
@@ -1102,23 +1107,61 @@ def reduce_product_in_batch(batch, product, reduce_by):
                 "minimum": supplier.minimum_order, "missing": supplier.minimum_order - after,
             }
 
+    # Remember what each approved order held, so a supplier refusing the reduction
+    # leaves the order exactly as it approved it (see restore_refused_reduction).
+    approved_orders = {line.order_request_id for line, _ in plan if line.order_request.status == OrderRequest.Status.APPROVED}
+    OrderRequestProduct.objects.filter(order_request_id__in=approved_orders).update(approved_quantity=F("quantity"))
+
     changes = {}
     for line, new_qty in plan:
         order, old_qty, was_confirmed = line.order_request, line.quantity, is_approved(line)
+        # Reducing what the supplier approved needs a new answer: without one we can't
+        # be sure it saw the change. (A shipped/delivered order is only informed.)
+        reopen = was_confirmed and (
+            order.status == OrderRequest.Status.APPROVED
+            or (order.status == OrderRequest.Status.SENT and line.approved_quantity is not None)
+        )
         if new_qty <= 0:
+            if reopen:
+                approved_qty = line.approved_quantity if line.approved_quantity is not None else old_qty
+                current = OrderRequest.objects.get(id=order.id)
+                current.removed_lines = [*current.removed_lines, {
+                    "product_id": product.id, "quantity": str(approved_qty), "unit_price": str(line.unit_price),
+                }]
+                current.save(update_fields=["removed_lines"])
             line.delete()
         else:
             line.quantity = new_qty
             line.save(update_fields=["quantity"])
-            conf = confirmed.get(line.id)
-            if conf and conf.confirmed_quantity > new_qty:
-                conf.confirmed_quantity = new_qty
-                conf.save(update_fields=["confirmed_quantity"])
-        entry = changes.setdefault(order.id, {"order": order, "lines": [], "needs_confirmation": False})
+            if reopen:
+                SupplierConfirmation.objects.filter(order_request_product=line).delete()
+            else:
+                conf = confirmed.get(line.id)
+                if conf and conf.confirmed_quantity > new_qty:
+                    conf.confirmed_quantity = new_qty
+                    conf.save(update_fields=["confirmed_quantity"])
+        entry = changes.setdefault(
+            order.id, {"order": order, "lines": [], "needs_confirmation": False, "reopen": False},
+        )
         entry["lines"].append({"product": product, "old": old_qty, "new": max(new_qty, Decimal(0)), "supplier": line.supplier})
         # A line the supplier hasn't approved yet still waits for its answer.
-        entry["needs_confirmation"] = entry["needs_confirmation"] or not was_confirmed
+        entry["needs_confirmation"] = entry["needs_confirmation"] or not was_confirmed or reopen
+        entry["reopen"] = entry["reopen"] or reopen
     for entry in changes.values():
+        order_id = entry.pop("reopen") and entry["order"].id
+        if order_id:
+            # The supplier answers "אישור" on the unconfirmed lines; if the reduced line was
+            # removed entirely, nothing is left unconfirmed, so the whole order is re-confirmed.
+            current = OrderRequest.objects.get(id=order_id)
+            lines = list(current.products.all())
+            confirmed_ids = set(
+                SupplierConfirmation.objects.filter(order_request_product__in=lines)
+                .values_list("order_request_product_id", flat=True)
+            )
+            if lines and all(l.id in confirmed_ids for l in lines):
+                SupplierConfirmation.objects.filter(order_request_product__in=lines).delete()
+            if current.status == OrderRequest.Status.APPROVED:
+                current.transition_to(OrderRequest.Status.SENT)
         entry["order"] = refresh_order_after_changes(entry["order"].id)
         # Nothing left to confirm (e.g. only an unconfirmed addition was taken back and the rest
         # is approved): the supplier is just told, and the order is approved again.
@@ -1126,6 +1169,96 @@ def reduce_product_in_batch(batch, product, reduce_by):
             entry["needs_confirmation"] and entry["order"].status == OrderRequest.Status.SENT
         )
     return list(changes.values()), None
+
+
+def order_was_reopened(order) -> bool:
+    """The customer changed this order after the supplier approved it, and the supplier hasn't answered yet."""
+    return order.status == OrderRequest.Status.SENT and (
+        bool(order.removed_lines) or order.products.filter(approved_quantity__isnull=False).exists()
+    )
+
+
+def restore_refused_reduction(line):
+    """
+    The supplier refused to reduce `line`: it goes back to what the supplier
+    approved, confirmed at that. Returns (old, restored) quantities.
+    """
+    old = line.quantity
+    line.quantity = line.approved_quantity
+    line.save(update_fields=["quantity"])
+    SupplierConfirmation.objects.update_or_create(
+        order_request_product=line, defaults={"confirmed_quantity": line.quantity},
+    )
+    return old, line.quantity
+
+
+def restore_removed_lines(order):
+    """
+    Put back, confirmed, every line the customer removed entirely from an order
+    the supplier had approved (the supplier refused the change). Returns
+    [(product, quantity)].
+    """
+    from apps.catalog.models import Product
+
+    restored = []
+    for removed in order.removed_lines:
+        product = Product.objects.filter(id=removed["product_id"]).first()
+        if not product:
+            continue
+        quantity = Decimal(removed["quantity"])
+        line = add_item_to_order(order, product, order.supplier, quantity, Decimal(removed["unit_price"]))
+        SupplierConfirmation.objects.update_or_create(
+            order_request_product=line, defaults={"confirmed_quantity": line.quantity},
+        )
+        restored.append((product, quantity))
+    order.removed_lines = []
+    order.save(update_fields=["removed_lines"])
+    return restored
+
+
+def reject_addition(line, rejected_qty, new_quantity):
+    """
+    The supplier of a reopened order refused `rejected_qty` of `line` (an
+    addition or the higher total). The line goes back to `new_quantity`
+    (removed if 0) and counts as confirmed at that, so what the supplier
+    approved before stays approved; the refused quantity is offered to
+    another supplier of the same checkout instead (never the refusing one).
+
+    Returns {"product", "quantity", "supplier", "order", "created", "reopened"} when another
+    supplier took it, else {"product", "quantity", "supplier": None, "reason"} with the
+    reason from pick_supplier_for_addition.
+    """
+    order, product, rejected_qty = line.order_request, line.product, Decimal(rejected_qty)
+    batch = order.batch
+    region = getattr(getattr(order.user, "profile", None), "region", None)
+    refusing_supplier_id = order.supplier_id
+
+    if new_quantity <= 0:
+        line.delete()
+    else:
+        line.quantity = new_quantity
+        line.save(update_fields=["quantity"])
+        SupplierConfirmation.objects.update_or_create(
+            order_request_product=line, defaults={"confirmed_quantity": new_quantity},
+        )
+    refresh_order_after_changes(order.id)
+
+    supplier, price, reason = pick_supplier_for_addition(
+        batch, product, rejected_qty, region, exclude_supplier_id=refusing_supplier_id,
+    )
+    if supplier is None:
+        return {"product": product, "quantity": rejected_qty, "supplier": None, "reason": reason}
+
+    target, created, reopened = get_or_reopen_supplier_order(batch, supplier)
+    existing = target.products.filter(product=product).first()
+    if existing:
+        SupplierConfirmation.objects.filter(order_request_product=existing).delete()
+    add_item_to_order(target, product, supplier, rejected_qty, price)
+    target = refresh_order_after_changes(target.id)
+    return {
+        "product": product, "quantity": rejected_qty, "supplier": supplier,
+        "order": target, "created": created, "reopened": reopened,
+    }
 
 
 def add_items_to_batch(batch, items, region):

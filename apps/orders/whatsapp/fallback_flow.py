@@ -2,6 +2,7 @@ import json
 import logging
 from collections import defaultdict
 from decimal import Decimal
+from types import SimpleNamespace
 
 from django.http import HttpResponse
 
@@ -29,7 +30,97 @@ def _recalculate_order_total(order_request_id: int):
         logger.error("_recalculate_order_total(%s): %s", order_request_id, exc)
 
 
-def _handle_missing_items(original_supplier, missing_products: list, order_request_id: int, partial_products: list = None):
+def _notify_admin(text: str) -> None:
+    from django.conf import settings
+    admin_number = getattr(settings, "ADMIN_WHATSAPP_NUMBER", "")
+    if not admin_number:
+        logger.warning("ADMIN_WHATSAPP_NUMBER לא מוגדר — לא נשלחה התראה: %s", text)
+        return
+    try:
+        validators.send_whatsapp_message(admin_number, text)
+    except Exception as exc:
+        logger.error("שגיאה בשליחת התראה לאדמין: %s", exc)
+
+
+def _handle_refused_additions(
+    original_supplier, order, customer_phone, missing_products, partial_products, restore_removed=False,
+) -> None:
+    """
+    The supplier answered an order the customer had changed after its approval,
+    and refused part of the change. What it approved before stays as it was:
+    - a refused addition (or higher total) goes to another supplier on its own
+      (no question to the customer, who already asked for it), or, when no
+      supplier can take it, the customer is told it wasn't approved;
+    - a refused reduction is undone: the order keeps what the supplier approved
+      (we never record a reduction the supplier didn't accept), and the admin is
+      alerted to follow up. `restore_removed` (the supplier refused the whole
+      change) also puts back lines the customer removed entirely.
+    """
+    from apps.orders.models import OrderRequestProduct
+    from apps.orders.services import refresh_order_after_changes, reject_addition, restore_refused_reduction, restore_removed_lines
+    from .supplier_flow import fmt_qty, notify_supplier_of_items
+
+    # Read every line before changing anything: once the order is approved again its snapshot is cleared.
+    def load(item):
+        return OrderRequestProduct.objects.select_related("product", "order_request__batch").filter(
+            id=int(item["orp_id"])).first()
+    missing_lines = [l for l in map(load, missing_products) if l]
+    partial_lines = [(l, Decimal(str(pp["quantity"]))) for l, pp in zip(map(load, partial_products), partial_products) if l]
+
+    reductions = []  # (product, from, back to)
+    if restore_removed:
+        reductions += [(product, Decimal(0), qty) for product, qty in restore_removed_lines(order)]
+    results = []
+    for line in missing_lines:
+        approved = line.approved_quantity
+        if approved is not None and approved > line.quantity:
+            old, restored = restore_refused_reduction(line)
+            reductions.append((line.product, old, restored))
+            continue
+        base = min(approved or Decimal(0), line.quantity)
+        if line.quantity - base <= 0:
+            # Nothing of it was changed (re-confirmation of an untouched line): it stays approved.
+            if approved is not None:
+                restore_refused_reduction(line)
+            continue
+        results.append(reject_addition(line, line.quantity - base, base))
+    for line, remaining in partial_lines:
+        results.append(reject_addition(line, remaining, line.quantity))
+    refresh_order_after_changes(order.id)
+
+    if not results and not reductions:
+        return
+    lines = [f"⚠️ *{original_supplier.name}* לא אישר את השינויים בהזמנה #{order.id}. מה שאושר קודם נשאר כמו שהיה:"]
+    for product, old, restored in reductions:
+        unit = product.get_unit_display()
+        lines.append(f"\n• {product.name} — ההפחתה לא אושרה, נשאר {fmt_qty(restored)} {unit}")
+    if reductions:
+        lines.append("\nהמנהל עודכן ויחזור אליך.")
+        company = getattr(getattr(order.user, "profile", None), "company_name", "") or order.user
+        _notify_admin(
+            f"⚠️ *{original_supplier.name}* סירב להפחתה בהזמנה #{order.id} ({company}). "
+            "ההזמנה נשארה בלי ההפחתה:\n"
+            + "\n".join(f"• {p.name}: {fmt_qty(old)} → נשאר {fmt_qty(r)} {p.get_unit_display()}" for p, old, r in reductions)
+            + f"\n📞 ספק: {original_supplier.phone}"
+        )
+    for r in results:
+        unit = r["product"].get_unit_display()
+        what = f"{r['product'].name} x{fmt_qty(r['quantity'])} {unit}"
+        if r["supplier"] is None:
+            lines.append(f"\n• {what} — לא אושר, ולא נמצא ספק חלופי")
+            continue
+        lines.append(f"\n• {what} — הועבר ל-{r['supplier'].name} (הזמנה #{r['order'].id})")
+        notify_supplier_of_items(
+            r["order"], [SimpleNamespace(product=r["product"], quantity=r["quantity"], supplier=r["supplier"])],
+            created=r["created"], reopened=r["reopened"],
+        )
+    validators.send_whatsapp_message(customer_phone, "\n".join(lines))
+
+
+def _handle_missing_items(
+    original_supplier, missing_products: list, order_request_id: int, partial_products: list = None,
+    refused_all: bool = False,
+):
     """
     Find fallback suppliers for items the supplier can't fulfill and notify the customer.
     missing_products: fully missing (entire ORP needs redirect).
@@ -57,6 +148,13 @@ def _handle_missing_items(original_supplier, missing_products: list, order_reque
         if customer_profile and customer_profile.phone else None
     )
     if not customer_phone:
+        return
+
+    from apps.orders.services import order_was_reopened
+    if order_was_reopened(order):
+        _handle_refused_additions(
+            original_supplier, order, customer_phone, missing_products, partial_products, restore_removed=refused_all,
+        )
         return
 
     redirects = []
