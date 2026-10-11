@@ -629,7 +629,7 @@ def _handle_mark_shipped(phone: str, supplier, order, body: str = "") -> HttpRes
         msg = f"📦 ההזמנה שלך #{order.id} יצאה למשלוח מ-{supplier.name}!"
         if eta_time:
             msg += f"\n🕐 צפויה להגיע עד השעה {eta_time.strftime('%H:%M')}"
-        validators.send_whatsapp_message(customer_phone, msg)
+        validators.send_with_buttons(customer_phone, msg, "received")
     return HttpResponse(status=200)
 
 
@@ -657,9 +657,10 @@ def _handle_eta_update_reply(phone: str, supplier, body: str, eta_request: dict)
     validators.send_whatsapp_message(
         phone, f"✅ תודה, עדכנו את הלקוח שהזמנה #{order_id} צפויה להגיע עד {eta_str}."
     )
-    validators.send_whatsapp_message(
+    validators.send_with_buttons(
         eta_request["customer_phone"],
         f"🕐 עדכון מ-{supplier.name}: הזמנה #{order_id} צפויה להגיע עד {eta_str}.",
+        "received",
     )
     return HttpResponse(status=200)
 

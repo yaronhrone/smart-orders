@@ -1325,6 +1325,27 @@ class CustomerButtonTests(TestCase):
         self.assertEqual(orp.supplier, self.supplier_b)  # "yes" moved it, as typing כן does
         self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
 
+    @patch("apps.orders.whatsapp.validators.send_with_buttons")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_the_shipped_notice_has_a_received_button_and_a_tap_marks_it_delivered(self, mock_send, mock_buttons):
+        order = make_order(self.user, self.supplier_a, status=OrderRequest.Status.APPROVED, total_price="50.00")
+        OrderRequestProduct.objects.create(
+            order_request=order, product=self.tomato, supplier=self.supplier_a, quantity="10", unit_price="5.00",
+        )
+
+        self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier_a.whatsapp_number}", "Body": "יצא למשלוח",
+        })
+
+        phone, text, kind = mock_buttons.call_args[0]
+        self.assertEqual(kind, "received")
+        self.assertIn(f"#{order.id}", text)
+
+        self._tap("received", "קיבלתי")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, OrderRequest.Status.DELIVERED)
+
     @patch("apps.orders.whatsapp.validators.Client")
     def test_customer_buttons_are_sent_through_the_content_template(self, client_cls):
         from apps.orders.whatsapp import validators
