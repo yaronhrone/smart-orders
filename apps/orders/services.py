@@ -1111,18 +1111,20 @@ def reduce_product_in_batch(batch, product, reduce_by):
     # leaves the order exactly as it approved it (see restore_refused_reduction).
     approved_orders = {line.order_request_id for line, _ in plan if line.order_request.status == OrderRequest.Status.APPROVED}
     OrderRequestProduct.objects.filter(order_request_id__in=approved_orders).update(approved_quantity=F("quantity"))
+    # Orders already reopened by an earlier change: any further change, even taking back
+    # an addition the supplier hasn't confirmed, needs its answer too.
+    reopened_orders = {line.order_request_id for line, _ in plan if order_was_reopened(line.order_request)}
 
     changes = {}
     for line, new_qty in plan:
         order, old_qty, was_confirmed = line.order_request, line.quantity, is_approved(line)
         # Reducing what the supplier approved needs a new answer: without one we can't
         # be sure it saw the change. (A shipped/delivered order is only informed.)
-        reopen = was_confirmed and (
-            order.status == OrderRequest.Status.APPROVED
-            or (order.status == OrderRequest.Status.SENT and line.approved_quantity is not None)
-        )
+        reopen = (was_confirmed and order.status == OrderRequest.Status.APPROVED) or order.id in reopened_orders
         if new_qty <= 0:
-            if reopen:
+            # Only what the supplier had approved is put back if it refuses; a removed
+            # unconfirmed addition is simply gone.
+            if reopen and (order.status == OrderRequest.Status.APPROVED or line.approved_quantity is not None):
                 approved_qty = line.approved_quantity if line.approved_quantity is not None else old_qty
                 current = OrderRequest.objects.get(id=order.id)
                 current.removed_lines = [*current.removed_lines, {
