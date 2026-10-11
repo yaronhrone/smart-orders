@@ -2,7 +2,7 @@
 Compares AI models on the same labeled order messages: how accurate, how fast, how much.
 
     python manage.py compare_models
-    python manage.py compare_models --models openai:gpt-4o-mini anthropic:claude-sonnet-5-5 deepseek:deepseek-chat
+    python manage.py compare_models --models openai:gpt-4o-mini anthropic:claude-sonnet-5-5
     python manage.py compare_models --repeat 3
 
 Needs the key of every provider compared in .env (OPENAI_API_KEY, ANTHROPIC_API_KEY,
@@ -58,7 +58,7 @@ PRICES = {
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
 }
-DEFAULT_MODELS = ["openai", "anthropic", "deepseek"]
+DEFAULT_MODELS = ["openai", "anthropic"]  # deepseek works too, but is left out on purpose (data goes to China)
 
 
 def _normalise(items):
