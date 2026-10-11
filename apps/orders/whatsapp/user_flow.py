@@ -28,6 +28,9 @@ from . import validators
 
 logger = logging.getLogger(__name__)
 
+# Ends a message to a supplier that waits for its answer; left out when buttons carry the answer.
+CONFIRM_PROMPT = "\nאנא ענה *אישור* לאישור."
+
 # A bare "yes" with no offer waiting means the offer expired (SESSION_TTL) or
 # never existed. Better to say so than to parse "אישור" as a new order.
 _CONFIRM_WORDS = {"אישור", "אשר", "מאשר", "אני מאשר", "כן", "אוקי", "אוקיי", "ok", "okay"}
@@ -496,10 +499,13 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
         if needs_confirmation:
             if address:
                 msg_lines.append(f"📍 {address}")
-            msg_lines.append("\nאנא ענה *אישור* לאישור.")
+            msg_lines.append(CONFIRM_PROMPT)
+            validators.send_with_buttons(
+                order.supplier.whatsapp_number, "\n".join(msg_lines), "actions", strip=(CONFIRM_PROMPT,),
+            )
         else:
             msg_lines.append("\nאין צורך באישור נוסף. זו הקטנה של מה שכבר אישרת.")
-        validators.send_whatsapp_message(order.supplier.whatsapp_number, "\n".join(msg_lines))
+            validators.send_whatsapp_message(order.supplier.whatsapp_number, "\n".join(msg_lines))
         if needs_confirmation:
             _save_pending_for_order(order)
 

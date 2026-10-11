@@ -2,6 +2,7 @@ import json
 import logging
 
 from celery import shared_task
+from django.conf import settings
 
 from apps.orders.whatsapp import send_whatsapp_message
 
@@ -12,7 +13,12 @@ logger = logging.getLogger(__name__)
 def send_supplier_order_notification_task(self, phone: str, message: str):
     """Send a supplier its order-notification WhatsApp message, retrying on failure."""
     try:
-        send_whatsapp_message(phone, message)
+        if settings.WHATSAPP_CONTENT_SID_ACTIONS:
+            from apps.orders.whatsapp.supplier_flow import SUPPLIER_REPLY_INSTRUCTIONS
+            from apps.orders.whatsapp.validators import send_with_buttons
+            send_with_buttons(phone, message, "actions", strip=(SUPPLIER_REPLY_INSTRUCTIONS,))
+        else:
+            send_whatsapp_message(phone, message)
     except Exception as exc:
         logger.error(
             "Failed to notify supplier %s of new order (attempt %s/%s): %s",

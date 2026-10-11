@@ -11,6 +11,7 @@ Cache is overridden to LocMemCache so tests are isolated.
 import json
 from datetime import datetime, time as dtime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -1245,6 +1246,136 @@ class DeliveryConfirmationWordTests(TestCase):
         self.assertEqual(self.order.status, OrderRequest.Status.DELIVERED)
         mock_send.assert_called_once()
         self.assertIn("אושרה כנמסרה", mock_send.call_args[0][1])
+
+
+# ─────────────────────── Supplier: buttons ───────────────────────
+
+@override_settings(
+    CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True,
+    WHATSAPP_CONTENT_SID_ACTIONS="HXactions", WHATSAPP_CONTENT_SID_SHIPPED="HXshipped",
+    WHATSAPP_OVERRIDE_NUMBER=None, TWILIO_ACCOUNT_SID="test", TWILIO_AUTH_TOKEN="test", TWILIO_WHATSAPP_NUMBER="+10000000000",
+)
+class SupplierButtonTests(TestCase):
+    """Quick-reply buttons on the supplier's messages: sent through a Twilio content
+    template (text fallback when that fails), and a tap does what typing the word does."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = make_user_with_profile()
+        self.tomato = make_product("עגבניה")
+        self.supplier = make_supplier("ספק א")
+        self.order = make_order(self.user, self.supplier, total_price="100.00", status=OrderRequest.Status.SENT)
+        self.orp = OrderRequestProduct.objects.create(
+            order_request=self.order, product=self.tomato, supplier=self.supplier, quantity="20", unit_price="5.00",
+        )
+        save_supplier_pending_order(
+            supplier_phone=self.supplier.whatsapp_number, order_request_id=self.order.id,
+            products=[{"orp_id": self.orp.id, "product_name": "עגבניה", "quantity": "20", "unit": 'ק"ג'}],
+        )
+
+    def _tap(self, payload, body=""):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier.whatsapp_number}", "ButtonPayload": payload, "Body": body or payload,
+        })
+
+    def _type(self, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.supplier.whatsapp_number}", "Body": body})
+
+    @patch("apps.orders.whatsapp.validators.Client")
+    def test_the_order_message_goes_out_with_buttons_and_without_the_typed_instructions(self, client_cls):
+        from apps.orders.whatsapp.supplier_flow import notify_supplier_of_items
+        client_cls.return_value.messages.create.return_value.sid = "SM1"
+
+        notify_supplier_of_items(
+            self.order, [SimpleNamespace(product=self.tomato, quantity=Decimal("5"), supplier=self.supplier)],
+            created=False, reopened=False,
+        )
+
+        kwargs = client_cls.return_value.messages.create.call_args.kwargs
+        self.assertEqual(kwargs["content_sid"], "HXactions")
+        body = json.loads(kwargs["content_variables"])["1"]
+        self.assertIn("עגבניה", body)
+        self.assertNotIn("ענה:", body)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.Client")
+    def test_when_twilio_refuses_the_buttons_the_supplier_gets_the_plain_text(self, client_cls, mock_send):
+        from apps.orders.whatsapp.supplier_flow import notify_supplier_of_items
+        client_cls.return_value.messages.create.side_effect = Exception("template not approved")
+
+        notify_supplier_of_items(
+            self.order, [SimpleNamespace(product=self.tomato, quantity=Decimal("5"), supplier=self.supplier)],
+            created=False, reopened=False,
+        )
+
+        self.assertIn("*אישור* — לאישור הכל", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_confirm_confirms_the_order(self, mock_send):
+        self._tap("confirm", "אישור")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_missing_asks_which_product(self, mock_send):
+        self._tap("missing", "חסר")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertIn("*חסר עגבניה*", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_missing_product_typed_after_the_tap_is_handled_as_before(self, mock_send):
+        self._tap("missing", "חסר")
+        with patch("apps.orders.whatsapp.supplier_flow._handle_missing_items") as handler:
+            self._type("חסר עגבניה")
+
+        handler.assert_called_once()
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_cancel_only_asks_and_a_yes_cancels(self, mock_send):
+        self._tap("cancel", "ביטול")
+
+        self.supplier.refresh_from_db()
+        self.assertIsNone(self.supplier.blocked_until)  # nothing cancelled by the tap
+        self.assertIn("ענה *כן* לביטול", mock_send.call_args[0][1])
+
+        with patch("apps.orders.whatsapp.supplier_flow.process_reroute") as reroute:
+            self._type("כן")
+
+        reroute.assert_called_once()
+        self.supplier.refresh_from_db()
+        self.assertIsNotNone(self.supplier.blocked_until)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_any_other_answer_after_the_cancel_tap_keeps_the_order(self, mock_send):
+        self._tap("cancel", "ביטול")
+
+        with patch("apps.orders.whatsapp.supplier_flow.process_reroute") as reroute:
+            self._type("אישור")
+
+        reroute.assert_not_called()
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_shipped_marks_an_approved_order_shipped(self, mock_send):
+        self._tap("confirm", "אישור")
+        mock_send.reset_mock()
+
+        self._tap("shipped", "יצא למשלוח")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SHIPPED)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_tap_with_nothing_waiting_says_so(self, mock_send):
+        cache.clear()
+
+        self._tap("missing", "חסר")
+
+        self.assertIn("אין כרגע הזמנה שממתינה", mock_send.call_args[0][1])
 
 
 # ─────────────────────── Supplier: confirmation flow ───────────────────────

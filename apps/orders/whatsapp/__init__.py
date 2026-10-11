@@ -31,6 +31,7 @@ from .fallback_flow import (
 )
 from .supplier_flow import (
     MISSING_KEYWORDS,
+    _handle_supplier_button,
     _handle_supplier_flow,
     _handle_supplier_flow_inner,
     _handle_supplier_price_update,
@@ -80,6 +81,9 @@ def whatsapp_webhook(request):
         from apps.catalog.models import Supplier
         supplier = Supplier.objects.filter(whatsapp_number=phone).first()
         if supplier:
+            payload = request.POST.get("ButtonPayload", "")
+            if payload:
+                return _handle_supplier_button(phone, supplier, payload, body)
             return _handle_supplier_flow(phone, supplier, body)
 
         return _handle_user_flow(phone, body)

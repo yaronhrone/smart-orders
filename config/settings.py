@@ -222,6 +222,9 @@ AUTH_USER_MODEL = "users.User"
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+# Quick-reply button templates for suppliers (manage.py create_whatsapp_buttons); empty = plain text.
+WHATSAPP_CONTENT_SID_ACTIONS = os.environ.get("WHATSAPP_CONTENT_SID_ACTIONS", "")
+WHATSAPP_CONTENT_SID_SHIPPED = os.environ.get("WHATSAPP_CONTENT_SID_SHIPPED", "")
 WHATSAPP_OVERRIDE_NUMBER = os.environ.get("WHATSAPP_OVERRIDE_NUMBER")
 TWILIO_SKIP_SIGNATURE_VALIDATION = (
     os.environ.get("TWILIO_SKIP_SIGNATURE_VALIDATION", "0") == "1"
@@ -242,6 +245,8 @@ if TESTING:
     TWILIO_AUTH_TOKEN = "test"
     ADMIN_WHATSAPP_NUMBER = ""
     WHATSAPP_OVERRIDE_NUMBER = None
+    WHATSAPP_CONTENT_SID_ACTIONS = ""
+    WHATSAPP_CONTENT_SID_SHIPPED = ""
     os.environ["OPENAI_API_KEY"] = "test"
     # Whatever model .env picks, tests run (mocked) against the OpenAI path.
     os.environ["LLM_PROVIDER"] = "openai"
