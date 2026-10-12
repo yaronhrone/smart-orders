@@ -96,15 +96,29 @@ class PlaceOrderView(APIView):
 
         if merged is not None:
             changes, not_added = merged
-            try:
-                from apps.orders.whatsapp import notify_customer_of_additions, notify_supplier_of_items
-                for change in changes:
+            from apps.orders.whatsapp import notify_customer_of_additions, notify_supplier_of_items
+            failed = []
+            for change in changes:
+                try:
                     notify_supplier_of_items(
                         change["order"], change["items"], created=change["created"], reopened=change["reopened"],
                     )
+                except Exception as exc:
+                    logger.error("Failed to notify %s of an addition to batch %s: %s", change["order"].supplier.name, open_batch.id, exc)
+                    failed.append(change["order"].supplier.name)
+            try:
                 notify_customer_of_additions(user, changes, not_added)
             except Exception as exc:
-                logger.error("Failed to notify suppliers/customer for additions to batch %s: %s", open_batch.id, exc)
+                logger.error("Failed to notify customer of additions to batch %s: %s", open_batch.id, exc)
+            if failed:
+                return Response({
+                    "detail": (
+                        "התוספת נשמרה בהזמנה, אבל לא הצלחנו לשלוח הודעת WhatsApp לספק: "
+                        + ", ".join(failed) + ". הספק לא יודע על התוספת. נסה שוב בעוד רגע או פנה אלינו."
+                    ),
+                    "batch_id": open_batch.id,
+                    "failed_suppliers": failed,
+                }, status=status.HTTP_502_BAD_GATEWAY)
             open_batch.refresh_from_db()
             response_data = {
                 "batch_id": open_batch.id,
@@ -120,12 +134,30 @@ class PlaceOrderView(APIView):
             }
             return Response(PlaceOrderResponseSerializer(response_data).data, status=status.HTTP_200_OK)
 
-        try:
-            from apps.orders.whatsapp import notify_customer_of_checkout, notify_suppliers_for_batch
-            notify_suppliers_for_batch(orders)
-            notify_customer_of_checkout(request.user, orders)
-        except Exception as exc:
-            logger.error("Failed to notify suppliers/customer for batch %s: %s", batch.id, exc)
+        # The site says "sent" only once WhatsApp took the message, so this is sent here and
+        # now rather than queued. An order that could not be sent is cancelled (see
+        # deliver_orders_now); the rest went out.
+        from apps.orders.whatsapp import notify_customer_of_checkout
+        from apps.orders.whatsapp.supplier_flow import deliver_orders_now
+        failures = deliver_orders_now(orders)
+        if failures:
+            failed_ids = {f["order_id"] for f in failures}
+            sent_orders = [o for o in orders if o.id not in failed_ids]
+            if sent_orders:
+                notify_customer_of_checkout(request.user, sent_orders)
+            names = ", ".join(f["supplier_name"] for f in failures)
+            return Response({
+                "detail": (
+                    f"לא הצלחנו לשלוח את ההזמנה בהודעת WhatsApp לספק: {names}. "
+                    + ("שאר הספקים קיבלו את ההזמנה שלהם, ואת ההזמנה הזו צריך לשלוח שוב. " if sent_orders
+                       else "ההזמנה לא נשלחה ולא נשמרה, אפשר לנסות שוב. ")
+                    + "אם זה חוזר, פנה אלינו."
+                ),
+                "batch_id": batch.id,
+                "failed_suppliers": [f["supplier_name"] for f in failures],
+                "sent_orders": [o.id for o in sent_orders],
+            }, status=status.HTTP_502_BAD_GATEWAY)
+        notify_customer_of_checkout(request.user, orders)
 
         response_data = {
             "batch_id": batch.id,
