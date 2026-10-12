@@ -34,6 +34,14 @@ def health_check(request):
         services["ai_service"] = "missing_api_key"
         status = "unhealthy"
 
+    # Information only: a failing WhatsApp account must not make the whole service look
+    # down (a 503 here can take the site out of rotation), but it must be visible.
+    try:
+        failure = cache.get("twilio_last_send_failure")
+    except Exception:
+        failure = None
+    services["whatsapp_sending"] = "ok" if not failure else f"last send failed at {failure['at']}: {failure['error']}"
+
     response_status = 200 if status == "healthy" else 503
 
     return JsonResponse({

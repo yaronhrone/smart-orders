@@ -216,6 +216,15 @@ JWT_COOKIE_SAMESITE = "Lax"
 CELERY_BROKER_URL = REDIS_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
+# A task scheduled with a countdown sits unacknowledged in Redis until it is due, and the
+# Redis transport hands an unacknowledged task to another worker after `visibility_timeout`
+# (default 1 hour). MINIMUM_GRACE_SECONDS is 2 hours, so those timeouts would run twice or
+# more. A day is longer than any countdown we schedule.
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 86400}
+# Acknowledge a task when it finishes, not when it starts, and give it back to the queue if
+# the worker dies mid-way (a deploy or a crash used to lose the customer's order proposal).
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
 
 AUTH_USER_MODEL = "users.User"
 

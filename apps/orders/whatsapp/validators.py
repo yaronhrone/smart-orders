@@ -2,6 +2,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 from twilio.rest import Client
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,42 @@ def send_whatsapp_message(to_number: str, body: str) -> str:
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
     from_wa = f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}"
     to_wa = f"whatsapp:{actual_to}"
-    message = client.messages.create(body=body, from_=from_wa, to=to_wa)
+    try:
+        message = client.messages.create(body=body, from_=from_wa, to=to_wa)
+    except Exception as exc:
+        _record_send_failure(exc)
+        raise
+    _clear_send_failure()
     return message.sid
+
+
+SEND_FAILURE_KEY = "twilio_last_send_failure"
+
+
+def _record_send_failure(exc: Exception) -> None:
+    """
+    Keep the latest failed send where /health/ can show it (the trial account's 50
+    messages a day limit, a bad token, a template Meta rejected...). A failed send
+    otherwise only leaves a line in the log, and the customer just gets no answer.
+    """
+    from datetime import datetime, timezone
+
+    logger.error("WhatsApp send failed: %s", exc)
+    try:
+        cache.set(
+            SEND_FAILURE_KEY,
+            {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "error": str(exc)[:300]},
+            timeout=86400,
+        )
+    except Exception:  # the cache being down must not hide the original error
+        pass
+
+
+def _clear_send_failure() -> None:
+    try:
+        cache.delete(SEND_FAILURE_KEY)
+    except Exception:
+        pass
 
 
 def send_with_buttons(to_number: str, text: str, kind: str, strip=()) -> str:
