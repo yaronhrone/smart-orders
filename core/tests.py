@@ -123,3 +123,39 @@ class AnthropicTests(SimpleTestCase):
         self.assertEqual(messages[-1]["content"], [
             {"type": "tool_result", "tool_use_id": "t1", "content": '{"total_spend": "50.00"}'},
         ])
+
+
+class SendFailureVisibilityTests(SimpleTestCase):
+    """A failed WhatsApp send used to leave only a log line; /health/ now shows it."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    @patch("apps.orders.whatsapp.validators.Client")
+    def test_a_failed_send_is_recorded_and_the_next_good_send_clears_it(self, client_cls):
+        from django.core.cache import cache
+        from apps.orders.whatsapp import validators
+
+        client_cls.return_value.messages.create.side_effect = Exception("exceeded the 50 daily messages limit")
+        with self.assertRaises(Exception):
+            validators.send_whatsapp_message("+972501234567", "שלום")
+        failure = cache.get(validators.SEND_FAILURE_KEY)
+        self.assertIn("50 daily messages", failure["error"])
+
+        client_cls.return_value.messages.create.side_effect = None
+        client_cls.return_value.messages.create.return_value.sid = "SM1"
+        validators.send_whatsapp_message("+972501234567", "שלום")
+        self.assertIsNone(cache.get(validators.SEND_FAILURE_KEY))
+
+
+class CeleryReliabilitySettingsTests(SimpleTestCase):
+    def test_tasks_with_a_long_countdown_are_not_redelivered_and_survive_a_dead_worker(self):
+        from django.conf import settings
+        from apps.orders.whatsapp.cache import MINIMUM_GRACE_SECONDS
+
+        # The longest countdown we schedule must fit inside the Redis visibility timeout.
+        self.assertGreater(settings.CELERY_BROKER_TRANSPORT_OPTIONS["visibility_timeout"], MINIMUM_GRACE_SECONDS)
+        self.assertTrue(settings.CELERY_TASK_ACKS_LATE)
+        self.assertTrue(settings.CELERY_TASK_REJECT_ON_WORKER_LOST)

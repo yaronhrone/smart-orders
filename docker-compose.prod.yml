@@ -17,6 +17,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Write every change to disk, so a restart of the server or of this container
+    # keeps the waiting order drafts, offers, supplier answers and scheduled tasks.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     restart: unless-stopped
 
   web:
@@ -66,5 +71,6 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   certbot_www:
   certbot_conf:
