@@ -186,14 +186,17 @@ MERGE_OFFERED = "merge_offered"
 def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None):
     """
     Build the checkout in DB (one order per supplier, one OrderBatch) and
-    send each supplier its order. Returns the list of created orders, None
-    on failure, or MERGE_OFFERED when the customer already has an open order
-    today (e.g. just placed on the site) and was asked whether to add to it.
+    send each supplier its order right now (not queued: the customer is told "sent"
+    only for what WhatsApp really took). Returns (orders, failures): the orders that
+    reached their supplier and [{"order_id", "supplier_name", "error"}] for the ones that
+    did not (those are cancelled). Returns None on failure, or MERGE_OFFERED when the
+    customer already has an open order today (e.g. just placed on the site) and was asked
+    whether to add to it.
     """
     from django.contrib.auth import get_user_model
     from apps.catalog.models import Product
     from apps.orders.services import build_order, checkout_lock, get_open_batch
-    from .supplier_flow import notify_suppliers_for_batch
+    from .supplier_flow import deliver_orders_now
 
     user_id = data.get("user_id")
     raw_products = data.get("products")
@@ -219,8 +222,9 @@ def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None
         if open_batch is not None:
             _offer_merge(phone, user, open_batch, products, region)
             return MERGE_OFFERED
-        notify_suppliers_for_batch(orders)
-        return orders
+        failures = deliver_orders_now(orders)
+        failed_ids = {f["order_id"] for f in failures}
+        return [o for o in orders if o.id not in failed_ids], failures
     except Exception as exc:
         logger.error("Failed to build/send confirmed order for user %s: %s", user_id, exc)
         return None
@@ -974,10 +978,11 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     cache.delete(key)
-    orders = _build_and_send_confirmed_order(data, scenario, phone)
-    if orders == MERGE_OFFERED:
+    result = _build_and_send_confirmed_order(data, scenario, phone)
+    if result == MERGE_OFFERED:
         return HttpResponse(status=200)
 
+    orders, failures = result if result else ([], [])
     if orders:
         confirm = _format_scenario(f"✅ אושר! {label}", chosen)
         # One order per supplier — tell the customer each order number, so
@@ -985,6 +990,15 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         confirm += "\n\nנשלח לספקים:"
         for order in orders:
             confirm += f"\n  • הזמנה #{order.id} — {order.supplier.name}"
+        if failures:
+            confirm += "\n\n❌ לא הצלחנו לשלוח לספקים הבאים, וההזמנה אליהם בוטלה. אפשר לשלוח אותה שוב:"
+            for failure in failures:
+                confirm += f"\n  • {failure['supplier_name']}"
+    elif failures:
+        confirm = (
+            "❌ לא הצלחנו לשלוח את ההזמנה לספקים (" + ", ".join(f["supplier_name"] for f in failures)
+            + "), ולכן היא לא נשמרה. אפשר לשלוח אותה שוב בעוד רגע."
+        )
     else:
         confirm = "❌ אירעה שגיאה בעיבוד ההזמנה. אנא נסה שנית או פנה לתמיכה."
     validators.send_whatsapp_message(phone, confirm)

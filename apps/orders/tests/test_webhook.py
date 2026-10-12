@@ -488,11 +488,32 @@ class UserConfirmationFlowTests(TestCase):
 
         self._post("+972505555555", "א")
 
-        # Supplier order message is dispatched via the Celery task, not sent inline.
-        mock_supplier_task.delay.assert_called_once()
-        phone, message = mock_supplier_task.delay.call_args[0]
-        self.assertEqual(phone, self.supplier.whatsapp_number)
-        self.assertIn("להזמין", message)
+        # Sent inline, before the customer is told "sent", and not queued in Celery.
+        mock_supplier_task.delay.assert_not_called()
+        supplier_msgs = [c[0][1] for c in mock_send_webhook.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(len(supplier_msgs), 1)
+        self.assertIn("להזמין", supplier_msgs[0])
+
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_supplier_message_that_fails_is_not_reported_as_sent(self, mock_send_webhook, mock_send_whatsapp, mock_supplier_task):
+        self._seed_cache("+972505555555")
+
+        def fail_for_supplier(to_number, body):
+            if to_number == self.supplier.whatsapp_number:
+                raise Exception("exceeded the 50 daily messages limit")
+        mock_send_webhook.side_effect = fail_for_supplier
+
+        self._post("+972505555555", "א")
+
+        customer_msg = [c[0][1] for c in mock_send_webhook.call_args_list if c[0][0] == "+972505555555"][-1]
+        self.assertNotIn("✅ אושר", customer_msg)
+        self.assertIn("לא הצלחנו לשלוח", customer_msg)
+        self.assertIn(self.supplier.name, customer_msg)
+        order = OrderRequest.objects.get(user=self.user)
+        self.assertEqual(order.status, OrderRequest.Status.CANCELLED)
+        self.assertIsNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
 
     @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.send_whatsapp_message")
