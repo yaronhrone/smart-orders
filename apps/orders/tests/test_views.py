@@ -405,6 +405,58 @@ class PlaceAndSuggestViewTests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertIn(res.data["recommended"], ("cheapest", "fewest_suppliers"))
 
+    def test_place_sends_each_supplier_its_whatsapp_before_answering(self):
+        res = self.client.post(
+            reverse("orders-place"), {**self._basket(), "scenario": "cheapest"}, format="json",
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        sent_to = {c[0][0] for c in self.mock_send.call_args_list}
+        self.assertIn(self.a.whatsapp_number, sent_to)
+        self.assertIn(self.b.whatsapp_number, sent_to)
+        self.assertEqual(
+            set(OrderRequest.objects.filter(user=self.user).values_list("status", flat=True)),
+            {OrderRequest.Status.SENT},
+        )
+
+    def test_a_supplier_message_that_fails_is_an_error_not_a_green_confirmation(self):
+        def fail_for_a(to_number, body):
+            if to_number == self.a.whatsapp_number:
+                raise Exception("exceeded the 50 daily messages limit")
+        self.mock_send.side_effect = fail_for_a
+
+        res = self.client.post(
+            reverse("orders-place"), {**self._basket(), "scenario": "cheapest"}, format="json",
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("ספק א", res.data["detail"])
+        self.assertEqual(res.data["failed_suppliers"], ["ספק א"])
+        statuses = dict(OrderRequest.objects.filter(user=self.user).values_list("supplier__name", "status"))
+        self.assertEqual(statuses["ספק א"], OrderRequest.Status.CANCELLED)  # nothing reached it
+        self.assertEqual(statuses["ספק ב"], OrderRequest.Status.SENT)
+        # the customer is told only about what was really sent
+        customer_msgs = [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == "+972501112222"]
+        self.assertEqual(len(customer_msgs), 1)
+        self.assertIn("ספק ב", customer_msgs[0])
+        self.assertNotIn("ספק א", customer_msgs[0])
+
+    def test_when_every_supplier_message_fails_nothing_stays_open(self):
+        self.mock_send.side_effect = Exception("twilio down")
+
+        res = self.client.post(
+            reverse("orders-place"), {**self._basket(), "scenario": "cheapest"}, format="json",
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("לא נשמרה", res.data["detail"])
+        self.assertFalse(
+            OrderRequest.objects.filter(user=self.user).exclude(status=OrderRequest.Status.CANCELLED).exists()
+        )
+        # so the customer can simply try again: no open order is in the way
+        again = self.client.get(reverse("orders-open"))
+        self.assertIsNone(again.data["open_batch"])
+
     def test_place_whatsapps_the_customer_every_order_number(self):
         res = self.client.post(
             reverse("orders-place"), {**self._basket(), "scenario": "cheapest"}, format="json",

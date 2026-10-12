@@ -135,7 +135,11 @@ export default function NewOrderPage() {
       if (e instanceof ApiError && e.status === 409) {
         setOpenBatch(await fetchOpenBatch().catch(() => null));
       }
-      setPlaceError(e instanceof Error ? e.message : "שגיאה בביצוע ההזמנה");
+      // A message from the server is already in Hebrew; anything else (network drop,
+      // a crashed request) gets a plain Hebrew line instead of the raw browser error.
+      setPlaceError(
+        e instanceof ApiError ? e.message : "לא הצלחנו להשלים את ההזמנה. בדוק את החיבור ונסה שוב."
+      );
     } finally {
       setPlacing(false);
     }
@@ -145,6 +149,18 @@ export default function NewOrderPage() {
 
   return (
     <div className="px-6 py-6 max-w-2xl">
+      {/* The order is only confirmed once WhatsApp took the supplier messages, so wait here. */}
+      {placing && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-white/85"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/icons/icon-192.png" alt="" className="w-20 h-20 animate-spin" />
+          <p className="text-sm font-medium text-gray-700">שולח את ההזמנה לספקים בוואטסאפ...</p>
+        </div>
+      )}
       <h1 className="text-xl font-bold text-gray-800 mb-6">הזמנה חדשה</h1>
 
       {/* Step indicator */}

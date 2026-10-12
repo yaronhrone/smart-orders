@@ -79,6 +79,13 @@ def notify_suppliers_for_order(order) -> None:
     from apps.orders.models import OrderRequest
     from apps.orders.tasks import send_supplier_order_notification_task
 
+    send_supplier_order_notification_task.delay(order.supplier.whatsapp_number, _order_message(order))
+
+    _save_pending_for_order(order)
+    order.transition_to(OrderRequest.Status.SENT)
+
+
+def _order_message(order) -> str:
     company_name, company_address, company_phone = _company_details(order)
 
     lines = [f"שלום, *{company_name}* מבקש להזמין (הזמנה #{order.id}):"]
@@ -89,10 +96,35 @@ def notify_suppliers_for_order(order) -> None:
     if company_phone:
         lines.append(f"📞 {company_phone}")
     lines.append(SUPPLIER_REPLY_INSTRUCTIONS)
-    send_supplier_order_notification_task.delay(order.supplier.whatsapp_number, "\n".join(lines))
+    return "\n".join(lines)
 
-    _save_pending_for_order(order)
-    order.transition_to(OrderRequest.Status.SENT)
+
+def deliver_orders_now(orders) -> list:
+    """
+    Send each order to its supplier right now, in this request, instead of queueing it
+    (the site must only say "sent" once WhatsApp accepted the message). An order whose
+    message could not be sent is cancelled, so the customer can place it again without a
+    ghost order in the way. Returns [{"order_id", "supplier_name", "error"}] for the failures.
+    """
+    from apps.orders.models import OrderRequest
+
+    failures = []
+    for order in orders:
+        try:
+            validators.send_with_buttons(
+                order.supplier.whatsapp_number, _order_message(order), "actions",
+                strip=(SUPPLIER_REPLY_INSTRUCTIONS,),
+            )
+            _save_pending_for_order(order)
+            order.transition_to(OrderRequest.Status.SENT)
+        except Exception as exc:
+            logger.error("Order %s could not be sent to %s: %s", order.id, order.supplier.name, exc)
+            failures.append({"order_id": order.id, "supplier_name": order.supplier.name, "error": str(exc)})
+            try:
+                order.transition_to(OrderRequest.Status.CANCELLED)
+            except ValueError:
+                pass
+    return failures
 
 
 def notify_suppliers_for_batch(orders) -> None:
