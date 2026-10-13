@@ -700,6 +700,17 @@ def _handle_eta_update_reply(phone: str, supplier, body: str, eta_request: dict)
 CANCEL_CONFIRM_TTL = 600
 
 
+def _refuse_change(phone: str, supplier, order_request_id: int, products: list) -> HttpResponse:
+    """The supplier refuses the customer's change to an order it had approved: the order stays
+    as approved (see fallback_flow._handle_refused_additions), no reroute and no block."""
+    cache.delete(f"whatsapp_supplier_pending:{phone}")
+    validators.send_whatsapp_message(
+        phone, f"✅ קיבלנו: השינוי בהזמנה #{order_request_id} לא אושר. ההזמנה נשארת כפי שאישרת קודם.",
+    )
+    _handle_missing_items(supplier, products, order_request_id, refused_all=True)
+    return HttpResponse(status=200)
+
+
 def _handle_supplier_button(phone: str, supplier, payload: str, body: str) -> HttpResponse:
     """
     A tap on one of the buttons sent with an order message (see
@@ -714,12 +725,20 @@ def _handle_supplier_button(phone: str, supplier, payload: str, body: str) -> Ht
         return _handle_supplier_flow(phone, supplier, "יצא למשלוח")
 
     raw = cache.get(f"whatsapp_supplier_pending:{phone}")
-    if payload not in ("missing", "cancel"):
+    if payload not in ("missing", "cancel", "refuse"):
         return _handle_supplier_flow(phone, supplier, body)
     if not raw:
         validators.send_whatsapp_message(phone, "אין כרגע הזמנה שממתינה לתשובה שלך.")
         return HttpResponse(status=200)
     data = json.loads(raw)
+
+    from apps.orders.models import OrderRequest
+    from apps.orders.services import order_was_reopened
+    if payload == "refuse" or (
+        payload == "cancel" and order_was_reopened(OrderRequest.objects.get(id=data["order_request_id"]))
+    ):
+        # "Cancel" under a change to an approved order only ever means "not this change".
+        return _refuse_change(phone, supplier, data["order_request_id"], data["products"])
     order_id, names = data["order_request_id"], [p["product_name"] for p in data["products"]]
 
     if payload == "missing":
@@ -784,13 +803,12 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
     reopened_order = order_was_reopened(OrderRequest.objects.get(id=order_request_id))
 
     CANCEL_KEYWORDS = ["ביטול", "לא מאשר", "מבטל", "cancel", "לא רוצה"]
-    if any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS) and reopened_order:
+    if reopened_order and (
+        any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS) or body.strip() in ("לא", "no", "No")
+    ):
         # The order was already approved and only the customer's change is refused: it is
         # not a cancellation of the order, so no reroute of what was approved and no block.
-        cache.delete(key)
-        validators.send_whatsapp_message(phone, f"✅ קיבלנו: השינויים בהזמנה #{order_request_id} לא אושרו. ההזמנה נשארת כפי שאישרת קודם.")
-        _handle_missing_items(supplier, products, order_request_id, refused_all=True)
-        return HttpResponse(status=200)
+        return _refuse_change(phone, supplier, order_request_id, products)
 
     if any(kw in body.strip().lower() for kw in CANCEL_KEYWORDS):
         cache.delete(key)

@@ -3324,6 +3324,67 @@ class ModificationRulesTests(TestCase):
         self.assertEqual(self.order.removed_lines, [])
         self.assertTrue(self._sent_to("+972500000999"))
 
+    # ─── the buttons fit the situation ───
+
+    def _supplier_taps(self, payload, body=""):
+        self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.supplier.whatsapp_number}", "ButtonPayload": payload, "Body": body or payload,
+        })
+
+    def test_a_reduction_is_asked_with_approve_or_refuse_buttons(self):
+        self._approve_first_order()
+        with patch("apps.orders.whatsapp.validators.send_with_buttons") as buttons:
+            self._customer_says("update", "20")
+
+        phone, text, kind = [c[0] for c in buttons.call_args_list if c[0][0] == self.supplier.whatsapp_number][-1]
+        self.assertEqual(kind, "reduction")
+        self.assertIn("לאישור ההפחתה", text)
+
+    def test_an_addition_is_asked_with_approve_or_missing_buttons_never_cancel(self):
+        self._approve_first_order()
+        with patch("apps.orders.whatsapp.validators.send_with_buttons") as buttons:
+            self._customer_says("add", "20")
+
+        kinds = [c[0][2] for c in buttons.call_args_list if c[0][0] == self.supplier.whatsapp_number]
+        self.assertEqual(kinds, ["addition"])
+
+    def test_refusing_a_reduction_with_the_button_keeps_the_approved_quantity(self):
+        self._approve_first_order()
+        self._customer_says("update", "20")
+
+        self._supplier_taps("refuse", "לא להפחית")
+
+        self.line.refresh_from_db()
+        self.order.refresh_from_db()
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+        self.assertIsNone(self.supplier.blocked_until)
+
+    def test_a_plain_no_to_a_reduction_is_understood(self):
+        self._approve_first_order()
+        self._customer_says("update", "20")
+
+        self._supplier_says("לא")
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))
+        self.assertNotIn("לא הצלחתי להבין", self._sent_to(self.supplier.whatsapp_number)[-1])
+
+    def test_a_cancel_tap_under_a_change_never_asks_to_cancel_the_whole_order(self):
+        self._approve_first_order()
+        self._customer_says("add", "20")
+
+        self._supplier_taps("cancel", "ביטול")
+
+        self.line.refresh_from_db()
+        self.order.refresh_from_db()
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))  # the addition was refused
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
+        self.assertIsNone(self.supplier.blocked_until)
+        self.assertNotIn("לבטל את כל", self._sent_to(self.supplier.whatsapp_number)[-1])
+
     def test_the_supplier_confirming_a_reduction_approves_the_order_again(self):
         self._approve_first_order()
         self._customer_says("update", "20")

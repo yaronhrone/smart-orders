@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Ends a message to a supplier that waits for its answer; left out when buttons carry the answer.
 CONFIRM_PROMPT = "\nאנא ענה *אישור* לאישור."
+REDUCTION_PROMPT = "\nאנא ענה *אישור* לאישור ההפחתה, או *לא* להשאיר את ההזמנה כמו שהיא."
 # Typed instructions that buttons replace (see validators.send_with_buttons).
 MERGE_PROMPT = "ענה *כן* להוספה או *לא* כדי לא להוסיף כלום. "
 ORDER_PROMPT = "ענה *אישור* לאישור. "
@@ -506,9 +507,18 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
         if needs_confirmation:
             if address:
                 msg_lines.append(f"📍 {address}")
-            msg_lines.append(CONFIRM_PROMPT)
+            # The buttons fit the situation: a new order may be cancelled as a whole; a change to an
+            # order can only be approved or, for an addition, reported as missing; a reduction is
+            # approved or refused.
+            if entry["created"]:
+                prompt, kind = CONFIRM_PROMPT, "actions"
+            elif all(line.startswith("🔽") for line in entry["lines"]):
+                prompt, kind = REDUCTION_PROMPT, "reduction"
+            else:
+                prompt, kind = CONFIRM_PROMPT, "addition"
+            msg_lines.append(prompt)
             validators.send_with_buttons(
-                order.supplier.whatsapp_number, "\n".join(msg_lines), "actions", strip=(CONFIRM_PROMPT,),
+                order.supplier.whatsapp_number, "\n".join(msg_lines), kind, strip=(prompt,),
             )
         else:
             msg_lines.append("\nאין צורך באישור נוסף. זו הקטנה של מה שכבר אישרת.")
