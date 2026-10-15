@@ -591,6 +591,23 @@ class ExpiredOfferTests(TestCase):
         self.assertIn("ההצעה תקפה לשעה", msg)
         self.assertIn("לשלוח את ההזמנה מחדש", msg)
 
+    @patch("apps.orders.whatsapp.cache.DRAFT_DEBOUNCE_SECONDS", 0)
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_customer_order")
+    @patch("apps.orders.services.suggest_order")
+    def test_with_no_waiting_window_the_offer_comes_at_once(self, mock_suggest, mock_parse, mock_send):
+        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
+        mock_suggest.return_value = {
+            "cheapest": _scenario("50.00"),
+            "fewest_suppliers": _scenario("60.00"),
+            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+        }
+
+        self._post("10 עגבניות")  # no _flush_draft: nothing to wait for
+
+        self.assertIn("ענה *אישור*", mock_send.call_args[0][1])
+        self.assertIsNotNone(cache.get(f"whatsapp_order:{self.PHONE}"))
+
     @patch("apps.orders.order_parser.parse_customer_order")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_confirming_after_the_offer_expired_says_to_resend(self, mock_send, mock_parse):
@@ -1095,6 +1112,7 @@ class OrderModificationTests(TestCase):
         }
 
         self._post("+972507777777", "רוצה גם 5 קילו תפוח אדמה אדום")
+        self._post("+972507777777", "כן")
 
         self.assertTrue(
             OrderRequestProduct.objects.filter(order_request=self.order, product=self.potato).exists()
@@ -1112,6 +1130,7 @@ class OrderModificationTests(TestCase):
         }
 
         self._post("+972507777777", "תעדכן את העגבניות ל-15")
+        self._post("+972507777777", "כן")
 
         self.orp.refresh_from_db()
         self.assertEqual(self.orp.quantity, Decimal("15"))
@@ -1130,6 +1149,7 @@ class OrderModificationTests(TestCase):
             "items": [{"product_name": "תפוח אדמה אדום", "quantity": Decimal("5")}],
         }
         self._post("+972507777777", "תוסיף 5 קילו תפוח אדמה אדום")
+        self._post("+972507777777", "כן")
         mock_send.reset_mock()
 
         response = self.client.post("/whatsapp/webhook/", {
@@ -1159,6 +1179,7 @@ class OrderModificationTests(TestCase):
         }
 
         self._post("+972507777777", "תוסיף גם תפוח אדמה אדום וגם חסה")
+        self._post("+972507777777", "כן")
 
         supplier_calls = [
             c for c in mock_send.call_args_list
@@ -1197,6 +1218,9 @@ class OrderModificationTests(TestCase):
 
         mock_send.reset_mock()
         self._post("+972507777777", "יבש")
+        self.assertIn("זה השינוי שהבנתי", mock_send.call_args[0][1])  # shown for confirmation first
+        self.assertFalse(OrderRequestProduct.objects.filter(order_request=self.order, product=onion_dry).exists())
+        self._post("+972507777777", "כן")
 
         self.assertTrue(
             OrderRequestProduct.objects.filter(order_request=self.order, product=onion_dry).exists()
@@ -1209,8 +1233,8 @@ class OrderModificationTests(TestCase):
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_modification_intent")
-    def test_resolved_items_dispatch_before_asking_about_ambiguous_one(self, mock_parse, mock_send):
-        """A clear item in the same message must not wait on the ambiguous one."""
+    def test_nothing_is_applied_until_the_variant_is_chosen_and_the_whole_change_confirmed(self, mock_parse, mock_send):
+        """A clear item in the same message waits for the ambiguous one, and everything is shown at once."""
         onion_dry = make_product("בצל יבש")
         onion_red = make_product("בצל סגול")
         SupplierProduct.objects.create(supplier=self.supplier, product=onion_dry, price_per_unit="2.00")
@@ -1222,13 +1246,24 @@ class OrderModificationTests(TestCase):
                 {"product_name": "בצל", "quantity": Decimal("3")},
             ],
         }
+        before = OrderRequestProduct.objects.get(pk=self.orp.pk).quantity
 
         self._post("+972507777777", "עדכן 20 עגבניה וגם 3 בצל")
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.quantity, before)  # asked which onion; nothing applied yet
 
+        self._post("+972507777777", "יבש")
+        summary = mock_send.call_args[0][1]
+        self.assertIn("עגבניה", summary)
+        self.assertIn("בצל יבש", summary)
+        self.orp.refresh_from_db()
+        self.assertEqual(self.orp.quantity, before)  # shown, still not applied
+
+        self._post("+972507777777", "כן")
         self.orp.refresh_from_db()
         self.assertEqual(self.orp.quantity, Decimal("20"))
         supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier.whatsapp_number]
-        self.assertEqual(len(supplier_calls), 1)
+        self.assertEqual(len(supplier_calls), 1)  # one consolidated message
         self.assertIn("עגבניה", supplier_calls[0][0][1])
 
 
@@ -2149,6 +2184,7 @@ class DailyUpdateCutoffTests(TestCase):
         }
         with self._at(10, 0):
             self._post("תעדכן את העגבניות ל-15")
+            self._post("כן")
 
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, OrderRequest.Status.SENT)
@@ -2646,6 +2682,7 @@ class PerSupplierOrderTests(TestCase):
 
         with self._before_cutoff():
             self._post(self.customer_phone, "תוסיף 20 תפוח אדמה אדום")
+            self._post(self.customer_phone, "כן")
 
         new_order = OrderRequest.objects.get(batch=self.order_a.batch, supplier=supplier_c)
         self.assertEqual(new_order.status, OrderRequest.Status.SENT)
@@ -2662,6 +2699,7 @@ class PerSupplierOrderTests(TestCase):
 
         with self._before_cutoff():
             self._post(self.customer_phone, "תעדכן עגבניות ל-5")
+            self._post(self.customer_phone, "כן")
 
         self.item_a.refresh_from_db()
         self.order_a.refresh_from_db()
@@ -3051,6 +3089,7 @@ class OneOpenOrderWebhookTests(TestCase):
         mock_parse.return_value = {"intent": "add", "items": [{"product_name": "חסה", "quantity": Decimal("3")}]}
 
         self._post("תוסיף 3 חסה")
+        self._post("כן")  # the change is applied only after the customer confirms
 
         line = OrderRequestProduct.objects.get(order_request__batch=self.open_order.batch, product=self.lettuce)
         self.assertEqual(line.supplier, self.a)
@@ -3109,10 +3148,13 @@ class ModificationRulesTests(TestCase):
     def _customer_says(self, intent, quantity, product="עגבניה"):
         self._customer_says_items(intent, [{"product_name": product, "quantity": Decimal(quantity)}])
 
-    def _customer_says_items(self, intent, items):
+    def _customer_says_items(self, intent, items, confirm=True):
+        """The customer asks for a change; it is applied only after they answer כן (confirm=False stops before)."""
         with patch("apps.orders.order_parser.parse_modification_intent") as parse:
             parse.return_value = {"intent": intent, "items": items}
             self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": "x"})
+        if confirm:
+            self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": "כן"})
 
     def _sent_to(self, phone):
         return [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == phone]
@@ -3323,6 +3365,46 @@ class ModificationRulesTests(TestCase):
         self.assertEqual(self.order.products.get(product=cucumber).quantity, Decimal("10"))
         self.assertEqual(self.order.removed_lines, [])
         self.assertTrue(self._sent_to("+972500000999"))
+
+    # ─── a change waits for the customer's yes ───
+
+    def test_a_change_is_applied_once_the_customer_answers_yes(self):
+        self._customer_says("add", "20")  # the helper answers כן, as a customer would
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("50"))
+
+    def test_nothing_changes_and_the_supplier_hears_nothing_before_the_yes(self):
+        sent_before = len(self._sent_to(self.supplier.whatsapp_number))
+
+        self._customer_says_items("add", [{"product_name": "עגבניה", "quantity": Decimal("20")}], confirm=False)
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))
+        self.assertEqual(len(self._sent_to(self.supplier.whatsapp_number)), sent_before)
+        shown = self._sent_to(self.PHONE)[-1]
+        self.assertIn("זה השינוי שהבנתי", shown)
+        self.assertIn("עוד 20", shown)
+        self.assertIn("ענה *כן*", shown)
+
+    def test_answering_no_drops_the_change(self):
+        self._customer_says_items("add", [{"product_name": "עגבניה", "quantity": Decimal("20")}], confirm=False)
+
+        self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": "לא"})
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))
+        self.assertIn("לא שיניתי כלום", self._sent_to(self.PHONE)[-1])
+        # and a later yes finds nothing waiting
+        self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": "כן"})
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))
+
+    def test_the_change_is_shown_with_yes_no_buttons(self):
+        with patch("apps.orders.whatsapp.validators.send_with_buttons") as buttons:
+            self._customer_says_items("add", [{"product_name": "עגבניה", "quantity": Decimal("20")}], confirm=False)
+
+        phone, text, kind = buttons.call_args[0]
+        self.assertEqual((phone, kind), (self.PHONE, "yesno"))
 
     def test_the_supplier_confirming_a_reduction_approves_the_order_again(self):
         self._approve_first_order()

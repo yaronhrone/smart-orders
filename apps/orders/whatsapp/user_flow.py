@@ -11,7 +11,7 @@ from .cache import (
     clear_merge_offer,
     clear_pending_clarification,
     DecimalEncoder,
-    get_merge_offer,
+    get_merge_offer, save_modification_offer, get_modification_offer, clear_modification_offer,
     get_pending_clarification,
     save_merge_offer,
     MINIMUM_GRACE_SECONDS,
@@ -306,7 +306,10 @@ def _handle_clarification_reply(phone: str, body: str, raw_state: str) -> HttpRe
     # nothing decodes them back on the way out, so every quantity here is
     # currently a plain string — restore Decimal before it reaches pricing.
     all_resolved = [
-        {"product_name": item["product_name"], "quantity": Decimal(str(item["quantity"]))}
+        {
+            "product_name": item["product_name"], "quantity": Decimal(str(item["quantity"])),
+            **({"intent": item["intent"]} if item.get("intent") else {}),
+        }
         for item in state["resolved_items"] + newly_resolved
     ]
     extra = {
@@ -526,11 +529,9 @@ def _modification_header(order_changes: dict) -> str:
 
 def _complete_modification_after_clarification(phone: str, extra: dict, resolved_items: list) -> HttpResponse:
     """
-    The customer just answered "which one did you mean" for a change to an
-    existing order — finish applying it the same way _handle_order_
-    modification would have, had the name been unambiguous from the start.
+    The customer just answered "which one did you mean" for a change to an existing
+    order. Everything is now clear: show the whole change and ask for כן / לא.
     """
-    from apps.catalog.models import Product
     from apps.orders.models import OrderBatch
 
     try:
@@ -539,47 +540,7 @@ def _complete_modification_after_clarification(phone: str, extra: dict, resolved
         validators.send_whatsapp_message(phone, "לא מצאתי את ההזמנה. נסה שוב.")
         return HttpResponse(status=200)
 
-    intent = extra.get("intent", "add")
-    region = extra.get("region", "center")
-    profile = getattr(batch.user, "profile", None)
-    all_products_map = {p.name: p for p in Product.objects.all()}
-
-    changes_made = []
-    errors = []
-    blocked = []
-    order_changes = {}
-
-    for item in resolved_items:
-        product = all_products_map.get(item["product_name"])
-        result = (
-            _apply_single_modification(
-                product, item["quantity"], item.get("intent") or intent, batch, region,
-                order_changes, changes_made, blocked,
-            )
-            if product else "not_found"
-        )
-        if result == "not_found":
-            errors.append(item["product_name"])
-
-    _dispatch_modification_batches(
-        order_changes,
-        profile.company_name if profile else "",
-        profile.company_address if profile else "",
-    )
-
-    reply_lines = []
-    if changes_made:
-        reply_lines.append(_modification_header(order_changes))
-        reply_lines += [f"  • {c}" for c in changes_made]
-    if errors:
-        reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
-    if blocked:
-        reply_lines.append("⚠️ לא בוצע:")
-        reply_lines += [f"  • {b}" for b in blocked]
-    if not reply_lines:
-        reply_lines = ["לא הצלחתי לזהות שינוי בהזמנה. נסה שוב."]
-    validators.send_whatsapp_message(phone, "\n".join(reply_lines))
-    return HttpResponse(status=200)
+    return _offer_modification(phone, batch, extra.get("region", "center"), resolved_items, extra.get("intent", "add"))
 
 
 def _suggest_and_respond(
@@ -760,6 +721,10 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
 def _schedule_draft_dispatch(phone: str, generation: int, countdown: int, is_grace_retry: bool = False):
     try:
         from apps.orders.tasks import dispatch_draft_order_task
+        if countdown <= 0:
+            # No window: price and answer now, inside this request (also no dependence on Celery).
+            dispatch_draft_order_task(phone, generation, is_grace_retry=is_grace_retry)
+            return
         dispatch_draft_order_task.apply_async(
             args=[phone, generation], kwargs={"is_grace_retry": is_grace_retry}, countdown=countdown,
         )
@@ -768,10 +733,13 @@ def _schedule_draft_dispatch(phone: str, generation: int, countdown: int, is_gra
 
 
 def _handle_order_modification(phone: str, body: str, user, batch) -> HttpResponse:
-    """Handle ADD or UPDATE modification(s) to the customer's open checkout (OrderBatch)."""
+    """
+    A change to the customer's open checkout (OrderBatch): add, set a total, or reduce.
+    Nothing is applied here: the customer is shown what was understood and must answer
+    כן first (see _offer_modification / _handle_modification_offer_reply).
+    """
     from apps.catalog.models import Product
     from apps.catalog.product_matcher import find_ambiguous_group
-    from apps.orders.models import OrderRequestProduct
     from apps.orders.order_parser import parse_modification_intent
 
     product_names = list(Product.objects.values_list("name", flat=True))
@@ -784,44 +752,124 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
 
     profile = getattr(user, "profile", None)
     region = profile.region if profile else "center"
+
+    clear, ambiguous, errors = [], [], []
+    for item in items:
+        product = Product.objects.filter(name=item["product_name"]).first()
+        if product:
+            clear.append({
+                "product_name": product.name, "quantity": item["quantity"], "intent": item.get("intent") or intent,
+            })
+            continue
+        # "בצל" alone isn't a catalog product, only "בצל יבש"/"בצל סגול"/...: ask which one.
+        group = find_ambiguous_group(item["product_name"], product_names)
+        if group:
+            ambiguous.append({"query": item["product_name"], "quantity": item["quantity"], "candidates": group})
+        else:
+            errors.append(item["product_name"])
+
+    if errors:
+        validators.send_whatsapp_message(phone, f"⚠️ לא נמצאו: {', '.join(errors)}")
+    if ambiguous:
+        # The clear items ride along; everything is shown for confirmation once the variant is known.
+        return _handle_ambiguous_products(
+            phone, ambiguous, clear,
+            extra={"context": "modification", "batch_id": batch.id, "intent": intent, "region": region},
+        )
+    if not clear:
+        if not errors:
+            validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
+        return HttpResponse(status=200)
+    return _offer_modification(phone, batch, region, clear, intent)
+
+
+MODIFY_PROMPT = "ענה *כן* לביצוע או *לא* כדי לא לשנות כלום."
+
+
+def _offer_modification(phone: str, batch, region: str, items: list, default_intent: str) -> HttpResponse:
+    """Show the customer the change that was understood and wait for כן / לא (buttons)."""
+    from apps.catalog.models import Product
+    from .supplier_flow import fmt_qty
+
+    products = {p.name: p for p in Product.objects.filter(name__in=[i["product_name"] for i in items])}
+    lines = ["זה השינוי שהבנתי בהזמנה הפתוחה שלך:"]
+    saved = []
+    for item in items:
+        product = products.get(item["product_name"])
+        intent = item.get("intent") or default_intent
+        quantity = Decimal(str(item["quantity"]))
+        unit = product.get_unit_display() if product else ""
+        if intent == "update":
+            lines.append(f"  ✏️ {item['product_name']} — בסך הכול {fmt_qty(quantity)} {unit}")
+        elif intent == "reduce":
+            lines.append(f"  🔽 {item['product_name']} — פחות {fmt_qty(quantity)} {unit}")
+        else:
+            lines.append(f"  ➕ {item['product_name']} — עוד {fmt_qty(quantity)} {unit}")
+        saved.append({"product_name": item["product_name"], "quantity": quantity, "intent": intent})
+    lines.append("\n" + MODIFY_PROMPT)
+    save_modification_offer(phone, batch.id, region, saved)
+    validators.send_with_buttons(phone, "\n".join(lines), "yesno", strip=(MODIFY_PROMPT,))
+    return HttpResponse(status=200)
+
+
+def _handle_modification_offer_reply(phone: str, body: str):
+    """Answer to _offer_modification. Returns None when nothing is waiting, or when the
+    reply is neither כן nor לא (the waiting change is dropped and the message handled afresh)."""
+    from apps.orders.models import OrderBatch
+    from apps.orders.services import before_update_cutoff
+
+    offer = get_modification_offer(phone)
+    if not offer:
+        return None
+
+    reply = _normalized_reply(body)
+    if reply in _DECLINE_WORDS:
+        clear_modification_offer(phone)
+        validators.send_whatsapp_message(phone, "בסדר, לא שיניתי כלום. ההזמנה הפתוחה נשארת כמו שהיא.")
+        return HttpResponse(status=200)
+    if reply not in _CONFIRM_WORDS:
+        clear_modification_offer(phone)
+        return None
+
+    clear_modification_offer(phone)
+    batch = OrderBatch.objects.select_related("user__profile").filter(id=offer["batch_id"]).first()
+    if batch is None or not before_update_cutoff():
+        validators.send_whatsapp_message(phone, "חלון העדכון להזמנה נסגר, לא ביצעתי את השינוי.")
+        return HttpResponse(status=200)
+    items = [
+        {"product_name": i["product_name"], "quantity": Decimal(str(i["quantity"])), "intent": i["intent"]}
+        for i in offer["items"]
+    ]
+    return _apply_modification(phone, batch, offer["region"], items)
+
+
+def _apply_modification(phone: str, batch, region: str, items: list, default_intent: str = "add") -> HttpResponse:
+    """Apply the confirmed change to the open checkout and tell the suppliers and the customer."""
+    from apps.catalog.models import Product
+    from apps.orders.models import OrderRequestProduct
+
+    profile = getattr(batch.user, "profile", None)
     company = profile.company_name if profile else ""
     address = profile.company_address if profile else ""
 
-    changes_made = []
-    errors = []
-    blocked = []
-    ambiguous = []
-    # One entry per changed order (= per supplier): several changes in the
-    # same message (or several messages before the supplier gets around to
-    # replying) used to fire one standalone "please confirm" per item, and
-    # the supplier's single "אישור" could only ever confirm the last one.
-    # Collect everything first, then send one consolidated message per
-    # supplier and register it as pending, same contract as a fresh order.
+    changes_made, errors, blocked = [], [], []
+    # One entry per changed order (= per supplier): one consolidated message per supplier,
+    # registered as pending, same contract as a fresh order.
     order_changes = {}
+    all_products_map = {p.name: p for p in Product.objects.all()}
 
     for item in items:
-        product = Product.objects.filter(name=item["product_name"]).first()
+        product = all_products_map.get(item["product_name"])
         if not product:
-            # "בצל" alone isn't a catalog product — only "בצל יבש"/"בצל
-            # סגול"/... are. Ask which one instead of just reporting it as
-            # not found, same as a fresh order already does.
-            group = find_ambiguous_group(item["product_name"], product_names)
-            if group:
-                ambiguous.append({
-                    "query": item["product_name"], "quantity": item["quantity"], "candidates": group,
-                })
-            else:
-                errors.append(item["product_name"])
+            errors.append(item["product_name"])
             continue
 
-        # Check cutoff for the supplier handling this product
+        # Check the cutoff of the supplier handling this product
         existing_orp = OrderRequestProduct.objects.filter(
             order_request__batch=batch, product=product
         ).select_related("supplier").first()
-
         if existing_orp:
-            cutoff_key = f"supplier_cutoff:{existing_orp.supplier.whatsapp_number}:{existing_orp.order_request_id}"
-            cutoff = cache.get(cutoff_key)
+            cutoff = cache.get(f"supplier_cutoff:{existing_orp.supplier.whatsapp_number}:{existing_orp.order_request_id}")
             if cutoff:
                 now = timezone.localtime().time()
                 cutoff_time = dtime(*map(int, cutoff.split(":")))
@@ -834,29 +882,11 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
                     continue
 
         result = _apply_single_modification(
-            product, item["quantity"], item.get("intent") or intent, batch, region,
+            product, item["quantity"], item.get("intent") or default_intent, batch, region,
             order_changes, changes_made, blocked,
         )
         if result == "not_found":
             errors.append(product.name)
-
-    if ambiguous:
-        # Anything else in the same message already resolved cleanly and, for
-        # a modification, is already committed to the DB (unlike a fresh
-        # order, which only computes everything after the whole message is
-        # understood) — dispatch those now rather than holding them hostage
-        # to the one ambiguous item.
-        if order_changes:
-            _dispatch_modification_batches(order_changes, company, address)
-        if changes_made:
-            validators.send_whatsapp_message(
-                phone,
-                _modification_header(order_changes) + "\n" + "\n".join(f"  • {c}" for c in changes_made),
-            )
-        return _handle_ambiguous_products(
-            phone, ambiguous, [],
-            extra={"context": "modification", "batch_id": batch.id, "intent": intent, "region": region},
-        )
 
     if not changes_made and not errors and not blocked:
         validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
@@ -876,8 +906,6 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
 
     validators.send_whatsapp_message(phone, "\n".join(reply_lines))
     return HttpResponse(status=200)
-
-
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     delivery_response = _handle_delivery_flow(phone, body)
     if delivery_response is not None:
@@ -892,6 +920,10 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         return reroute_grace_response
 
     # Before the pending-offer check, so its "כן" isn't taken as confirming an offer.
+    modification_response = _handle_modification_offer_reply(phone, body)
+    if modification_response is not None:
+        return modification_response
+
     merge_response = _handle_merge_offer_reply(phone, body)
     if merge_response is not None:
         return merge_response
