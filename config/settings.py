@@ -267,6 +267,8 @@ if TESTING:
     os.environ["OPENAI_API_KEY"] = "test"
     # Whatever model .env picks, tests run (mocked) against the OpenAI path.
     os.environ["LLM_PROVIDER"] = "openai"
+    # The tests exercise the 3-minute order window (production default is no waiting).
+    os.environ["ORDER_DEBOUNCE_SECONDS"] = "180"
     os.environ.pop("LLM_MODEL", None)
     # An in-process cache: Redis would carry cached stats from the previous run into this one.
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}

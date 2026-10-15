@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from decimal import Decimal
 
 from django.core.cache import cache
@@ -16,7 +17,10 @@ DELIVERY_TTL = 86400  # 24 שעות
 # actually pricing and offering it — lets "20 עגבנייה" followed a moment
 # later by "גם 5 חסה" merge into one order instead of the second message
 # landing on an already-cached scenario-choice and getting lost.
-DRAFT_DEBOUNCE_SECONDS = 180
+# 0 (the default) = no waiting: every message is priced and answered at once. The
+# merging machinery below is kept; set ORDER_DEBOUNCE_SECONDS=180 to turn the
+# 3-minute window back on.
+DRAFT_DEBOUNCE_SECONDS = int(os.environ.get("ORDER_DEBOUNCE_SECONDS", "0"))
 DRAFT_TTL = 600  # generous vs. the debounce itself; the dispatch task clears it well before this
 
 # When an order doesn't clear a supplier's minimum, hold it as a draft instead
@@ -217,6 +221,22 @@ def get_merge_offer(phone: str):
 
 def clear_merge_offer(phone: str):
     cache.delete(f"whatsapp_merge_offer:{phone}")
+
+
+def save_modification_offer(phone: str, batch_id: int, region: str, items: list):
+    """The customer was shown a change to their open order and asked to confirm it.
+    items are [{product_name, quantity, intent}]."""
+    payload = {"batch_id": batch_id, "region": region, "items": items}
+    cache.set(f"whatsapp_modification_offer:{phone}", json.dumps(payload, cls=DecimalEncoder), timeout=SESSION_TTL)
+
+
+def get_modification_offer(phone: str):
+    raw = cache.get(f"whatsapp_modification_offer:{phone}")
+    return json.loads(raw) if raw else None
+
+
+def clear_modification_offer(phone: str):
+    cache.delete(f"whatsapp_modification_offer:{phone}")
 
 
 def _save_fallback_state(phone: str, state: dict):
