@@ -739,7 +739,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
     כן first (see _offer_modification / _handle_modification_offer_reply).
     """
     from apps.catalog.models import Product
-    from apps.catalog.product_matcher import find_ambiguous_group
+    from apps.catalog.product_matcher import find_ambiguous_group, resolve_alias
     from apps.orders.order_parser import parse_modification_intent
 
     product_names = list(Product.objects.values_list("name", flat=True))
@@ -756,6 +756,17 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
     clear, ambiguous, errors = [], [], []
     for item in items:
         product = Product.objects.filter(name=item["product_name"]).first()
+        if product is None:
+            # The AI does not always hand back the exact catalog name: "עגבניות" for
+            # "עגבנייה", or just "בצל" for a customer who wrote "בצל סגול". Fix that here,
+            # from the dictionary and from what the customer actually wrote, before
+            # reporting "not found" or asking which one.
+            fixed = _variant_written_in(item["product_name"], product_names, body)
+            if fixed is None and not find_ambiguous_group(item["product_name"], product_names):
+                # (a bare family root such as "בצל" is never guessed through an alias: it is asked about)
+                fixed = resolve_alias(item["product_name"], product_names)
+            if fixed:
+                product = Product.objects.filter(name=fixed).first()
         if product:
             clear.append({
                 "product_name": product.name, "quantity": item["quantity"], "intent": item.get("intent") or intent,
@@ -781,6 +792,18 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
             validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
         return HttpResponse(status=200)
     return _offer_modification(phone, batch, region, clear, intent)
+
+
+def _variant_written_in(name: str, product_names: list, body: str):
+    """`name` is the root of several products ("בצל": בצל סגול, בצל ירוק...). If the customer's own
+    message names exactly one of them in full, that is the product they meant; otherwise None."""
+    from apps.catalog.product_matcher import find_ambiguous_group
+
+    group = find_ambiguous_group(name, product_names)
+    if not group:
+        return None
+    named = [variant for variant in group if variant in body]
+    return named[0] if len(named) == 1 else None
 
 
 MODIFY_PROMPT = "ענה *כן* לביצוע או *לא* כדי לא לשנות כלום."
