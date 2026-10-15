@@ -1233,6 +1233,51 @@ class OrderModificationTests(TestCase):
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_a_variant_the_customer_wrote_in_full_is_not_asked_about_again(self, mock_parse, mock_send):
+        """The AI sometimes hands back only the family root ("תפוח אדמה") for "תפוח אדמה אדום"."""
+        white = make_product("תפוח אדמה לבן")
+        SupplierProduct.objects.create(supplier=self.supplier, product=white, price_per_unit="3.00")
+        mock_parse.return_value = {
+            "intent": "add", "items": [{"product_name": "תפוח אדמה", "quantity": Decimal("5")}],
+        }
+
+        self._post("+972507777777", "תוסיף 5 קילו תפוח אדמה אדום")
+
+        shown = mock_send.call_args[0][1]
+        self.assertNotIn("איזה בדיוק", shown)
+        self.assertIn("זה השינוי שהבנתי", shown)
+        self.assertIn("תפוח אדמה אדום", shown)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_a_family_root_with_no_variant_in_the_message_is_still_asked_about(self, mock_parse, mock_send):
+        white = make_product("תפוח אדמה לבן")
+        SupplierProduct.objects.create(supplier=self.supplier, product=white, price_per_unit="3.00")
+        mock_parse.return_value = {
+            "intent": "add", "items": [{"product_name": "תפוח אדמה", "quantity": Decimal("5")}],
+        }
+
+        self._post("+972507777777", "תוסיף 5 קילו תפוח אדמה")
+
+        self.assertIn("איזה בדיוק", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
+    def test_a_name_the_ai_returns_in_another_form_is_found_through_the_dictionary(self, mock_parse, mock_send):
+        carrot = make_product("גזר")
+        SupplierProduct.objects.create(supplier=self.supplier, product=carrot, price_per_unit="3.00")
+        mock_parse.return_value = {
+            "intent": "add", "items": [{"product_name": "גזרים", "quantity": Decimal("5")}],
+        }
+
+        self._post("+972507777777", "תוסיף 5 קילו גזרים")
+
+        shown = mock_send.call_args[0][1]
+        self.assertNotIn("לא נמצאו", shown)
+        self.assertIn("גזר", shown)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    @patch("apps.orders.order_parser.parse_modification_intent")
     def test_nothing_is_applied_until_the_variant_is_chosen_and_the_whole_change_confirmed(self, mock_parse, mock_send):
         """A clear item in the same message waits for the ambiguous one, and everything is shown at once."""
         onion_dry = make_product("בצל יבש")
