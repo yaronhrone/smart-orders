@@ -42,6 +42,11 @@ def health_check(request):
         failure = None
     services["whatsapp_sending"] = "ok" if not failure else f"last send failed at {failure['at']}: {failure['error']}"
 
+    try:
+        services["parsing_today"] = llm.parse_counts_today() or "none yet"
+    except Exception:
+        pass
+
     response_status = 200 if status == "healthy" else 503
 
     return JsonResponse({

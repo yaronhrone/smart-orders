@@ -88,6 +88,7 @@ def _parse_with_ai(message: str, product_names: list[str]) -> dict:
         f"הודעת הספק: {message}"
     )
 
+    llm.note_parse("price_parse", used_ai=True)
     data = llm.complete_json(prompt, _get_client)
 
     return {
