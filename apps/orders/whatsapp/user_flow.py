@@ -867,9 +867,13 @@ def _handle_modification_offer_reply(phone: str, body: str):
 
 
 def _apply_modification(phone: str, batch, region: str, items: list, default_intent: str = "add") -> HttpResponse:
-    """Apply the confirmed change to the open checkout and tell the suppliers and the customer."""
-    from apps.catalog.models import Product
-    from apps.orders.models import OrderRequestProduct
+    """
+    Apply the confirmed change to the open checkout and tell the suppliers and the customer.
+    The change and the supplier messages are one unit: if a supplier cannot be told (WhatsApp
+    refused the message), the change is rolled back and the customer is told it was not made,
+    so the order never says something the supplier does not know.
+    """
+    from django.db import transaction
 
     profile = getattr(batch.user, "profile", None)
     company = profile.company_name if profile else ""
@@ -879,8 +883,42 @@ def _apply_modification(phone: str, batch, region: str, items: list, default_int
     # One entry per changed order (= per supplier): one consolidated message per supplier,
     # registered as pending, same contract as a fresh order.
     order_changes = {}
-    all_products_map = {p.name: p for p in Product.objects.all()}
 
+    try:
+        with transaction.atomic():
+            _apply_items(phone, batch, region, items, default_intent, order_changes, changes_made, errors, blocked)
+            if changes_made or errors or blocked:
+                _dispatch_modification_batches(order_changes, company, address)
+    except Exception as exc:
+        logger.error("Change to batch %s rolled back, a supplier could not be told: %s", batch.id, exc)
+        validators.send_whatsapp_message(
+            phone, "❌ לא הצלחנו להודיע לספק על השינוי, ולכן לא ביצעתי אותו. ההזמנה נשארה כמו שהייתה. אפשר לנסות שוב בעוד רגע.",
+        )
+        return HttpResponse(status=200)
+
+    if not changes_made and not errors and not blocked:
+        validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
+        return HttpResponse(status=200)
+
+    reply_lines = []
+    if changes_made:
+        reply_lines.append(_modification_header(order_changes))
+        reply_lines += [f"  • {c}" for c in changes_made]
+    if errors:
+        reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
+    if blocked:
+        reply_lines.append("⚠️ לא בוצע:")
+        reply_lines += [f"  • {b}" for b in blocked]
+
+    validators.send_whatsapp_message(phone, "\n".join(reply_lines))
+    return HttpResponse(status=200)
+
+
+def _apply_items(phone, batch, region, items, default_intent, order_changes, changes_made, errors, blocked) -> None:
+    from apps.catalog.models import Product
+    from apps.orders.models import OrderRequestProduct
+
+    all_products_map = {p.name: p for p in Product.objects.all()}
     for item in items:
         product = all_products_map.get(item["product_name"])
         if not product:
@@ -911,24 +949,7 @@ def _apply_modification(phone: str, batch, region: str, items: list, default_int
         if result == "not_found":
             errors.append(product.name)
 
-    if not changes_made and not errors and not blocked:
-        validators.send_whatsapp_message(phone, "לא הצלחתי לזהות שינוי בהזמנה. נסה שוב.")
-        return HttpResponse(status=200)
 
-    _dispatch_modification_batches(order_changes, company, address)
-
-    reply_lines = []
-    if changes_made:
-        reply_lines.append(_modification_header(order_changes))
-        reply_lines += [f"  • {c}" for c in changes_made]
-    if errors:
-        reply_lines.append(f"⚠️ לא נמצאו: {', '.join(errors)}")
-    if blocked:
-        reply_lines.append("⚠️ לא בוצע:")
-        reply_lines += [f"  • {b}" for b in blocked]
-
-    validators.send_whatsapp_message(phone, "\n".join(reply_lines))
-    return HttpResponse(status=200)
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     delivery_response = _handle_delivery_flow(phone, body)
     if delivery_response is not None:
