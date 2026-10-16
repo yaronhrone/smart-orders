@@ -3451,6 +3451,23 @@ class ModificationRulesTests(TestCase):
         phone, text, kind = buttons.call_args[0]
         self.assertEqual((phone, kind), (self.PHONE, "yesno"))
 
+    def test_a_change_the_supplier_could_not_be_told_about_is_not_made(self):
+        self._approve_first_order()
+
+        def fail_for_the_supplier(to_number, body):
+            if to_number == self.supplier.whatsapp_number:
+                raise Exception("exceeded the 50 daily messages limit")
+        self.mock_send.side_effect = fail_for_the_supplier
+
+        self._customer_says("update", "50")
+
+        self.line.refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("30"))  # rolled back
+        self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)  # still approved, not reopened
+        self.assertIn("לא ביצעתי", self._sent_to(self.PHONE)[-1])
+        self.assertNotIn("נשלחו לספקים", self._sent_to(self.PHONE)[-1])
+
     def test_the_supplier_confirming_a_reduction_approves_the_order_again(self):
         self._approve_first_order()
         self._customer_says("update", "20")
