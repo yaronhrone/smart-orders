@@ -486,7 +486,7 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
     """
     from apps.orders.models import OrderRequest
     from .cache import clear_supplier_pending_for_order
-    from .supplier_flow import _save_pending_for_order, followup_header, reopened_header
+    from .supplier_flow import _save_pending_for_order, followup_header, order_breakdown, reopened_header
 
     for entry in order_changes.values():
         order = entry["order"]
@@ -506,6 +506,7 @@ def _dispatch_modification_batches(order_changes: dict, company: str, address: s
         else:
             msg_lines = [f"📝 *{company}* עדכן הזמנה #{order.id}:"]
         msg_lines += entry["lines"]
+        msg_lines.append(order_breakdown(order))
         if needs_confirmation:
             if address:
                 msg_lines.append(f"📍 {address}")
