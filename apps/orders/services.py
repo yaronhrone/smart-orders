@@ -122,9 +122,9 @@ def build_order(user, region, products, scenario="cheapest"):
 def batch_supplier_totals(batch_id, exclude_order_id=None, only_open=False):
     """
     {supplier_id: total} across a batch's non-cancelled orders.
-    only_open=True counts just SENT orders — the ones new items would
-    actually merge into (get_or_create_supplier_order), so the only ones
-    whose existing total counts toward a supplier's minimum for a move.
+    only_open=True counts just the orders new items would join: SENT ones, and
+    APPROVED ones (those are reopened, see get_or_reopen_supplier_order), so their
+    total counts toward a supplier's minimum for a move.
     """
     qs = (
         OrderRequestProduct.objects
@@ -132,7 +132,7 @@ def batch_supplier_totals(batch_id, exclude_order_id=None, only_open=False):
         .exclude(order_request__status=OrderRequest.Status.CANCELLED)
     )
     if only_open:
-        qs = qs.filter(order_request__status=OrderRequest.Status.SENT)
+        qs = qs.filter(order_request__status__in=(OrderRequest.Status.SENT, OrderRequest.Status.APPROVED))
     if exclude_order_id is not None:
         qs = qs.exclude(order_request_id=exclude_order_id)
     totals = defaultdict(Decimal)
@@ -215,21 +215,28 @@ def add_item_to_order(order, product, supplier, quantity, unit_price):
 
 
 def move_item_to_supplier(orp, supplier, unit_price):
-    """
-    Move one line item to `supplier`'s order in the same batch (see
-    get_or_create_supplier_order), merging into an existing line for the
-    same product there via add_item_to_order. Any confirmation the old
-    supplier gave for it is dropped — the new supplier hasn't confirmed
-    anything yet.
+    """move_item() without the "reopened" flag: returns (target_order, target_item, created)."""
+    target, item, created, _reopened = move_item(orp, supplier, unit_price)
+    return target, item, created
 
-    Returns (target_order, target_item, created). `target_item` is the line
-    that now carries the moved quantity — NOT necessarily `orp` itself (it
-    may already have been merged into an existing sibling line and deleted)
-    — use the returned item, never `orp`, for anything display-related
-    afterward. `created` is whether `target_order` was just created for
-    this move (its first item).
+
+def move_item(orp, supplier, unit_price):
     """
-    target, created = get_or_create_supplier_order(orp.order_request.batch, supplier)
+    Move one line item to `supplier`'s order in the same batch, merging into an
+    existing line for the same product there via add_item_to_order. The supplier's
+    open order is used first: a SENT one, else an APPROVED one, which goes back to
+    SENT so the supplier confirms the new total (get_or_reopen_supplier_order); a
+    new order is created only when it has none. Any confirmation the old supplier
+    gave for the item is dropped — the new supplier hasn't confirmed anything yet.
+
+    Returns (target_order, target_item, created, reopened). `target_item` is the
+    line that now carries the moved quantity — NOT necessarily `orp` itself (it may
+    already have been merged into an existing sibling line and deleted) — use the
+    returned item, never `orp`, for anything display-related afterward. `created`
+    is whether `target_order` was just created for this move (its first item);
+    `reopened` whether it was an approved order that went back to SENT.
+    """
+    target, created, reopened = get_or_reopen_supplier_order(orp.order_request.batch, supplier)
     SupplierConfirmation.objects.filter(order_request_product=orp).delete()
 
     existing = target.products.filter(product=orp.product).exclude(id=orp.id).first()
@@ -237,13 +244,13 @@ def move_item_to_supplier(orp, supplier, unit_price):
         existing.quantity += orp.quantity
         existing.save(update_fields=["quantity"])
         orp.delete()
-        return target, existing, created
+        return target, existing, created, reopened
 
     orp.order_request = target
     orp.supplier = supplier
     orp.unit_price = unit_price
     orp.save(update_fields=["order_request", "supplier", "unit_price"])
-    return target, orp, created
+    return target, orp, created, reopened
 
 
 def refresh_order_after_changes(order_id):
@@ -810,7 +817,7 @@ def find_reroute_for_cancelled_supplier(order_request_id: int, failing_supplier_
     # commit these right away regardless of what happens with the rest.
     sibling_supplier_ids = set(
         OrderRequest.objects
-        .filter(batch_id=order.batch_id, status=OrderRequest.Status.SENT)
+        .filter(batch_id=order.batch_id, status__in=(OrderRequest.Status.SENT, OrderRequest.Status.APPROVED))
         .exclude(id=order_request_id)
         .values_list("supplier_id", flat=True)
     )

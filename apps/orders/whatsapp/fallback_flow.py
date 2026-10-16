@@ -119,6 +119,35 @@ def _handle_refused_additions(
     validators.send_whatsapp_message(customer_phone, "\n".join(lines))
 
 
+def _leftover_minimum_note(original_supplier, order, missing_products: list, partial_products: list) -> str:
+    """
+    What is left of this supplier's order once the reported items are taken out, against its
+    minimum order. The supplier chose to report the shortage, so nothing is blocked, but the
+    customer is told, and can add products to bring it back up.
+    """
+    from apps.orders.models import OrderRequestProduct
+
+    minimum = original_supplier.minimum_order
+    if not minimum:
+        return ""
+    lines = list(OrderRequestProduct.objects.filter(order_request=order))
+    total = sum((l.quantity * l.unit_price for l in lines), Decimal(0))
+    removed_ids = {int(m["orp_id"]) for m in missing_products if m.get("orp_id") is not None}
+    removed = sum((l.quantity * l.unit_price for l in lines if l.id in removed_ids), Decimal(0))
+    for pp in partial_products:
+        line = next((l for l in lines if l.id == int(pp["orp_id"])), None)
+        if line:
+            removed += Decimal(str(pp["quantity"])) * line.unit_price
+    left = total - removed
+    if left <= 0 or left >= minimum:
+        return ""
+    return (
+        f"⚠️ אחרי הסרת מה שחסר, ההזמנה אצל {original_supplier.name} תהיה {left:.2f}₪, מתחת למינימום שלו "
+        f"({minimum:.2f}₪). אפשר להוסיף עוד מוצרים להזמנה (פשוט כתוב אותם) כדי להגיע למינימום, "
+        "או להשאיר כמו שהיא: הספק החליט לשלוח."
+    )
+
+
 def _handle_missing_items(
     original_supplier, missing_products: list, order_request_id: int, partial_products: list = None,
     refused_all: bool = False,
@@ -257,6 +286,8 @@ def _handle_missing_items(
     if auto_removed:
         _recalculate_order_total(order_request_id)
 
+    shortfall_note = _leftover_minimum_note(original_supplier, order, missing_products, partial_products)
+
     # ── Build customer message ──
     lines = [f"⚠️ *{original_supplier.name}* דיווח:"]
     for r in redirects:
@@ -286,6 +317,9 @@ def _handle_missing_items(
                 f"\n• *{nf['product_name']}* x{nf['quantity']} {nf['unit']} — "
                 "חסר המוצר הזה במלאי לכל הספקים, הוסר מההזמנה אוטומטית"
             )
+
+    if shortfall_note:
+        lines.append("\n" + shortfall_note)
 
     if redirects:
         lines.append("\n" + FALLBACK_PROMPT)
@@ -575,7 +609,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
     redirects = state["redirects"]
 
     from apps.orders.services import (
-        add_item_to_order, batch_supplier_totals, get_or_create_supplier_order, move_item_to_supplier,
+        add_item_to_order, batch_supplier_totals, get_or_reopen_supplier_order, move_item,
     )
     from .supplier_flow import notify_supplier_of_items
 
@@ -609,8 +643,9 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
             continue
 
         # Check minimum with existing + redirected items BEFORE updating DB.
-        # "Existing" = what this supplier already has in an open (SENT) order
-        # of the same batch — that's the order the items would merge into.
+        # "Existing" = what this supplier already has in an open order of the
+        # same batch (SENT, or APPROVED: that one is reopened) — the order the
+        # items would join.
         existing_total = batch_open_totals.get(supplier.id, Decimal(0))
         redirect_total = sum(
             Decimal(r["quantity"]) * Decimal(r["fallback_price"]) for r in items
@@ -627,7 +662,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
             continue  # Skip this supplier — don't update DB or send message
 
         # Move/create the items in this supplier's order in the same batch
-        target, created = get_or_create_supplier_order(source_order.batch, supplier)
+        target, created, reopened = get_or_reopen_supplier_order(source_order.batch, supplier)
         moved_by_id = {}
         for r in items:
             if r.get("type") == "partial":
@@ -651,7 +686,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
                 # Full redirect: the existing item moves to the new supplier's order
                 try:
                     orp = OrderRequestProduct.objects.select_related("product").get(id=r["orp_id"])
-                    _, moved_item, _ = move_item_to_supplier(orp, supplier, Decimal(r["fallback_price"]))
+                    _, moved_item, _, _ = move_item(orp, supplier, Decimal(r["fallback_price"]))
                     success_lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} → {supplier.name}")
                     moved_by_id[moved_item.id] = moved_item
                 except OrderRequestProduct.DoesNotExist:
@@ -664,7 +699,7 @@ def _execute_fallback_redirect(phone: str, state: dict) -> HttpResponse:
             continue
 
         _recalculate_order_total(target.id)
-        notify_supplier_of_items(target, moved_items, created=created)
+        notify_supplier_of_items(target, moved_items, created=created, reopened=reopened)
 
     # Edge case 1: recalculate the source order after all redirect changes
     _recalculate_order_total(order_request_id)

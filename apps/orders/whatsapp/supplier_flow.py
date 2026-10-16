@@ -85,12 +85,36 @@ def notify_suppliers_for_order(order) -> None:
     order.transition_to(OrderRequest.Status.SENT)
 
 
+def order_breakdown(order) -> str:
+    """
+    The order as priced, for the supplier: every line with its unit price and the total, so it
+    can check the figures against its own price list and see at a glance whether it still meets
+    its minimum (it may then approve a small shortfall).
+    """
+    items = list(order.products.select_related("product").all())
+    lines = ["\n💰 פירוט ההזמנה:"]
+    total = Decimal(0)
+    for item in items:
+        line_total = item.quantity * item.unit_price
+        total += line_total
+        lines.append(
+            f"• {item.product.name} {fmt_qty(item.quantity)} {item.product.get_unit_display()} "
+            f"× {item.unit_price:.2f}₪ = {line_total:.2f}₪"
+        )
+    lines.append(f'סה"כ: {total:.2f}₪')
+    minimum = order.supplier.minimum_order
+    if minimum and total < minimum:
+        lines.append(f"⚠️ מתחת להזמנת המינימום שלך ({minimum:.2f}₪). אפשר לאשר בכל זאת.")
+    return "\n".join(lines)
+
+
 def _order_message(order) -> str:
     company_name, company_address, company_phone = _company_details(order)
 
     lines = [f"שלום, *{company_name}* מבקש להזמין (הזמנה #{order.id}):"]
     for item in order.products.select_related("product").all():
         lines.append(f"- {item.product.name} x{item.quantity} {item.product.get_unit_display()}")
+    lines.append(order_breakdown(order))
     if company_address:
         lines.append(f"\n📍 *כתובת למשלוח:* {company_address}")
     if company_phone:
@@ -210,6 +234,7 @@ def notify_supplier_of_items(order, items, *, created: bool, reopened: bool = Fa
             f"- {item.product.name} x{fmt_qty(item.quantity)} {item.product.get_unit_display()}"
             f"{supplier_total_note(order, item.product, item.quantity)}"
         )
+    msg_lines.append(order_breakdown(order))
     if note:
         msg_lines.append(f"\n{note}")
     if address:
@@ -236,13 +261,15 @@ def _move_and_notify(assignments: list, minimum_problems: list = ()) -> list:
     minimum (customer said "שלח"); they're told so in their message.
     Returns [{"order", "items"}] per touched order, for the customer message.
     """
-    from apps.orders.services import move_item_to_supplier, refresh_order_after_changes
+    from apps.orders.services import move_item, refresh_order_after_changes
 
     short_by_supplier = {p["supplier_id"]: p for p in minimum_problems}
     touched = {}
     for a in assignments:
-        target, item, created = move_item_to_supplier(a["orp"], a["supplier"], a["unit_price"])
-        entry = touched.setdefault(target.id, {"order": target, "items_by_id": {}, "created": created})
+        target, item, created, reopened = move_item(a["orp"], a["supplier"], a["unit_price"])
+        entry = touched.setdefault(
+            target.id, {"order": target, "items_by_id": {}, "created": created, "reopened": reopened},
+        )
         entry["items_by_id"][item.id] = item  # keyed by id: a later merge into the same
         # line (two assignments landing on the same product+supplier) must
         # replace, not duplicate, the earlier reference — item always
@@ -257,7 +284,9 @@ def _move_and_notify(assignments: list, minimum_problems: list = ()) -> list:
             f"({short['current_total']:.2f}₪ מתוך {short['minimum_required']:.2f}₪) — "
             "הלקוח ביקש לשלוח בכל זאת. אפשר לאשר, או לענות *ביטול*."
         ) if short else ""
-        notify_supplier_of_items(entry["order"], entry["items"], created=entry["created"], note=note)
+        notify_supplier_of_items(
+            entry["order"], entry["items"], created=entry["created"], reopened=entry.get("reopened", False), note=note,
+        )
     return list(touched.values())
 
 

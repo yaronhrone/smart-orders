@@ -2457,6 +2457,92 @@ class ShippingAndDeliveryChainTests(TestCase):
 # ─────────────────────── Fallback flow (missing/partial items) ─────────────
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class OpenOrderReuseAndPricesTests(TestCase):
+    """
+    A shortage moves an item to another supplier of the same checkout: that supplier's OPEN order
+    (even an approved one, which is reopened) is used and counted toward its minimum, instead of
+    a second order that has to clear the minimum alone. Supplier messages show prices and the total.
+    """
+
+    PHONE = "+972509999999"
+
+    def setUp(self):
+        cache.clear()
+        self.carrot = make_product("גזר")
+        self.onion = make_product("בצל סגול")
+        self.pepper = make_product("פלפל אדום")
+        self.dagan = make_supplier("משק דגן", minimum_order=600)
+        self.sharon = make_supplier("ירקות השרון", minimum_order=400)
+        SupplierProduct.objects.create(supplier=self.dagan, product=self.carrot, price_per_unit="3.45")
+        SupplierProduct.objects.create(supplier=self.sharon, product=self.carrot, price_per_unit="3.98")
+        self.user = make_user_with_profile(phone=self.PHONE)
+        self.dagan_order = make_order(self.user, self.dagan, status=OrderRequest.Status.SENT, total_price="138")
+        self.carrot_line = OrderRequestProduct.objects.create(
+            order_request=self.dagan_order, product=self.carrot, supplier=self.dagan,
+            quantity="40", unit_price="3.45",
+        )
+        self.pepper_line = OrderRequestProduct.objects.create(
+            order_request=self.dagan_order, product=self.pepper, supplier=self.dagan,
+            quantity="30", unit_price="6.27",
+        )
+        # Sharon already approved its part of the same checkout: 288 of its 400 minimum
+        self.sharon_order = make_order(
+            self.user, self.sharon, batch=self.dagan_order.batch, status=OrderRequest.Status.APPROVED,
+            total_price="288",
+        )
+        onion_line = OrderRequestProduct.objects.create(
+            order_request=self.sharon_order, product=self.onion, supplier=self.sharon,
+            quantity="60", unit_price="3.60",
+        )
+        SupplierConfirmation.objects.create(order_request_product=onion_line, confirmed_quantity=Decimal("60"))
+        OrderRequestProduct.objects.create(
+            order_request=self.sharon_order, product=make_product("בננה"), supplier=self.sharon,
+            quantity="20", unit_price="3.60",
+        )
+
+    def _carrot_missing(self):
+        from apps.orders.whatsapp.fallback_flow import _handle_missing_items
+        _handle_missing_items(
+            self.dagan,
+            [{"orp_id": self.carrot_line.id, "product_name": "גזר", "quantity": "40", "unit": 'ק"ג'}],
+            self.dagan_order.id,
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_the_alternative_uses_the_suppliers_approved_order_and_its_total_counts_toward_the_minimum(self, mock_send):
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        self._carrot_missing()
+
+        _handle_fallback_approval(self.PHONE, "כן")  # 288 already there + 159.20 = 447.20 >= 400
+
+        self.assertEqual(OrderRequest.objects.filter(batch=self.dagan_order.batch, supplier=self.sharon).count(), 1)
+        self.sharon_order.refresh_from_db()
+        self.assertEqual(self.sharon_order.status, OrderRequest.Status.SENT)  # reopened: Sharon confirms the new total
+        self.assertTrue(self.sharon_order.products.filter(product=self.carrot).exists())
+        msg = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.sharon.whatsapp_number][-1]
+        self.assertIn("שכבר אישרת", msg)
+        self.assertIn('סה"כ: 447.20₪', msg)
+        self.assertIn("גזר 40 ק\"ג × 3.98₪ = 159.20₪", msg)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_shortage_that_leaves_an_order_under_its_minimum_tells_the_customer(self, mock_send):
+        self._carrot_missing()  # Dagan keeps the pepper: 188.10 of its 600 minimum
+
+        customer = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.PHONE][-1]
+        self.assertIn("מתחת למינימום", customer)
+        self.assertIn("188.10", customer)
+
+    def test_the_supplier_sees_each_price_the_total_and_a_note_when_under_its_minimum(self):
+        from apps.orders.whatsapp.supplier_flow import order_breakdown
+
+        text = order_breakdown(self.dagan_order)
+
+        self.assertIn("גזר 40 ק\"ג × 3.45₪ = 138.00₪", text)
+        self.assertIn('סה"כ: 326.10₪', text)
+        self.assertIn("מתחת להזמנת המינימום שלך (600.00₪). אפשר לאשר בכל זאת.", text)
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
 class FallbackFlowTests(TestCase):
     """
     A supplier reports a product missing/partial -> the system offers a
