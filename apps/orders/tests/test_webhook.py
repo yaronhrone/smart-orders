@@ -1580,6 +1580,40 @@ class SupplierButtonTests(TestCase):
         self.supplier.refresh_from_db()
         self.assertIsNotNone(self.supplier.blocked_until)
 
+    @patch("apps.orders.whatsapp.validators.send_with_buttons")
+    def test_the_cancel_question_is_asked_with_yes_no_buttons(self, mock_buttons):
+        self._tap("cancel", "ביטול")
+
+        phone, text, kind = mock_buttons.call_args[0]
+        self.assertEqual(kind, "yesno")
+        self.assertIn("לבטל את כל הזמנה", text)
+        from apps.orders.whatsapp.supplier_flow import CANCEL_PROMPT
+        self.assertEqual(mock_buttons.call_args.kwargs["strip"], (CANCEL_PROMPT,))  # left out when buttons carry the answer
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_no_to_the_cancel_question_keeps_the_order(self, mock_send):
+        self._tap("cancel", "ביטול")
+
+        self._tap("no", "לא")
+
+        self.order.refresh_from_db()
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.order.status, OrderRequest.Status.SENT)
+        self.assertIsNone(self.supplier.blocked_until)
+        self.assertIn("ההזמנה נשארת", mock_send.call_args[0][1])
+        self.assertNotIn("לא הצלחתי להבין", mock_send.call_args[0][1])
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_tapping_yes_to_the_cancel_question_cancels(self, mock_send):
+        self._tap("cancel", "ביטול")
+
+        with patch("apps.orders.whatsapp.supplier_flow.process_reroute") as reroute:
+            self._tap("yes", "כן")
+
+        reroute.assert_called_once()
+        self.supplier.refresh_from_db()
+        self.assertIsNotNone(self.supplier.blocked_until)
+
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_any_other_answer_after_the_cancel_tap_keeps_the_order(self, mock_send):
         self._tap("cancel", "ביטול")
