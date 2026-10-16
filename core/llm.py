@@ -12,10 +12,16 @@ with it, on its own base URL); Anthropic uses its own SDK. Callers never see
 the difference: complete_json() for the parsers, chat_session() for the
 assistant's tool-calling loop. Restart the web and worker containers after a change.
 """
+import datetime
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+PARSE_KINDS = ("order_parse", "modification_parse", "price_parse")
 
 OPENAI, ANTHROPIC, DEEPSEEK = "openai", "anthropic", "deepseek"
 
@@ -34,6 +40,35 @@ _clients = {}
 
 # Tokens used by the latest complete_json() call, for core's compare_models command.
 last_usage = {"input": 0, "output": 0}
+
+
+def note_parse(kind: str, used_ai: bool, **detail) -> None:
+    """
+    Say where a message was understood: by the dictionary (exact / alias match, free and
+    instant) or by the AI model (slow, costs money). One log line per parse, and a per-day
+    counter that /health/ shows, to see how often the AI is really needed.
+    """
+    source = "ai" if used_ai else "dictionary"
+    logger.info("PARSE %s via %s %s", kind, source, detail or "")
+    try:
+        from django.core.cache import cache
+        key = f"parse_count:{datetime.date.today().isoformat()}:{kind}:{source}"
+        cache.add(key, 0, timeout=172800)
+        cache.incr(key)
+    except Exception:  # counting must never break a parse
+        pass
+
+
+def parse_counts_today() -> dict:
+    from django.core.cache import cache
+
+    today = datetime.date.today().isoformat()
+    counts = {}
+    for kind in PARSE_KINDS:
+        row = {source: cache.get(f"parse_count:{today}:{kind}:{source}") or 0 for source in ("dictionary", "ai")}
+        if any(row.values()):
+            counts[kind] = row
+    return counts
 
 
 def provider() -> str:

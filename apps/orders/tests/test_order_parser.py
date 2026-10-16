@@ -95,8 +95,9 @@ class ParseModificationIntentTests(TestCase):
         )
 
         from apps.orders.order_parser import parse_modification_intent
+        # (a message about changing a total, so that the dictionary leaves it to the AI)
         parse_modification_intent(
-            "תוסיף גם 2 קילו פלפל",
+            "תעדכן את הפלפל ל-2 קילו",
             ["פלפל אדום", "פלפל ירוק", "פלפל צהוב", "עגבנייה"],
         )
 
@@ -169,19 +170,19 @@ class ParseCustomerOrderTests(TestCase):
         """Happy path: valid items are returned with correct names and quantities."""
         client = MagicMock()
         mock_get_client.return_value = client
+        # "10 גזר" is read by the dictionary; only "5 עגבניות" is left for the AI.
         client.chat.completions.create.return_value = _openai_response([
             {"product_name": "עגבניה", "quantity": "5.0"},
-            {"product_name": "גזר", "quantity": "10.0"},
         ])
 
         from apps.orders.order_parser import parse_customer_order
         result = parse_customer_order("5 עגבניות ו-10 גזר", ["עגבניה", "גזר"])
 
+        quantities = {item["product_name"]: item["quantity"] for item in result}
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["product_name"], "עגבניה")
-        self.assertEqual(result[0]["quantity"], Decimal("5.0"))
-        self.assertEqual(result[1]["product_name"], "גזר")
-        self.assertEqual(result[1]["quantity"], Decimal("10.0"))
+        self.assertEqual(quantities, {"עגבניה": Decimal("5.0"), "גזר": Decimal("10.0")})
+        sent = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertNotIn("10 גזר", sent)
 
     @patch("apps.orders.order_parser._get_client")
     def test_raises_no_items_when_ai_returns_empty_list(self, mock_get_client):
@@ -273,3 +274,49 @@ class ParseCustomerOrderTests(TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["quantity"], Decimal("3"))
+
+
+class DictionaryFirstModificationTests(TestCase):
+    """A change to an open order is read by the dictionary when it can be; the AI only reads the rest."""
+
+    NAMES = ["עגבנייה", "גזר", "בצל סגול", "בצל ירוק", "חסה קיסר", "חסה רומית"]
+
+    def _parse(self, message):
+        from apps.orders.order_parser import parse_modification_intent
+        with patch("apps.orders.order_parser._get_client") as get_client:
+            result = parse_modification_intent(message, self.NAMES)
+        return result, get_client.return_value.chat.completions.create
+
+    def test_a_plain_list_of_known_products_never_reaches_the_ai(self):
+        result, ai_call = self._parse("20 קילו עגבנייה, 40 קילו גזר, 20 קילו בצל סגול ו-5 יחידות חסה קיסר")
+
+        ai_call.assert_not_called()
+        self.assertEqual(result["intent"], "add")
+        self.assertEqual(
+            [(i["product_name"], i["quantity"], i["intent"]) for i in result["items"]],
+            [("עגבנייה", Decimal("20"), "add"), ("גזר", Decimal("40"), "add"),
+             ("בצל סגול", Decimal("20"), "add"), ("חסה קיסר", Decimal("5"), "add")],
+        )
+
+    def test_an_add_word_and_an_alias_are_still_the_dictionary(self):
+        result, ai_call = self._parse("תוסיף 5 קילו גזרים")
+
+        ai_call.assert_not_called()
+        self.assertEqual([(i["product_name"], i["quantity"]) for i in result["items"]], [("גזר", Decimal("5"))])
+
+    def test_a_family_root_comes_back_as_the_root_so_the_caller_asks(self):
+        result, ai_call = self._parse("עוד 5 חסה")
+
+        ai_call.assert_not_called()
+        self.assertEqual(result["items"][0]["product_name"], "חסה")
+
+    def test_words_about_changing_a_total_or_reducing_go_to_the_ai(self):
+        for message in ("תעדכן עגבניות ל-50", "תוריד 10 קילו גזר", "במקום 30 גזר תביא 50"):
+            with self.subTest(message=message):
+                _result, ai_call = self._parse(message)
+                ai_call.assert_called_once()
+
+    def test_an_unknown_name_goes_to_the_ai(self):
+        _result, ai_call = self._parse("תוסיף 3 קילו ברוקולי")
+
+        ai_call.assert_called_once()

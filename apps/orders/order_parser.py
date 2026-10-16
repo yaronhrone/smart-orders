@@ -1,4 +1,5 @@
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 
 from apps.catalog.product_matcher import list_ambiguous_families, match_order_items
@@ -43,11 +44,49 @@ def _to_decimal_items(raw_items: list) -> list:
     return result
 
 
+# Words that mean a change is NOT a plain addition ("set the total", "take away"): only the AI
+# reads those reliably. Words that mean "more" can be dropped: a bare quantity is an addition.
+_CHANGE_CUES = (
+    "תעדכן", "עדכן", "שנה", "תשנה", "תהפוך", "תקטין", "הקטן", "תוריד", "הורד", "תפחית", "הפחת",
+    "פחות", "במקום", "תגדיל", "הגדל", "ל-", "בטל",
+)
+_ADD_CUES = ("תוסיף", "תוסיפו", "הוסף", "הוסיפו", "בבקשה", "גם", "עוד")
+
+
+def _modification_from_dictionary(message: str, product_names: list):
+    """
+    The cheap first pass for a change to an open order: when every part of the message is a
+    quantity next to a name the dictionary knows (exact name or alias), and nothing says
+    "update the total" or "reduce", it is a plain addition and needs no AI. Returns the
+    parsed dict, or None when the AI is needed.
+    """
+    if any(cue in message for cue in _CHANGE_CUES):
+        return None
+    cleaned = message
+    for cue in _ADD_CUES:
+        cleaned = re.sub(rf"(?<![\u0590-\u05FF]){cue}(?![\u0590-\u05FF])", " ", cleaned)
+    resolved, ambiguous, remaining = match_order_items(cleaned, product_names)
+    if remaining or not (resolved or ambiguous):
+        return None
+    items = []
+    for entry in resolved:
+        items.append({"product_name": entry["product_name"], "quantity": Decimal(str(entry["quantity"])), "intent": "add"})
+    for entry in ambiguous:  # a family root: the caller asks which one
+        items.append({"product_name": entry["query"], "quantity": Decimal(str(entry["quantity"])), "intent": "add"})
+    return {"intent": "add", "items": items} if items else None
+
+
 def parse_modification_intent(message: str, product_names: list) -> dict:
     """
     Detects if message is a modification to an existing order.
     Returns {"intent": "add"|"update"|"none", "items": [{"product_name": str, "quantity": Decimal}]}.
+    The dictionary is tried first (see _modification_from_dictionary); the AI only reads what it cannot.
     """
+    from_dictionary = _modification_from_dictionary(message, product_names)
+    if from_dictionary is not None:
+        llm.note_parse("modification_parse", used_ai=False, items=len(from_dictionary["items"]))
+        return from_dictionary
+    llm.note_parse("modification_parse", used_ai=True)
     known = ", ".join(product_names) if product_names else "—"
 
     # "פלפל" isn't itself a catalog product — only "פלפל אדום"/"פלפל ירוק"/...
@@ -152,6 +191,11 @@ def parse_customer_order(message: str, product_names: list) -> list:
     resolves via the dictionary, no AI call is made at all.
     """
     dict_resolved, ambiguous, remaining_message = match_order_items(message, product_names)
+    llm.note_parse(
+        "order_parse", used_ai=bool(remaining_message),
+        dictionary=len(dict_resolved), ambiguous=len(ambiguous),
+        left_for_ai=len([s for s in remaining_message.split(",") if s.strip()]),
+    )
 
     items = list(dict_resolved)
     if remaining_message:

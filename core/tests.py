@@ -159,3 +159,21 @@ class CeleryReliabilitySettingsTests(SimpleTestCase):
         self.assertGreater(settings.CELERY_BROKER_TRANSPORT_OPTIONS["visibility_timeout"], MINIMUM_GRACE_SECONDS)
         self.assertTrue(settings.CELERY_TASK_ACKS_LATE)
         self.assertTrue(settings.CELERY_TASK_REJECT_ON_WORKER_LOST)
+
+
+class ParseCountersTests(SimpleTestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_each_parse_is_counted_by_where_it_was_understood(self):
+        llm.note_parse("order_parse", used_ai=False, dictionary=3)
+        llm.note_parse("order_parse", used_ai=False, dictionary=1)
+        llm.note_parse("order_parse", used_ai=True, left_for_ai=2)
+        llm.note_parse("price_parse", used_ai=True)
+
+        self.assertEqual(llm.parse_counts_today(), {
+            "order_parse": {"dictionary": 2, "ai": 1},
+            "price_parse": {"dictionary": 0, "ai": 1},
+        })
