@@ -727,6 +727,7 @@ def _handle_eta_update_reply(phone: str, supplier, body: str, eta_request: dict)
 
 
 CANCEL_CONFIRM_TTL = 600
+CANCEL_PROMPT = " ענה *כן* לביטול. כל תשובה אחרת משאירה את ההזמנה כמו שהיא."
 
 
 def _handle_supplier_button(phone: str, supplier, payload: str, body: str) -> HttpResponse:
@@ -759,9 +760,8 @@ def _handle_supplier_button(phone: str, supplier, payload: str, body: str) -> Ht
         )
     else:
         cache.set(f"whatsapp_supplier_cancel_confirm:{phone}", order_id, timeout=CANCEL_CONFIRM_TTL)
-        validators.send_whatsapp_message(
-            phone,
-            f"לבטל את כל הזמנה #{order_id}? ענה *כן* לביטול. כל תשובה אחרת משאירה את ההזמנה כמו שהיא.",
+        validators.send_with_buttons(
+            phone, f"לבטל את כל הזמנה #{order_id}?" + CANCEL_PROMPT, "yesno", strip=(CANCEL_PROMPT,),
         )
     return HttpResponse(status=200)
 
@@ -778,6 +778,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         cache.delete(cancel_key)
         if body.strip() in ("כן", "yes", "Yes"):
             body = "ביטול"
+        elif body.strip() in ("לא", "no", "No"):
+            validators.send_whatsapp_message(phone, "בסדר, ההזמנה נשארת כמו שהיא.")
+            return HttpResponse(status=200)
 
     key = f"whatsapp_supplier_pending:{phone}"
     raw = cache.get(key)
