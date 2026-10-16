@@ -7,6 +7,8 @@ and prints the SIDs to put in .env.prod (then restart web + worker):
 
     WHATSAPP_CONTENT_SID_ACTIONS=HX...   buttons  אישור / חסר / ביטול
     WHATSAPP_CONTENT_SID_SHIPPED=HX...   button   יצא למשלוח
+    WHATSAPP_CONTENT_SID_ADDITION=HX...  buttons  אישור / חסר       (supplier: an addition to an order)
+    WHATSAPP_CONTENT_SID_REDUCTION=HX... buttons  אשר הפחתה / לא להפחית (supplier: a reduction)
     WHATSAPP_CONTENT_SID_YESNO=HX...     buttons  כן / לא          (customer: add to open order, alternative supplier)
     WHATSAPP_CONTENT_SID_CONFIRM=HX...   buttons  אישור / ביטול    (customer: approve the order)
     WHATSAPP_CONTENT_SID_SEND=HX...      buttons  שלח / ביטול      (customer: an order held under a supplier minimum)
@@ -31,6 +33,15 @@ TEMPLATES = {
     "WHATSAPP_CONTENT_SID_SHIPPED": (
         "smart_orders_supplier_shipped",
         [("יצא למשלוח", "shipped")],
+    ),
+    # Changes to an order a supplier already has
+    "WHATSAPP_CONTENT_SID_ADDITION": (
+        "smart_orders_supplier_addition",
+        [("אישור", "confirm"), ("חסר", "missing")],
+    ),
+    "WHATSAPP_CONTENT_SID_REDUCTION": (
+        "smart_orders_supplier_reduction",
+        [("אשר הפחתה", "confirm"), ("לא להפחית", "refuse")],
     ),
     # Customers
     "WHATSAPP_CONTENT_SID_YESNO": (
