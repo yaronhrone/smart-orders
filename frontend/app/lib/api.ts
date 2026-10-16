@@ -31,6 +31,11 @@ function toQueryString(params: object): string {
 function _parseErrorBody(body: string): string {
   try {
     const parsed = JSON.parse(body);
+    // A message the server wrote for the customer ("detail") stands alone: the other fields of
+    // the same answer (the open order's items, failed suppliers...) are data, not text to show.
+    if (parsed && typeof parsed === "object" && typeof (parsed as { detail?: unknown }).detail === "string") {
+      return (parsed as { detail: string }).detail;
+    }
     return _flattenErrors(parsed) || body;
   } catch {
     return body;
