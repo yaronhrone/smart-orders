@@ -2609,6 +2609,27 @@ class OpenOrderReuseAndPricesTests(TestCase):
         to_dagan = [c for c in mock_send.call_args_list if c[0][0] == self.dagan.whatsapp_number]
         self.assertEqual(to_dagan, [])
 
+    @patch("apps.orders.whatsapp.supplier_flow.process_reroute")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_when_the_supplier_cancels_the_open_question_about_that_order_is_forgotten(self, mock_send, mock_reroute):
+        self._dagan_has_a_pending_answer()
+        self._dagan_says("חסר גזר")  # the customer is asked about an alternative
+        self.assertIsNotNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
+        self._dagan_says("ביטול")
+
+        self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
+    def test_an_answer_to_a_question_about_a_cancelled_order_is_not_applied(self):
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        cache.set(f"whatsapp_fallback:{self.PHONE}", json.dumps({
+            "order_request_id": self.dagan_order.id, "original_supplier_name": "משק דגן", "redirects": [],
+        }))
+        OrderRequest.objects.filter(pk=self.dagan_order.pk).update(status=OrderRequest.Status.CANCELLED)
+
+        self.assertIsNone(_handle_fallback_approval(self.PHONE, "לא"))
+        self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
     def test_the_supplier_sees_each_price_the_total_and_a_note_when_under_its_minimum(self):
         from apps.orders.whatsapp.supplier_flow import order_breakdown
 
@@ -2617,6 +2638,94 @@ class OpenOrderReuseAndPricesTests(TestCase):
         self.assertIn("גזר 40 ק\"ג × 3.45₪ = 138.00₪", text)
         self.assertIn('סה"כ: 326.10₪', text)
         self.assertIn("מתחת להזמנת המינימום שלך (600.00₪). אפשר לאשר בכל זאת.", text)
+
+
+@override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)
+class CustomerCancelsOrderTests(TestCase):
+    """"בטל את ההזמנה": asks כן / לא, then cancels what has not shipped and tells the suppliers."""
+
+    PHONE = "+972508888888"
+
+    def setUp(self):
+        cache.clear()
+        self.tomato = make_product("עגבניה")
+        self.a = make_supplier("ספק א")
+        self.b = make_supplier("ספק ב")
+        self.user = make_user_with_profile(phone=self.PHONE)
+        self.order_a = make_order(self.user, self.a, status=OrderRequest.Status.SENT, total_price="100")
+        self.order_b = make_order(
+            self.user, self.b, batch=self.order_a.batch, status=OrderRequest.Status.APPROVED, total_price="80",
+        )
+        patcher = patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+        self.mock_send = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _say(self, body):
+        return self.client.post("/whatsapp/webhook/", {"From": f"whatsapp:{self.PHONE}", "Body": body})
+
+    def _sent_to(self, phone):
+        return [c[0][1] for c in self.mock_send.call_args_list if c[0][0] == phone]
+
+    def test_asks_first_and_changes_nothing_until_yes(self):
+        self._say("בטל את ההזמנה")
+
+        self.order_a.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.SENT)
+        asked = self._sent_to(self.PHONE)[-1]
+        self.assertIn("לבטל את כל ההזמנה הפתוחה", asked)
+        self.assertIn(f"#{self.order_a.id}", asked)
+        self.assertIn(f"#{self.order_b.id}", asked)
+
+    def test_yes_cancels_every_order_and_tells_the_suppliers_who_had_it(self):
+        self._say("ביטול הזמנה")
+        self._say("כן")
+
+        for order in (self.order_a, self.order_b):
+            order.refresh_from_db()
+            self.assertEqual(order.status, OrderRequest.Status.CANCELLED)
+        for supplier in (self.a, self.b):
+            self.assertIn("ביטל את הזמנה", self._sent_to(supplier.whatsapp_number)[-1])
+        self.assertIn("ההזמנה בוטלה", self._sent_to(self.PHONE)[-1])
+
+    def test_no_keeps_the_order(self):
+        self._say("בטל את ההזמנה")
+        self._say("לא")
+
+        self.order_a.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.SENT)
+        self.assertIn("נשארת", self._sent_to(self.PHONE)[-1])
+
+    def test_an_order_that_already_shipped_is_not_cancelled(self):
+        OrderRequest.objects.filter(pk=self.order_b.pk).update(status=OrderRequest.Status.SHIPPED)
+
+        self._say("בטל את ההזמנה")
+        asked = self._sent_to(self.PHONE)[-1]
+        self.assertIn("כבר יצאו למשלוח", asked)
+        self._say("כן")
+
+        self.order_a.refresh_from_db()
+        self.order_b.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.CANCELLED)
+        self.assertEqual(self.order_b.status, OrderRequest.Status.SHIPPED)
+
+    def test_cancelling_also_forgets_the_open_questions_about_it(self):
+        cache.set(f"whatsapp_fallback:{self.PHONE}", json.dumps({
+            "order_request_id": self.order_a.id, "original_supplier_name": "ספק א", "redirects": [],
+        }))
+
+        self._say("בטל את ההזמנה")
+        self._say("כן")
+
+        self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
+    @patch("apps.orders.order_parser.parse_modification_intent", return_value={"intent": "none", "items": []})
+    @patch("apps.orders.order_parser.parse_customer_order", side_effect=ValueError("no_items"))
+    def test_a_bare_cancel_word_is_not_a_request_to_cancel_the_order(self, _parse_order, _parse_change):
+        # "ביטול" alone is an answer to a question (decline), never this
+        self._say("ביטול")
+
+        self.order_a.refresh_from_db()
+        self.assertEqual(self.order_a.status, OrderRequest.Status.SENT)
 
 
 @override_settings(CACHES=LOCMEM_CACHE, DEBUG=True, TWILIO_SKIP_SIGNATURE_VALIDATION=True)

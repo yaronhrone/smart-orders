@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import time as dtime
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from .cache import (
     clear_pending_clarification,
     DecimalEncoder,
     get_merge_offer, save_modification_offer, get_modification_offer, clear_modification_offer,
+    save_cancel_offer, get_cancel_offer, clear_cancel_offer,
     get_pending_clarification,
     save_merge_offer,
     MINIMUM_GRACE_SECONDS,
@@ -961,10 +963,108 @@ def _apply_items(phone, batch, region, items, default_intent, order_changes, cha
             errors.append(product.name)
 
 
+# "בטל את ההזמנה", "ביטול הזמנה", "לבטל את כל ההזמנה": a bare "ביטול" is an answer to a question, not this.
+_CANCEL_ORDER_RE = re.compile(r"(?:ב[טט]ל|בטלו|לבטל|ביטול)\s+(?:את\s+)?(?:כל\s+)?ה?הזמנה")
+CANCEL_ORDER_PROMPT = "ענה *כן* לביטול או *לא* כדי להשאיר אותה. "
+_CANCELLABLE = ("pending", "sent", "approved")
+
+
+def _handle_cancel_order_request(phone: str, body: str):
+    """The customer asks to cancel their open order. Returns None when this is not that request."""
+    if not _CANCEL_ORDER_RE.search(body):
+        return None
+    from apps.orders.services import todays_batch
+
+    profile = _resolve_profile(phone)
+    batch = todays_batch(profile.user) if profile else None
+    if batch is None:
+        validators.send_whatsapp_message(phone, "אין לך הזמנה פתוחה לביטול.")
+        return HttpResponse(status=200)
+    orders = list(batch.orders.exclude(status="cancelled").select_related("supplier").order_by("id"))
+    cancellable = [o for o in orders if o.status in _CANCELLABLE]
+    if not cancellable:
+        validators.send_whatsapp_message(
+            phone, "ההזמנה כבר יצאה למשלוח או נמסרה, ולכן אי אפשר לבטל אותה כאן. פנה אלינו.",
+        )
+        return HttpResponse(status=200)
+    lines = ["לבטל את כל ההזמנה הפתוחה?"]
+    lines += [f"  • הזמנה #{o.id} — {o.supplier.name} — {o.total_price:.2f}₪" for o in cancellable]
+    kept = [o for o in orders if o.status not in _CANCELLABLE]
+    if kept:
+        lines.append("שים לב: " + ", ".join(f"#{o.id}" for o in kept) + " כבר יצאו למשלוח ולא יבוטלו.")
+    lines.append(CANCEL_ORDER_PROMPT)
+    save_cancel_offer(phone, batch.id)
+    validators.send_with_buttons(phone, "\n".join(lines), "yesno", strip=(CANCEL_ORDER_PROMPT,))
+    return HttpResponse(status=200)
+
+
+def _handle_cancel_offer_reply(phone: str, body: str):
+    """Answer to _handle_cancel_order_request. None when nothing is waiting or the reply is neither כן nor לא."""
+    offer = get_cancel_offer(phone)
+    if not offer:
+        return None
+    reply = _normalized_reply(body)
+    if reply in _DECLINE_WORDS:
+        clear_cancel_offer(phone)
+        validators.send_whatsapp_message(phone, "בסדר, ההזמנה נשארת כמו שהיא.")
+        return HttpResponse(status=200)
+    if reply not in _CONFIRM_WORDS:
+        clear_cancel_offer(phone)
+        return None
+    clear_cancel_offer(phone)
+    return _cancel_open_order(phone, offer["batch_id"])
+
+
+def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
+    """Cancel every order of the checkout that has not shipped, tell the suppliers who had it, forget its questions."""
+    from apps.orders.models import OrderBatch
+    from .cache import clear_customer_questions_for_order, clear_supplier_pending_for_order
+
+    batch = OrderBatch.objects.select_related("user__profile").filter(id=batch_id).first()
+    if batch is None:
+        validators.send_whatsapp_message(phone, "לא מצאתי את ההזמנה. אולי היא כבר בוטלה.")
+        return HttpResponse(status=200)
+    profile = getattr(batch.user, "profile", None)
+    company = profile.company_name if profile else ""
+    cancelled, told = [], []
+    for order in batch.orders.exclude(status="cancelled").select_related("supplier"):
+        if order.status not in _CANCELLABLE:
+            continue
+        was_sent = order.status in ("sent", "approved")
+        order.transition_to("cancelled")
+        cancelled.append(order)
+        clear_customer_questions_for_order(phone, order.id)
+        clear_supplier_pending_for_order(order.supplier.whatsapp_number, order.id)
+        if was_sent:
+            try:
+                validators.send_whatsapp_message(
+                    order.supplier.whatsapp_number,
+                    f"❌ *{company}* ביטל את הזמנה #{order.id}. אין צורך לספק אותה.",
+                )
+                told.append(order)
+            except Exception as exc:
+                logger.error("Could not tell %s that order %s was cancelled: %s", order.supplier.name, order.id, exc)
+    for key in (f"whatsapp_order:{phone}", f"whatsapp_modification_offer:{phone}", f"whatsapp_merge_offer:{phone}"):
+        cache.delete(key)
+    ids = ", ".join(f"#{o.id}" for o in cancelled)
+    msg = f"✅ ההזמנה בוטלה ({ids})."
+    if told:
+        msg += " הספקים עודכנו."
+    validators.send_whatsapp_message(phone, msg)
+    return HttpResponse(status=200)
+
+
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     delivery_response = _handle_delivery_flow(phone, body)
     if delivery_response is not None:
         return delivery_response
+
+    cancel_offer_response = _handle_cancel_offer_reply(phone, body)
+    if cancel_offer_response is not None:
+        return cancel_offer_response
+    cancel_request_response = _handle_cancel_order_request(phone, body)
+    if cancel_request_response is not None:
+        return cancel_request_response
 
     fallback_response = _handle_fallback_approval(phone, body)
     if fallback_response is not None:
