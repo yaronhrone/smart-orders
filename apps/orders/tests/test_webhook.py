@@ -2643,6 +2643,21 @@ class OpenOrderReuseAndPricesTests(TestCase):
         self.assertIsNone(_handle_fallback_approval(self.PHONE, "לא"))
         self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
 
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_removing_the_missing_item_does_not_recheck_the_suppliers_minimum_or_move_its_other_items(self, mock_send):
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        self._carrot_missing()  # Dagan keeps the pepper: 188.10 of its 600 minimum
+
+        _handle_fallback_approval(self.PHONE, "לא")
+
+        self.pepper_line.refresh_from_db()
+        self.assertEqual(self.pepper_line.order_request_id, self.dagan_order.id)  # not moved behind its back
+        self.assertEqual(self.pepper_line.supplier_id, self.dagan.id)
+        told = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.PHONE][-1]
+        self.assertIn("הוסרו מההזמנה", told)
+        self.assertNotIn("מחפש ספק חלופי", told)
+        self.assertNotIn("נפל", told)
+
     def test_the_supplier_sees_each_price_the_total_and_a_note_when_under_its_minimum(self):
         from apps.orders.whatsapp.supplier_flow import order_breakdown
 
