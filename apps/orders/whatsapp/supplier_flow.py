@@ -866,6 +866,10 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             p = getattr(cancelled_order.user, "profile", None)
             customer_phone = validators._local_to_e164(p.phone) if p and p.phone else None
 
+            if customer_phone:
+                from .cache import clear_customer_questions_for_order
+                clear_customer_questions_for_order(customer_phone, order_request_id)
+
             process_reroute(
                 order_request_id, customer_phone,
                 header_lines=[f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}."],

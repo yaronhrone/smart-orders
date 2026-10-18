@@ -290,3 +290,34 @@ def _get_reroute_grace_state(phone: str):
 
 def _clear_reroute_grace_state(phone: str):
     cache.delete(f"whatsapp_reroute_grace:{phone}")
+
+
+def clear_customer_questions_for_order(phone: str, order_request_id: int):
+    """
+    An order was cancelled: forget the customer's open questions that are about THAT order
+    (move the missing item to another supplier? / what to do with the held items?). Left
+    behind, a later "לא" would be applied to an order that no longer exists.
+    """
+    for key in (f"whatsapp_fallback:{phone}", f"whatsapp_reroute_grace:{phone}"):
+        raw = cache.get(key)
+        if not raw:
+            continue
+        try:
+            state = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(state, dict) and state.get("order_request_id") == order_request_id:
+            cache.delete(key)
+
+
+def save_cancel_offer(phone: str, batch_id: int):
+    cache.set(f"whatsapp_cancel_offer:{phone}", json.dumps({"batch_id": batch_id}), timeout=SESSION_TTL)
+
+
+def get_cancel_offer(phone: str):
+    raw = cache.get(f"whatsapp_cancel_offer:{phone}")
+    return json.loads(raw) if raw else None
+
+
+def clear_cancel_offer(phone: str):
+    cache.delete(f"whatsapp_cancel_offer:{phone}")

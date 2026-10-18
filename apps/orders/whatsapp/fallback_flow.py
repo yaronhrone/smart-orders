@@ -330,6 +330,11 @@ def _handle_fallback_approval(phone: str, body: str) -> HttpResponse | None:
         return None
 
     state = json.loads(raw)
+    from apps.orders.models import OrderRequest
+    source = OrderRequest.objects.filter(id=state.get("order_request_id")).first()
+    if source is None or source.status == OrderRequest.Status.CANCELLED:
+        _clear_fallback_state(phone)  # about an order that no longer exists
+        return None
     body_lower = body.strip().lower()
 
     yes_words = ["כן", "yes", "אישור", "אוקי", "ok", "בסדר", "1"]
