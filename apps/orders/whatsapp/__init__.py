@@ -58,7 +58,7 @@ from .validators import _normalize_phone, _validate_twilio_signature, send_whats
 logger = logging.getLogger(__name__)
 
 SUPPLIER_BUTTON_IDS = {"אישור": "confirm", "חסר": "missing", "ביטול": "cancel", "יצא למשלוח": "shipped"}
-CUSTOMER_BUTTON_WORDS = {"yes": "כן", "no": "לא", "confirm": "אישור", "cancel": "ביטול", "send": "שלח", "received": "קיבלתי"}
+CUSTOMER_BUTTON_WORDS = {"yes": "כן", "no": "לא", "confirm": "אישור", "cancel": "ביטול", "send": "שלח", "received": "קיבלתי", "cancel_order": "בטל את ההזמנה"}
 
 
 @csrf_exempt

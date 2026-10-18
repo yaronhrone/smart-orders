@@ -12,6 +12,7 @@ and prints the SIDs to put in .env.prod (then restart web + worker):
     WHATSAPP_CONTENT_SID_YESNO=HX...     buttons  כן / לא          (customer: add to open order, alternative supplier)
     WHATSAPP_CONTENT_SID_CONFIRM=HX...   buttons  אישור / ביטול    (customer: approve the order)
     WHATSAPP_CONTENT_SID_SEND=HX...      buttons  שלח / ביטול      (customer: an order held under a supplier minimum)
+    WHATSAPP_CONTENT_SID_CANCELORDER=HX... button  ביטול הזמנה     (customer: under the confirmed order / the order held under a minimum)
     WHATSAPP_CONTENT_SID_RECEIVED=HX...  button   קיבלתי           (customer: the order is on its way / the supplier gave a time)
 
 The template body is one variable ({{1}}): the whole message text. A message that
@@ -55,6 +56,10 @@ TEMPLATES = {
     "WHATSAPP_CONTENT_SID_SEND": (
         "smart_orders_customer_send",
         [("שלח", "send"), ("ביטול", "cancel")],
+    ),
+    "WHATSAPP_CONTENT_SID_CANCELORDER": (
+        "smart_orders_customer_cancel_order",
+        [("ביטול הזמנה", "cancel_order")],
     ),
     "WHATSAPP_CONTENT_SID_RECEIVED": (
         "smart_orders_customer_received",

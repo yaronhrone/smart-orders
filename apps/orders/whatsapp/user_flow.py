@@ -681,6 +681,9 @@ def _suggest_and_respond(
 
     if recommended:
         validators.send_with_buttons(phone, msg, "confirm", strip=(ORDER_PROMPT,))
+    elif not is_grace_retry and "נשמרת" in msg:
+        # held under a supplier's minimum: the customer may add products, or cancel it here
+        validators.send_with_buttons(phone, msg, "cancelorder")
     else:
         validators.send_whatsapp_message(phone, msg)
     return HttpResponse(status=200)
@@ -978,6 +981,14 @@ def _handle_cancel_order_request(phone: str, body: str):
     profile = _resolve_profile(phone)
     batch = todays_batch(profile.user) if profile else None
     if batch is None:
+        # Nothing was sent to a supplier yet, but an order may be waiting: held under a
+        # minimum (a draft) or an offer waiting for אישור. Cancelling it needs no question.
+        from .cache import clear_draft_order, get_draft_order
+        if get_draft_order(phone) is not None or cache.get(f"whatsapp_order:{phone}"):
+            clear_draft_order(phone)
+            cache.delete(f"whatsapp_order:{phone}")
+            validators.send_whatsapp_message(phone, "✅ ההזמנה בוטלה. אפשר לשלוח הזמנה חדשה בכל זמן.")
+            return HttpResponse(status=200)
         validators.send_whatsapp_message(phone, "אין לך הזמנה פתוחה לביטול.")
         return HttpResponse(status=200)
     orders = list(batch.orders.exclude(status="cancelled").select_related("supplier").order_by("id"))
@@ -1188,6 +1199,9 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         )
     else:
         confirm = "❌ אירעה שגיאה בעיבוד ההזמנה. אנא נסה שנית או פנה לתמיכה."
-    validators.send_whatsapp_message(phone, confirm)
+    if orders:
+        validators.send_with_buttons(phone, confirm, "cancelorder")
+    else:
+        validators.send_whatsapp_message(phone, confirm)
 
     return HttpResponse(status=200)
