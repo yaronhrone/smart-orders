@@ -992,6 +992,20 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             "\n🚫 סימנו את המוצרים החסרים כלא זמינים אצלך — הם לא יוצעו בהזמנות חדשות. "
             "שלח לנו מחיר מעודכן כשהם חוזרים למלאי."
         )
+    if missing or partial_products:
+        # What is left of this order after the shortage, against the supplier's own minimum:
+        # the supplier decides whether to carry on.
+        from apps.orders.whatsapp.fallback_flow import leftover_after_shortage
+        left = leftover_after_shortage(
+            OrderRequest.objects.get(id=order_request_id), missing, partial_products,
+        )
+        if left > 0:
+            ack_lines.append(f'\n💰 סה"כ ההזמנה אחרי החוסר: {left:.2f}₪')
+            if supplier.minimum_order and left < supplier.minimum_order and unaddressed:
+                ack_lines.append(
+                    f"⚠️ זה מתחת להזמנת המינימום שלך ({supplier.minimum_order:.2f}₪). "
+                    "אפשר *לאשר* את שאר ההזמנה, או *לבטל* אותה."
+                )
     if unaddressed:
         unaddressed_names = ", ".join(p["product_name"] for p in unaddressed)
         ack_lines.append(
@@ -1013,6 +1027,10 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         validators.send_with_buttons(phone, "\n".join(ack_lines), "actions")
     else:
         validators.send_whatsapp_message(phone, "\n".join(ack_lines))
+
+    # What is missing is told first, so it is not buried; then what the supplier approved.
+    if missing or partial_products:
+        _handle_missing_items(supplier, missing, order_request_id, partial_products=partial_products)
 
     # Notify customer about confirmed items
     try:
@@ -1046,9 +1064,5 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 _maybe_send_batch_approved_summary(order_request_id, customer_phone)
     except Exception as exc:
         logger.error("Failed to notify customer after supplier confirmation: %s", exc)
-
-    # Find fallback suppliers for missing/partial items and notify customer
-    if missing or partial_products:
-        _handle_missing_items(supplier, missing, order_request_id, partial_products=partial_products)
 
     return HttpResponse(status=200)
