@@ -515,6 +515,19 @@ class UserConfirmationFlowTests(TestCase):
         self.assertEqual(order.status, OrderRequest.Status.CANCELLED)
         self.assertIsNone(cache.get(f"whatsapp_supplier_pending:{self.supplier.whatsapp_number}"))
 
+    @patch("apps.orders.whatsapp.validators.send_with_buttons")
+    @patch("apps.orders.tasks.send_supplier_order_notification_task")
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_the_confirmation_carries_a_cancel_button(self, mock_send_webhook, mock_send_whatsapp, mock_supplier_task, mock_buttons):
+        self._seed_cache("+972505555555")
+
+        self._post("+972505555555", "א")
+
+        customer = [c[0] for c in mock_buttons.call_args_list if c[0][0] == "+972505555555"]
+        self.assertEqual(customer[-1][2], "cancelorder")
+        self.assertIn("אושר", customer[-1][1])
+
     @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.send_whatsapp_message")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
@@ -2717,6 +2730,24 @@ class CustomerCancelsOrderTests(TestCase):
         self._say("כן")
 
         self.assertIsNone(cache.get(f"whatsapp_fallback:{self.PHONE}"))
+
+    def test_an_order_held_under_a_minimum_is_cancelled_at_once(self):
+        from apps.orders.whatsapp.cache import get_draft_order, save_draft_order
+        OrderRequest.objects.all().delete()
+        save_draft_order(self.PHONE, [{"product_name": "עגבניה", "quantity": Decimal("5")}])
+        self.assertIsNotNone(get_draft_order(self.PHONE))
+
+        self._say("בטל את ההזמנה")
+
+        self.assertIsNone(get_draft_order(self.PHONE))
+        self.assertIn("ההזמנה בוטלה", self._sent_to(self.PHONE)[-1])
+
+    def test_the_cancel_button_arrives_as_the_cancel_request(self):
+        self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.PHONE}", "ButtonPayload": "cancel_order", "Body": "ביטול הזמנה",
+        })
+
+        self.assertIn("לבטל את כל ההזמנה הפתוחה", self._sent_to(self.PHONE)[-1])
 
     @patch("apps.orders.order_parser.parse_modification_intent", return_value={"intent": "none", "items": []})
     @patch("apps.orders.order_parser.parse_customer_order", side_effect=ValueError("no_items"))
