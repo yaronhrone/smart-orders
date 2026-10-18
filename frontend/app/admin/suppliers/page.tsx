@@ -8,6 +8,7 @@ import {
   updateSupplier,
   deleteSupplier,
   unblockSupplier,
+  blockSupplier,
   SupplierWithProducts,
   CreateSupplierPayload,
 } from "../../lib/api";
@@ -83,6 +84,22 @@ export default function SuppliersPage() {
 
   function isBlocked(s: SupplierWithProducts) {
     return !!s.blocked_until && new Date(s.blocked_until) > new Date();
+  }
+
+  async function handleBlock(s: SupplierWithProducts) {
+    const answer = window.prompt(`לחסום את ${s.name} מהזמנות חדשות. לכמה ימים?`, "10");
+    if (answer === null) return;
+    const days = Number(answer);
+    if (!Number.isFinite(days) || days <= 0) {
+      alert("יש להזין מספר ימים גדול מאפס");
+      return;
+    }
+    try {
+      await blockSupplier(s.id, Math.round(days));
+      await load();
+    } catch {
+      alert("שגיאה בחסימת הספק");
+    }
   }
 
   async function handleUnblock(id: number) {
@@ -229,6 +246,15 @@ export default function SuppliersPage() {
                     title={`חסום עד ${new Date(s.blocked_until as string).toLocaleDateString("he-IL")} — לחץ לביטול החסימה`}
                   >
                     {unblockingId === s.id ? "מבטל..." : "חסום"}
+                  </button>
+                )}
+                {!isBlocked(s) && (
+                  <button
+                    onClick={() => handleBlock(s)}
+                    className="shrink-0 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg px-2 py-1 text-sm transition"
+                    title="חסום ספק מהזמנות חדשות"
+                  >
+                    🚫
                   </button>
                 )}
                 <button

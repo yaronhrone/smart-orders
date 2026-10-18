@@ -1578,7 +1578,7 @@ class SupplierButtonTests(TestCase):
 
         reroute.assert_called_once()
         self.supplier.refresh_from_db()
-        self.assertIsNotNone(self.supplier.blocked_until)
+        self.assertIsNone(self.supplier.blocked_until)  # only an admin blocks a supplier
 
     @patch("apps.orders.whatsapp.validators.send_with_buttons")
     def test_the_cancel_question_is_asked_with_yes_no_buttons(self, mock_buttons):
@@ -1612,7 +1612,7 @@ class SupplierButtonTests(TestCase):
 
         reroute.assert_called_once()
         self.supplier.refresh_from_db()
-        self.assertIsNotNone(self.supplier.blocked_until)
+        self.assertIsNone(self.supplier.blocked_until)
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_any_other_answer_after_the_cancel_tap_keeps_the_order(self, mock_send):
@@ -1921,14 +1921,11 @@ class SupplierCancellationFlowTests(TestCase):
         self.assertIn("לא נמצא ספק חלופי", customer_calls[0][0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_cancelling_supplier_is_blocked_for_ten_days(self, mock_send):
-        before = django_timezone.now()
+    def test_a_cancelling_supplier_is_not_blocked_automatically_but_the_admin_is_told(self, mock_send):
         self._post_supplier("ביטול")
 
         self.supplier.refresh_from_db()
-        self.assertIsNotNone(self.supplier.blocked_until)
-        self.assertGreater(self.supplier.blocked_until, before + timedelta(days=9))
-        self.assertLess(self.supplier.blocked_until, before + timedelta(days=11))
+        self.assertIsNone(self.supplier.blocked_until)  # blocking is an admin decision (suppliers page)
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_admin_is_notified(self, mock_send):
@@ -2558,13 +2555,59 @@ class OpenOrderReuseAndPricesTests(TestCase):
         self.assertIn('סה"כ: 447.20₪', msg)
         self.assertIn("גזר 40 ק\"ג × 3.98₪ = 159.20₪", msg)
 
-    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_a_shortage_that_leaves_an_order_under_its_minimum_tells_the_customer(self, mock_send):
-        self._carrot_missing()  # Dagan keeps the pepper: 188.10 of its 600 minimum
+    def _dagan_says(self, body):
+        return self.client.post("/whatsapp/webhook/", {
+            "From": f"whatsapp:{self.dagan.whatsapp_number}", "Body": body,
+        })
 
-        customer = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.PHONE][-1]
-        self.assertIn("מתחת למינימום", customer)
-        self.assertIn("188.10", customer)
+    def _dagan_has_a_pending_answer(self):
+        from apps.orders.whatsapp.cache import save_supplier_pending_order
+        save_supplier_pending_order(
+            supplier_phone=self.dagan.whatsapp_number, order_request_id=self.dagan_order.id,
+            products=[
+                {"orp_id": self.carrot_line.id, "product_name": "גזר", "quantity": "40", "unit": 'ק"ג'},
+                {"orp_id": self.pepper_line.id, "product_name": "פלפל אדום", "quantity": "30", "unit": 'ק"ג'},
+            ],
+        )
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_a_shortage_under_the_minimum_is_the_suppliers_to_decide_not_the_customers(self, mock_send):
+        self._dagan_has_a_pending_answer()
+
+        self._dagan_says("חסר גזר")  # Dagan keeps the pepper: 188.10 of its 600 minimum
+
+        customer = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.PHONE]
+        self.assertTrue(customer)
+        self.assertFalse(any("מתחת למינימום" in m for m in customer))  # not the customer's concern
+        ack = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.dagan.whatsapp_number][0]
+        self.assertIn('סה"כ ההזמנה אחרי החוסר: 188.10₪', ack)
+        self.assertIn("מתחת להזמנת המינימום שלך (600.00₪)", ack)
+        self.assertIn("*לאשר*", ack)
+        self.assertIn("*לבטל*", ack)
+        self.dagan_order.refresh_from_db()
+        self.assertEqual(self.dagan_order.status, OrderRequest.Status.SENT)  # the rest waits for the supplier
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_the_customer_is_told_what_is_missing_before_what_was_approved(self, mock_send):
+        self._dagan_has_a_pending_answer()
+
+        self._dagan_says("חסר גזר, שאר אישור")
+
+        customer = [c[0][1] for c in mock_send.call_args_list if c[0][0] == self.PHONE]
+        shortage = next(i for i, m in enumerate(customer) if "דיווח" in m and "גזר" in m)
+        approved = next(i for i, m in enumerate(customer) if "אישר" in m)
+        self.assertLess(shortage, approved)
+
+    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
+    def test_the_supplier_who_reported_the_shortage_is_not_told_what_the_customer_decided(self, mock_send):
+        from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
+        self._carrot_missing()
+        mock_send.reset_mock()
+
+        _handle_fallback_approval(self.PHONE, "לא")
+
+        to_dagan = [c for c in mock_send.call_args_list if c[0][0] == self.dagan.whatsapp_number]
+        self.assertEqual(to_dagan, [])
 
     def test_the_supplier_sees_each_price_the_total_and_a_note_when_under_its_minimum(self):
         from apps.orders.whatsapp.supplier_flow import order_breakdown
@@ -2649,7 +2692,8 @@ class FallbackFlowTests(TestCase):
         self.assertIsNone(cache.get(f"whatsapp_fallback:{self.customer_phone}"))
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_declining_notifies_original_supplier(self, mock_send):
+    def test_declining_does_not_tell_the_supplier_who_reported_the_shortage(self, mock_send):
+        """The customer's decision is not the supplier's business (it used to be told what was removed)."""
         from apps.orders.whatsapp.fallback_flow import _handle_fallback_approval
         self._report_missing()
         mock_send.reset_mock()
@@ -2657,8 +2701,7 @@ class FallbackFlowTests(TestCase):
         _handle_fallback_approval(self.customer_phone, "לא")
 
         supplier_calls = [c for c in mock_send.call_args_list if c[0][0] == self.supplier_a.whatsapp_number]
-        self.assertEqual(len(supplier_calls), 1)
-        self.assertIn("עגבניה", supplier_calls[0][0][1])
+        self.assertEqual(supplier_calls, [])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_successful_transfer_still_clears_state(self, mock_send):
@@ -3648,6 +3691,17 @@ class ModificationRulesTests(TestCase):
         self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
         self.assertIsNone(self.supplier.blocked_until)
         self.assertNotIn("לבטל את כל", self._sent_to(self.supplier.whatsapp_number)[-1])
+
+    def test_a_blocked_supplier_still_gets_additions_to_an_order_it_already_holds(self):
+        from apps.catalog.models import Supplier
+        Supplier.objects.filter(pk=self.supplier.pk).update(
+            blocked_until=django_timezone.now() + timedelta(days=5),
+        )
+
+        self._customer_says("add", "20")
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("50"))  # it carries the order out; the admin sorts it out later
 
     def test_the_supplier_confirming_a_reduction_approves_the_order_again(self):
         self._approve_first_order()

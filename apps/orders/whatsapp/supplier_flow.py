@@ -439,11 +439,19 @@ def _notify_admin_supplier_cancelled(supplier, order_request_id: int) -> None:
         logger.warning("ADMIN_WHATSAPP_NUMBER לא מוגדר — לא נשלחה התראה על ביטול ספק")
         return
     try:
+        from apps.orders.models import OrderRequest
+
+        order = OrderRequest.objects.filter(id=order_request_id).first()
+        total = order.total_price if order else None
+        detail = ""
+        if total is not None and supplier.minimum_order:
+            under = " (מתחת למינימום שלו)" if total < supplier.minimum_order else ""
+            detail = f"\nסכום ההזמנה: {total:.2f}₪, מינימום הספק: {supplier.minimum_order:.2f}₪{under}"
         validators.send_whatsapp_message(
             admin_number,
             f"⚠️ *{supplier.name}* ביטל את הזמנה #{order_request_id}.\n"
-            f"📞 {supplier.phone}\n"
-            "הספק חסום מהזמנות חדשות ל-10 ימים. כדאי לברר למה — משהו חריג?",
+            f"📞 {supplier.phone}{detail}\n"
+            "הספק לא נחסם אוטומטית. כדאי לברר למה, ואם צריך לחסום אותו אפשר בדף הספקים.",
         )
     except Exception as exc:
         logger.error("שגיאה בשליחת התראה לאדמין על ביטול ספק %s: %s", supplier.id, exc)
@@ -849,11 +857,9 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         try:
             from apps.orders.models import OrderRequest, OrderRequestProduct
 
-            # Block this supplier from any new assignment for 10 days, and
-            # tell the admin so someone can find out why — before anything
-            # else, so it happens even if the reroute below hits an error.
-            supplier.blocked_until = timezone.now() + timedelta(days=10)
-            supplier.save(update_fields=["blocked_until"])
+            # Tell the admin so someone can find out why — before anything else, so it happens
+            # even if the reroute below hits an error. The supplier is NOT blocked here: only an
+            # admin blocks a supplier (suppliers page), the system never does it on its own.
             _notify_admin_supplier_cancelled(supplier, order_request_id)
 
             cancelled_order = OrderRequest.objects.select_related("user__profile").get(id=order_request_id)
@@ -986,6 +992,20 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
             "\n🚫 סימנו את המוצרים החסרים כלא זמינים אצלך — הם לא יוצעו בהזמנות חדשות. "
             "שלח לנו מחיר מעודכן כשהם חוזרים למלאי."
         )
+    if missing or partial_products:
+        # What is left of this order after the shortage, against the supplier's own minimum:
+        # the supplier decides whether to carry on.
+        from apps.orders.whatsapp.fallback_flow import leftover_after_shortage
+        left = leftover_after_shortage(
+            OrderRequest.objects.get(id=order_request_id), missing, partial_products,
+        )
+        if left > 0:
+            ack_lines.append(f'\n💰 סה"כ ההזמנה אחרי החוסר: {left:.2f}₪')
+            if supplier.minimum_order and left < supplier.minimum_order and unaddressed:
+                ack_lines.append(
+                    f"⚠️ זה מתחת להזמנת המינימום שלך ({supplier.minimum_order:.2f}₪). "
+                    "אפשר *לאשר* את שאר ההזמנה, או *לבטל* אותה."
+                )
     if unaddressed:
         unaddressed_names = ", ".join(p["product_name"] for p in unaddressed)
         ack_lines.append(
@@ -1007,6 +1027,10 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
         validators.send_with_buttons(phone, "\n".join(ack_lines), "actions")
     else:
         validators.send_whatsapp_message(phone, "\n".join(ack_lines))
+
+    # What is missing is told first, so it is not buried; then what the supplier approved.
+    if missing or partial_products:
+        _handle_missing_items(supplier, missing, order_request_id, partial_products=partial_products)
 
     # Notify customer about confirmed items
     try:
@@ -1040,9 +1064,5 @@ def _handle_supplier_flow_inner(phone: str, supplier, body: str) -> HttpResponse
                 _maybe_send_batch_approved_summary(order_request_id, customer_phone)
     except Exception as exc:
         logger.error("Failed to notify customer after supplier confirmation: %s", exc)
-
-    # Find fallback suppliers for missing/partial items and notify customer
-    if missing or partial_products:
-        _handle_missing_items(supplier, missing, order_request_id, partial_products=partial_products)
 
     return HttpResponse(status=200)

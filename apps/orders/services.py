@@ -308,13 +308,15 @@ def _validate_all_products_present(assignments, products):
         raise ValueError("חלק מהמוצרים לא שובצו לספק")
 
 
-def _get_available_suppliers(user, region, exclude_supplier_ids=None):
+def _get_available_suppliers(user, region, exclude_supplier_ids=None, also_include_ids=None):
     """Suppliers eligible for a NEW assignment: right region, not currently
-    blocked (see `blocked_until` — set for 10 days after a supplier cancels
-    an order), and not explicitly excluded by the caller (e.g. the supplier
-    that just cancelled, on top of its own block)."""
+    blocked (`blocked_until`, set only by an admin from the suppliers page),
+    and not explicitly excluded by the caller (e.g. the supplier that just
+    cancelled). `also_include_ids`: suppliers that stay eligible even when blocked,
+    because they already hold an open order of this checkout and will carry it out."""
     qs = Supplier.objects.filter(region=region).filter(
         Q(blocked_until__isnull=True) | Q(blocked_until__lt=timezone.now())
+        | Q(id__in=list(also_include_ids or []))
     )
     if exclude_supplier_ids:
         qs = qs.exclude(id__in=exclude_supplier_ids)
@@ -999,8 +1001,10 @@ def pick_supplier_for_addition(batch, product, quantity, region, exclude_supplie
     minimum tends to cancel, which blocks it for 10 days).
     Returns (supplier, price, None) or (None, None, "unavailable" | "below_minimum").
     """
+    live_orders = batch.orders.exclude(status=OrderRequest.Status.CANCELLED)
     suppliers = _get_available_suppliers(
         batch.user, region, exclude_supplier_ids=[exclude_supplier_id] if exclude_supplier_id else None,
+        also_include_ids=live_orders.values_list("supplier_id", flat=True),
     )
     options = _get_price_options([{"product": product, "quantity": quantity}], suppliers).get(product.id, [])
     if not options:

@@ -119,17 +119,14 @@ def _handle_refused_additions(
     validators.send_whatsapp_message(customer_phone, "\n".join(lines))
 
 
-def _leftover_minimum_note(original_supplier, order, missing_products: list, partial_products: list) -> str:
+def leftover_after_shortage(order, missing_products: list, partial_products: list):
     """
-    What is left of this supplier's order once the reported items are taken out, against its
-    minimum order. The supplier chose to report the shortage, so nothing is blocked, but the
-    customer is told, and can add products to bring it back up.
+    What is left of the order's total once the reported items are taken out. The supplier is told
+    this number (and whether it is under its own minimum): it decides whether to carry on, not the
+    customer.
     """
     from apps.orders.models import OrderRequestProduct
 
-    minimum = original_supplier.minimum_order
-    if not minimum:
-        return ""
     lines = list(OrderRequestProduct.objects.filter(order_request=order))
     total = sum((l.quantity * l.unit_price for l in lines), Decimal(0))
     removed_ids = {int(m["orp_id"]) for m in missing_products if m.get("orp_id") is not None}
@@ -138,14 +135,7 @@ def _leftover_minimum_note(original_supplier, order, missing_products: list, par
         line = next((l for l in lines if l.id == int(pp["orp_id"])), None)
         if line:
             removed += Decimal(str(pp["quantity"])) * line.unit_price
-    left = total - removed
-    if left <= 0 or left >= minimum:
-        return ""
-    return (
-        f"⚠️ אחרי הסרת מה שחסר, ההזמנה אצל {original_supplier.name} תהיה {left:.2f}₪, מתחת למינימום שלו "
-        f"({minimum:.2f}₪). אפשר להוסיף עוד מוצרים להזמנה (פשוט כתוב אותם) כדי להגיע למינימום, "
-        "או להשאיר כמו שהיא: הספק החליט לשלוח."
-    )
+    return total - removed
 
 
 def _handle_missing_items(
@@ -286,7 +276,6 @@ def _handle_missing_items(
     if auto_removed:
         _recalculate_order_total(order_request_id)
 
-    shortfall_note = _leftover_minimum_note(original_supplier, order, missing_products, partial_products)
 
     # ── Build customer message ──
     lines = [f"⚠️ *{original_supplier.name}* דיווח:"]
@@ -317,9 +306,6 @@ def _handle_missing_items(
                 f"\n• *{nf['product_name']}* x{nf['quantity']} {nf['unit']} — "
                 "חסר המוצר הזה במלאי לכל הספקים, הוסר מההזמנה אוטומטית"
             )
-
-    if shortfall_note:
-        lines.append("\n" + shortfall_note)
 
     if redirects:
         lines.append("\n" + FALLBACK_PROMPT)
@@ -469,26 +455,6 @@ def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
 
     order_request_id = state["order_request_id"]
     redirects = state["redirects"]
-
-    # The supplier who reported the shortage in the first place never heard
-    # back at all before - they confirmed what they had and then silence,
-    # whichever way the customer's decision went. Tell them what the
-    # customer settled for, grouped per supplier in case more than one
-    # reported something in the same round.
-    by_original_supplier = defaultdict(list)
-    for r in redirects:
-        by_original_supplier[r["original_supplier_id"]].append(r)
-    for supplier_id, items in by_original_supplier.items():
-        supplier = Supplier.objects.filter(id=supplier_id).first()
-        if not supplier:
-            continue
-        lines = [f"עדכון להזמנה #{order_request_id} — הלקוח החליט שלא להעביר לספק חלופי:"]
-        for r in items:
-            if r.get("type") == "partial":
-                lines.append(f"  • {r['product_name']} — נשאר על הכמות שאישרת, היתרה לא תוזמן.")
-            else:
-                lines.append(f"  • {r['product_name']} x{r['quantity']} {r.get('unit', '')} — הוסר מההזמנה.")
-        validators.send_whatsapp_message(supplier.whatsapp_number, "\n".join(lines))
 
     removed_lines = []
     affected_supplier_ids = set()
