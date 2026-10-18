@@ -452,7 +452,7 @@ def _handle_reroute_grace_topup(phone: str, body: str) -> HttpResponse | None:
 
 
 def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
-    """Customer declined fallback — remove the missing products and check remaining minimums."""
+    """Customer declined fallback — remove the missing products (the supplier decides about its own minimum)."""
     from apps.catalog.models import Supplier
     from apps.orders.models import OrderRequestProduct
 
@@ -485,39 +485,10 @@ def _remove_missing_items(phone: str, state: dict) -> HttpResponse:
     lines = ["🗑️ הבנתי — הפריטים הבאים הוסרו מההזמנה:"]
     lines += removed_lines
 
-    # Check if remaining suppliers still meet their minimum
-    remaining_orps = list(
-        OrderRequestProduct.objects.filter(order_request_id=order_request_id)
-        .select_related("supplier")
-    )
-
-    supplier_totals = defaultdict(Decimal)
-    supplier_obj = {}
-    for orp in remaining_orps:
-        supplier_totals[orp.supplier_id] += orp.quantity * orp.unit_price
-        supplier_obj[orp.supplier_id] = orp.supplier
-
-    for sid in affected_supplier_ids:
-        if sid not in supplier_obj:
-            continue
-        supplier = supplier_obj[sid]
-        total = supplier_totals.get(sid, Decimal(0))
-        if total >= supplier.minimum_order:
-            continue
-
-        missing_amount = supplier.minimum_order - total
-        lines.append(
-            f"\n⚠️ {supplier.name} נפל ל-{total:.2f}₪ (מינימום {supplier.minimum_order}₪, חסר {missing_amount:.2f}₪)."
-        )
-        lines.append("מחפש ספק חלופי לשאר המוצרים...")
-
-        _auto_transfer_remaining(
-            phone=phone,
-            order_request_id=order_request_id,
-            failing_supplier=supplier,
-            lines=lines,
-        )
-
+    # Nothing more is checked or moved here. If what is left of the supplier's order is under its
+    # minimum, that is the supplier's decision (it was told the new total and chose to approve or
+    # cancel, see the shortage acknowledgement in supplier_flow); the customer is not asked, and the
+    # supplier's remaining items are not moved to someone else behind its back.
     validators.send_whatsapp_message(phone, "\n".join(lines))
     return HttpResponse(status=200)
 
