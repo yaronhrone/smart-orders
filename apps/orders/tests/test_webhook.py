@@ -1578,7 +1578,7 @@ class SupplierButtonTests(TestCase):
 
         reroute.assert_called_once()
         self.supplier.refresh_from_db()
-        self.assertIsNotNone(self.supplier.blocked_until)
+        self.assertIsNone(self.supplier.blocked_until)  # only an admin blocks a supplier
 
     @patch("apps.orders.whatsapp.validators.send_with_buttons")
     def test_the_cancel_question_is_asked_with_yes_no_buttons(self, mock_buttons):
@@ -1612,7 +1612,7 @@ class SupplierButtonTests(TestCase):
 
         reroute.assert_called_once()
         self.supplier.refresh_from_db()
-        self.assertIsNotNone(self.supplier.blocked_until)
+        self.assertIsNone(self.supplier.blocked_until)
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_any_other_answer_after_the_cancel_tap_keeps_the_order(self, mock_send):
@@ -1921,14 +1921,11 @@ class SupplierCancellationFlowTests(TestCase):
         self.assertIn("לא נמצא ספק חלופי", customer_calls[0][0][1])
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_cancelling_supplier_is_blocked_for_ten_days(self, mock_send):
-        before = django_timezone.now()
+    def test_a_cancelling_supplier_is_not_blocked_automatically_but_the_admin_is_told(self, mock_send):
         self._post_supplier("ביטול")
 
         self.supplier.refresh_from_db()
-        self.assertIsNotNone(self.supplier.blocked_until)
-        self.assertGreater(self.supplier.blocked_until, before + timedelta(days=9))
-        self.assertLess(self.supplier.blocked_until, before + timedelta(days=11))
+        self.assertIsNone(self.supplier.blocked_until)  # blocking is an admin decision (suppliers page)
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_admin_is_notified(self, mock_send):
@@ -3648,6 +3645,17 @@ class ModificationRulesTests(TestCase):
         self.assertEqual(self.order.status, OrderRequest.Status.APPROVED)
         self.assertIsNone(self.supplier.blocked_until)
         self.assertNotIn("לבטל את כל", self._sent_to(self.supplier.whatsapp_number)[-1])
+
+    def test_a_blocked_supplier_still_gets_additions_to_an_order_it_already_holds(self):
+        from apps.catalog.models import Supplier
+        Supplier.objects.filter(pk=self.supplier.pk).update(
+            blocked_until=django_timezone.now() + timedelta(days=5),
+        )
+
+        self._customer_says("add", "20")
+
+        self.line.refresh_from_db()
+        self.assertEqual(self.line.quantity, Decimal("50"))  # it carries the order out; the admin sorts it out later
 
     def test_the_supplier_confirming_a_reduction_approves_the_order_again(self):
         self._approve_first_order()

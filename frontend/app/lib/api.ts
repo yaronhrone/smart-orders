@@ -509,9 +509,18 @@ export async function updateSupplier(id: number, data: Partial<CreateSupplierPay
   });
 }
 
-// Lifts the 10-day block set automatically when a supplier cancels an order
-// (see find_reroute_for_cancelled_supplier) — an admin override for when the
-// cancellation turns out to be a one-off, not something to hold against them.
+// Blocking a supplier is an admin decision only: the system never blocks one on its own, and the
+// server accepts blocked_until from admins alone. A blocked supplier gets no new assignments (it
+// still carries out an order it already holds).
+export async function blockSupplier(id: number, days: number): Promise<SupplierWithProducts> {
+  const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  return request<SupplierWithProducts>(`/api/catalog/suppliers/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ blocked_until: until }),
+  });
+}
+
+// Lifts a block set by an admin.
 export async function unblockSupplier(id: number): Promise<SupplierWithProducts> {
   return request<SupplierWithProducts>(`/api/catalog/suppliers/${id}/`, {
     method: "PATCH",

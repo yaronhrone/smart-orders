@@ -146,3 +146,62 @@ class ProductAliasViewTests(APITestCase):
 
         onion_row = next(p for p in res.data["results"] if p["id"] == self.onion.id)
         self.assertEqual([a["alias"] for a in onion_row["aliases"]], ["בצל לבן"])
+
+
+
+class SupplierBlockingPermissionTests(APITestCase):
+    """Blocking a supplier is an admin decision: nobody else can set or lift it."""
+
+    def setUp(self):
+        from django.utils import timezone
+        from apps.catalog.models import Supplier
+
+        self.timezone = timezone
+        self.supplier = Supplier.objects.create(
+            name="ספק בדיקה", phone="0500000001", whatsapp_number="+972500000001",
+            region="center", minimum_order=0,
+        )
+        self.url = reverse("catalog-supplier-detail", args=[self.supplier.id])
+        self.admin = User.objects.create_user(email="admin@test.com", password="pass1234", is_staff=True)
+        self.customer = User.objects.create_user(email="customer@test.com", password="pass1234")
+        self.until = (timezone.now() + timezone.timedelta(days=10)).isoformat()
+
+    def test_a_customer_cannot_block_a_supplier(self):
+        self.client.force_authenticate(user=self.customer)
+
+        res = self.client.patch(self.url, {"blocked_until": self.until}, format="json")
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.supplier.refresh_from_db()
+        self.assertIsNone(self.supplier.blocked_until)
+
+    def test_an_anonymous_visitor_cannot_block_a_supplier(self):
+        res = self.client.patch(self.url, {"blocked_until": self.until}, format="json")
+
+        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+        self.supplier.refresh_from_db()
+        self.assertIsNone(self.supplier.blocked_until)
+
+    def test_a_customer_cannot_lift_a_block_either(self):
+        self.supplier.blocked_until = self.timezone.now() + self.timezone.timedelta(days=10)
+        self.supplier.save(update_fields=["blocked_until"])
+        self.client.force_authenticate(user=self.customer)
+
+        res = self.client.patch(self.url, {"blocked_until": None}, format="json")
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.supplier.refresh_from_db()
+        self.assertIsNotNone(self.supplier.blocked_until)
+
+    def test_an_admin_can_block_and_lift(self):
+        self.client.force_authenticate(user=self.admin)
+
+        res = self.client.patch(self.url, {"blocked_until": self.until}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.supplier.refresh_from_db()
+        self.assertIsNotNone(self.supplier.blocked_until)
+
+        res = self.client.patch(self.url, {"blocked_until": None}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.supplier.refresh_from_db()
+        self.assertIsNone(self.supplier.blocked_until)
