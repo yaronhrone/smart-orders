@@ -48,7 +48,7 @@ class ProviderSwitchTests(SimpleTestCase):
         with patch.dict(os.environ, {"LLM_PROVIDER": "anthropic", "LLM_MODEL": ""}):
             self.assertEqual(llm.model(), "claude-sonnet-5-5")
         with patch.dict(os.environ, {"LLM_PROVIDER": "deepseek", "LLM_MODEL": ""}):
-            self.assertEqual(llm.model(), "deepseek-chat")
+            self.assertEqual(llm.model(), "deepseek-flash")
         with patch.dict(os.environ, {"LLM_PROVIDER": "Anthropic", "LLM_MODEL": "claude-sonnet-5-5"}):
             self.assertEqual(llm.model(), "claude-sonnet-5-5")
 

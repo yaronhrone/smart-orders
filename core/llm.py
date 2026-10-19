@@ -4,7 +4,7 @@ without touching code:
 
     LLM_PROVIDER=openai     (default)  OPENAI_API_KEY     model gpt-4o-mini
     LLM_PROVIDER=anthropic             ANTHROPIC_API_KEY  model claude-sonnet-5-5
-    LLM_PROVIDER=deepseek              DEEPSEEK_API_KEY   model deepseek-chat
+    LLM_PROVIDER=deepseek              DEEPSEEK_API_KEY   model deepseek-flash   (LLM_MODEL=deepseek-v4-pro for the bigger one)
     LLM_MODEL=...           optional, overrides the provider's default model
 
 OpenAI and DeepSeek share the OpenAI SDK (DeepSeek's API is built to be called
@@ -29,7 +29,8 @@ PARSE_KINDS = ("order_parse", "modification_parse", "price_parse")
 PRICES_PER_MILLION = {
     "gpt-4o-mini": (0.15, 0.60),
     "claude-sonnet-5-5": (2.00, 10.00),
-    "deepseek-chat": (0.27, 1.10),
+    "deepseek-flash": (0.30, 1.20),  # peak-hour price; off-peak is half
+    "deepseek-v4-pro": (1.32, 3.96),
 }
 
 
@@ -58,7 +59,7 @@ OPENAI, ANTHROPIC, DEEPSEEK = "openai", "anthropic", "deepseek"
 DEFAULT_MODELS = {
     OPENAI: "gpt-4o-mini",
     ANTHROPIC: "claude-sonnet-5-5",
-    DEEPSEEK: "deepseek-chat",
+    DEEPSEEK: "deepseek-flash",
 }
 API_KEY_ENV = {OPENAI: "OPENAI_API_KEY", ANTHROPIC: "ANTHROPIC_API_KEY", DEEPSEEK: "DEEPSEEK_API_KEY"}
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
