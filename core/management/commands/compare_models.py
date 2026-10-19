@@ -54,7 +54,8 @@ CASES = [
 # USD per million tokens (input, output). Check the providers' price pages: these change.
 PRICES = {
     "gpt-4o-mini": (0.15, 0.60),
-    "deepseek-chat": (0.28, 0.42),
+    "deepseek-flash": (0.30, 1.20),
+    "deepseek-v4-pro": (1.32, 3.96),
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
 }
