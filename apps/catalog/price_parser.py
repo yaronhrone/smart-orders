@@ -89,7 +89,7 @@ def _parse_with_ai(message: str, product_names: list[str]) -> dict:
     )
 
     llm.note_parse("price_parse", used_ai=True)
-    data = llm.complete_json(prompt, _get_client)
+    data = llm.complete_json(prompt, _get_client, kind="price_parse")
 
     return {
         "items": data.get("items", []) if isinstance(data, dict) else [],

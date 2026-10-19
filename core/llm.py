@@ -17,11 +17,41 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 PARSE_KINDS = ("order_parse", "modification_parse", "price_parse")
+
+# USD per 1M tokens (input, output). ESTIMATES for the usage page, not an invoice: check the
+# provider's price list and correct here. A model missing from the table is recorded with cost 0.
+PRICES_PER_MILLION = {
+    "gpt-4o-mini": (0.15, 0.60),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "deepseek-chat": (0.27, 1.10),
+}
+
+
+def estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> float:
+    price_in, price_out = PRICES_PER_MILLION.get(model_name, (0, 0))
+    return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+
+
+def record_usage(kind: str, started: float, input_tokens: int, output_tokens: int, ok: bool = True) -> None:
+    """One row per AI call (kind, model, tokens, estimated cost, seconds) for the admin usage page."""
+    try:
+        from core.models import AIUsage
+
+        model_name = model()
+        AIUsage.objects.create(
+            kind=kind, provider=provider(), model=model_name,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            cost_usd=estimate_cost(model_name, input_tokens, output_tokens),
+            duration_ms=int((time.monotonic() - started) * 1000), ok=ok,
+        )
+    except Exception:  # recording must never break the call it measures
+        logger.warning("could not record AI usage", exc_info=True)
 
 OPENAI, ANTHROPIC, DEEPSEEK = "openai", "anthropic", "deepseek"
 
@@ -138,37 +168,48 @@ def _parse_json(text: str):
     return json.loads(match.group(0) if match else text)
 
 
-def complete_json(prompt: str, openai_client_factory=None) -> dict:
+def complete_json(prompt: str, openai_client_factory=None, kind: str = "other") -> dict:
     """
     Send one prompt that asks for a JSON object and return it parsed. Errors
     (network, a reply that isn't JSON) are raised for the caller to handle.
     `openai_client_factory`: the caller's own OpenAI-SDK client getter, so its
     tests can replace it; used for OpenAI and DeepSeek.
     """
-    if provider() == ANTHROPIC:
-        response = _anthropic_create(
-            anthropic_client(),
-            max_tokens=16000,
-            # Extraction, not reasoning: low effort keeps it fast and cheap.
-            output_config={"effort": "low"},
-            system="Reply with a single JSON object only, no other text.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        last_usage.update(input=response.usage.input_tokens or 0, output=response.usage.output_tokens or 0)
-        return _parse_json(_anthropic_text(response))
+    started = time.monotonic()
+    recorded = False
+    try:
+        if provider() == ANTHROPIC:
+            response = _anthropic_create(
+                anthropic_client(),
+                max_tokens=16000,
+                # Extraction, not reasoning: low effort keeps it fast and cheap.
+                output_config={"effort": "low"},
+                system="Reply with a single JSON object only, no other text.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            last_usage.update(input=response.usage.input_tokens or 0, output=response.usage.output_tokens or 0)
+            record_usage(kind, started, last_usage["input"], last_usage["output"])
+            recorded = True
+            return _parse_json(_anthropic_text(response))
 
-    client = (openai_client_factory or openai_client)()
-    response = client.chat.completions.create(
-        model=model(),
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    usage = getattr(response, "usage", None)
-    last_usage.update(
-        input=int(getattr(usage, "prompt_tokens", 0) or 0), output=int(getattr(usage, "completion_tokens", 0) or 0),
-    )
-    return json.loads(response.choices[0].message.content)
+        client = (openai_client_factory or openai_client)()
+        response = client.chat.completions.create(
+            model=model(),
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        usage = getattr(response, "usage", None)
+        last_usage.update(
+            input=int(getattr(usage, "prompt_tokens", 0) or 0), output=int(getattr(usage, "completion_tokens", 0) or 0),
+        )
+        record_usage(kind, started, last_usage["input"], last_usage["output"])
+        recorded = True
+        return json.loads(response.choices[0].message.content)
+    except Exception:
+        if not recorded:
+            record_usage(kind, started, 0, 0, ok=False)
+        raise
 
 
 # ─── tool calling (the assistant) ───
@@ -196,17 +237,25 @@ class OpenAIChat:
         self.messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": message}]
 
     def send(self) -> Reply:
-        response = self.client.chat.completions.create(
-            model=model(), temperature=0, messages=self.messages, tools=self.tools,
-        )
+        started = time.monotonic()
+        try:
+            response = self.client.chat.completions.create(
+                model=model(), temperature=0, messages=self.messages, tools=self.tools,
+            )
+        except Exception:
+            record_usage("assistant", started, 0, 0, ok=False)
+            raise
         usage = getattr(response, "usage", None)
         reply = response.choices[0].message
         self._last = reply
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        record_usage("assistant", started, prompt_tokens, completion_tokens)
         return Reply(
             text=(reply.content or "").strip(),
             tool_calls=[ToolCall(c.id, c.function.name, c.function.arguments) for c in (reply.tool_calls or [])],
-            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def add_tool_results(self, reply: Reply, results: list) -> None:
@@ -239,10 +288,16 @@ class AnthropicChat:
         self.messages = [*history, {"role": "user", "content": message}]
 
     def send(self) -> Reply:
-        response = _anthropic_create(
-            self.client, max_tokens=16000, output_config={"effort": "medium"},
-            system=self.system, messages=self.messages, tools=self.tools,
-        )
+        started = time.monotonic()
+        try:
+            response = _anthropic_create(
+                self.client, max_tokens=16000, output_config={"effort": "medium"},
+                system=self.system, messages=self.messages, tools=self.tools,
+            )
+        except Exception:
+            record_usage("assistant", started, 0, 0, ok=False)
+            raise
+        record_usage("assistant", started, int(response.usage.input_tokens or 0), int(response.usage.output_tokens or 0))
         if response.stop_reason == "refusal":
             raise RuntimeError("the model declined the request")
         # The whole content goes back unchanged on the next turn (thinking blocks included).

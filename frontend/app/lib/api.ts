@@ -594,3 +594,32 @@ export async function sendAssistantFeedback(callId: number, rating: "up" | "down
     body: JSON.stringify({ call_id: callId, rating }),
   });
 }
+
+export interface AIUsageRow {
+  model?: string;
+  kind?: string;
+  day?: string;
+  calls: number;
+  failed: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  avg_seconds: number;
+  avg_cost_per_call_usd: number;
+}
+
+export interface AIUsage {
+  days: number;
+  current_model: string;
+  totals: { calls: number; failed: number; input_tokens: number; output_tokens: number; cost_usd: number };
+  by_day: AIUsageRow[];
+  by_kind: AIUsageRow[];
+  by_model: AIUsageRow[];
+  by_model_and_kind: AIUsageRow[];
+  parsing_today: Record<string, { dictionary: number; ai: number }>;
+}
+
+// Admin only: AI calls, tokens, estimated cost and speed per model, for the last `days` days.
+export async function fetchAIUsage(days: number): Promise<AIUsage> {
+  return request<AIUsage>(`/api/core/ai-usage/?days=${days}`);
+}

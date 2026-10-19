@@ -17,6 +17,7 @@ const ADMIN_NAV = [
   { href: "/admin/suppliers", label: "ספקים" },
   { href: "/admin/catalog", label: "קטלוג מוצרים" },
   { href: "/admin/orders", label: "הזמנות" },
+  { href: "/admin/ai-usage", label: "שימוש ב-AI" },
 ];
 
 export function AppSidebar({ me, onLogout }: { me: Me | null; onLogout: () => void }) {
