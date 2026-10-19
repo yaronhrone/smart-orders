@@ -258,3 +258,35 @@ class SegmentSplittingTests(TestCase):
         # the "ו" must be a word of its own (or glued to a number), never the first letter of a name
         from apps.catalog.product_matcher import _split_segments
         self.assertEqual(_split_segments("5 קילו ורד"), ["5 קילו ורד"])
+
+
+class RunOnItemsTests(TestCase):
+    """Items separated by nothing but spaces are still read by the dictionary, never swapped."""
+
+    NAMES = ["בצל סגול", "חציל", "עגבנייה"]
+
+    def _match(self, message):
+        from apps.catalog.product_matcher import match_order_items
+        resolved, ambiguous, remaining = match_order_items(message, self.NAMES)
+        return [(r["product_name"], str(r["quantity"])) for r in resolved], remaining
+
+    def test_number_first_with_units(self):
+        self.assertEqual(self._match("120 קילו בצל סגול 40 קילו חציל"),
+                         ([("בצל סגול", "120"), ("חציל", "40")], ""))
+
+    def test_number_first_without_units(self):
+        self.assertEqual(self._match("120 בצל סגול 40 חציל 5 עגבנייה"),
+                         ([("בצל סגול", "120"), ("חציל", "40"), ("עגבנייה", "5")], ""))
+
+    def test_name_first(self):
+        self.assertEqual(self._match("בצל סגול 120 חציל 40"),
+                         ([("בצל סגול", "120"), ("חציל", "40")], ""))
+
+    def test_name_first_with_trailing_units(self):
+        self.assertEqual(self._match("בצל סגול 120 קילו חציל 40 קילו"),
+                         ([("בצל סגול", "120"), ("חציל", "40")], ""))
+
+    def test_one_unknown_piece_sends_the_whole_line_to_the_ai(self):
+        resolved, remaining = self._match("120 בצל סגול 40 דבר לא ידוע")
+        self.assertEqual(resolved, [])
+        self.assertIn("דבר לא ידוע", remaining)
