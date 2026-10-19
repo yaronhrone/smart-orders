@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useAutoError } from "../lib/useAutoError";
 import {
   fetchAdminUsers,
+  fetchAIUsage,
+  AIUsage,
   createUser,
   deleteUser,
   updateAdminUserProfile,
@@ -186,6 +189,8 @@ export default function AdminPage() {
           + הוסף לקוח
         </button>
       </div>
+
+      <AIUsageCard />
 
       <p className="text-sm text-gray-500 mb-4">מוצגים {users.length} לקוחות</p>
 
@@ -386,6 +391,35 @@ export default function AdminPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// A glance at the AI bill on the admin home; the full breakdown and the model comparison are one click away.
+function AIUsageCard() {
+  const [today, setToday] = useState<AIUsage | null>(null);
+  const [month, setMonth] = useState<AIUsage | null>(null);
+
+  useEffect(() => {
+    fetchAIUsage(1).then(setToday).catch(() => {});
+    fetchAIUsage(30).then(setMonth).catch(() => {});
+  }, []);
+
+  const usd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return (
+    <Link
+      href="/admin/ai-usage"
+      className="flex flex-wrap items-center justify-between gap-3 bg-white rounded-xl shadow-sm px-4 py-3 mb-6 hover:shadow transition"
+    >
+      <div>
+        <div className="text-sm font-semibold text-gray-800">שימוש ב-AI</div>
+        <div className="text-xs text-gray-500">מודל פעיל: {month?.current_model ?? "…"}</div>
+      </div>
+      <div className="flex gap-6 text-sm text-gray-700">
+        <span>היום: {today ? `${today.totals.calls} קריאות · ${usd(today.totals.cost_usd)}` : "…"}</span>
+        <span>30 יום: {month ? `${month.totals.calls} קריאות · ${usd(month.totals.cost_usd)}` : "…"}</span>
+      </div>
+      <span className="text-sm text-blue-600">פירוט והשוואת מודלים ←</span>
+    </Link>
   );
 }
 
