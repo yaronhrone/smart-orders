@@ -72,7 +72,9 @@ export default function AIUsagePage() {
     fetchAIUsage(days)
       .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : "שגיאה בטעינת הנתונים"));
-  }, [days, setError]);
+    // setError is a new function on every render; listing it here would reload the page in a loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days]);
 
   const parsing = data ? Object.entries(data.parsing_today) : [];
 
