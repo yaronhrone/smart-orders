@@ -48,6 +48,7 @@ class AIUsageView(APIView):
             days = min(max(int(request.query_params.get("days", 30)), 1), 365)
         except ValueError:
             days = 30
+        llm.purge_old_content()
         since = timezone.now() - timedelta(days=days)
         qs = AIUsage.objects.filter(created_at__gte=since)
         totals = qs.aggregate(
@@ -67,4 +68,12 @@ class AIUsageView(APIView):
             "by_model": _rows(qs, "model"),
             "by_model_and_kind": _rows(qs, "model", "kind"),
             "parsing_today": llm.parse_counts_today(),
+            "recent": [
+                {
+                    "at": row.created_at.isoformat(), "kind": row.kind, "model": row.model, "ok": row.ok,
+                    "seconds": round(row.duration_ms / 1000, 2), "cost_usd": round(float(row.cost_usd), 5),
+                    "message": row.message, "result": row.result,
+                }
+                for row in qs.exclude(kind="assistant").order_by("-created_at")[:50]
+            ],
         })

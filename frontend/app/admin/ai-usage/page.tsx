@@ -132,6 +132,41 @@ export default function AIUsagePage() {
             )}
           </section>
 
+          <section className="bg-white rounded-lg shadow p-4 mb-6">
+            <h2 className="font-semibold mb-1">מה ה-AI קיבל ומה הוא הבין</h2>
+            <p className="text-xs text-gray-500 mb-3">
+              50 הקריאות האחרונות של הפענוח (לא של העוזר). מופיע רק הטקסט שהמילון לא הצליח לקרוא בעצמו, וטקסט
+              ותוצאה נמחקים אוטומטית אחרי 24 שעות (הסטטיסטיקה והעלויות נשארות). מוצר שחוזר כאן הרבה פעמים כדאי
+              להכניס למילון.
+            </p>
+            {data.recent.length === 0 ? (
+              <p className="text-sm text-gray-500">אין קריאות בתקופה הזו.</p>
+            ) : (
+              <ul className="space-y-2">
+                {data.recent.map((r, i) => (
+                  <li key={i} className="border rounded p-2 text-sm">
+                    <div className="flex flex-wrap gap-x-3 text-xs text-gray-500 mb-1">
+                      <span>{new Date(r.at).toLocaleString("he-IL")}</span>
+                      <span>{KIND_LABEL[r.kind] ?? r.kind}</span>
+                      <span>{r.model}</span>
+                      <span>{r.seconds} ש׳</span>
+                      <span>{usd(r.cost_usd)}</span>
+                      {!r.ok && <span className="text-red-600">נכשלה</span>}
+                    </div>
+                    <div>
+                      <span className="text-gray-500">קיבל: </span>
+                      {r.message || "—"}
+                    </div>
+                    <div className="break-all" dir="ltr" style={{ textAlign: "left" }}>
+                      <span className="text-gray-500" dir="rtl">הבין: </span>
+                      {r.result || "—"}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <Table title="השוואה בין מודלים" rows={data.by_model} labelOf={(r) => r.model ?? ""} />
           <Table
             title="מודל לפי סוג קריאה"
