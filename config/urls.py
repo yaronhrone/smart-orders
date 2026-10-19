@@ -28,6 +28,7 @@ urlpatterns = [
     path("api/catalog/", include("apps.catalog.urls")),
     path("api/orders/", include("apps.orders.urls")),
     path("api/assistant/", include("apps.assistant.urls")),
+    path("api/core/", include("core.urls")),
     path("whatsapp/webhook/", whatsapp_webhook, name="whatsapp_webhook"),
 ]
 
