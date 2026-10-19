@@ -239,6 +239,29 @@ def resolve_clarification(reply: str, ambiguous_items: list[dict]) -> tuple[list
     return resolved, still_ambiguous
 
 
+def _split_run_on(segment: str) -> list[str]:
+    """
+    Several items typed with nothing but spaces between them:
+    "120 קילו בצל סגול 40 קילו חציל" (number first: a new item starts at each number) or
+    "בצל סגול 120 חציל 40" (name first: an item ends after each number [and its unit]).
+    Returns [] when the text has fewer than two numbers.
+    """
+    tokens = segment.split()
+    number_at = [i for i, t in enumerate(tokens) if re.fullmatch(_NUMBER, t)]
+    if len(number_at) < 2:
+        return []
+    unit = re.compile(_QTY_UNIT_WORDS)
+    if number_at[0] == 0:
+        starts = number_at
+    else:
+        starts = [0]
+        for i in number_at[:-1]:
+            end = i + 2 if i + 1 < len(tokens) and unit.fullmatch(tokens[i + 1]) else i + 1
+            starts.append(end)
+    pieces = [" ".join(tokens[a:b]) for a, b in zip(starts, starts[1:] + [len(tokens)])]
+    return [p for p in pieces if p]
+
+
 def match_order_items(message: str, known_product_names) -> tuple[list[dict], list[dict], str]:
     """
     Fast pre-AI pass for customer order messages.
@@ -248,19 +271,32 @@ def match_order_items(message: str, known_product_names) -> tuple[list[dict], li
     """
     known = set(known_product_names)
     resolved, ambiguous, leftover = [], [], []
-    for segment in _split_segments(message):
+    def _classify(segment, resolved, ambiguous):
+        """True when the segment became an item (or an ambiguity), False when it is left for the AI."""
         extracted = _extract_name_and_number(segment)
         if not extracted:
-            leftover.append(segment)
-            continue
+            return False
         name_candidate, number = extracted
         canonical = resolve_alias(name_candidate, known)
         if canonical:
             resolved.append({"product_name": canonical, "quantity": number})
-            continue
+            return True
         group = find_ambiguous_group(name_candidate, known)
         if group:
             ambiguous.append({"query": name_candidate, "quantity": number, "candidates": group})
+            return True
+        return False
+
+    for segment in _split_segments(message):
+        if _classify(segment, resolved, ambiguous):
+            continue
+        # All-or-nothing: a run-on line is read by the dictionary only if every piece is understood;
+        # otherwise the AI gets the whole line as typed.
+        pieces = _split_run_on(segment)
+        sub_resolved, sub_ambiguous = [], []
+        if pieces and all(_classify(p, sub_resolved, sub_ambiguous) for p in pieces):
+            resolved.extend(sub_resolved)
+            ambiguous.extend(sub_ambiguous)
         else:
             leftover.append(segment)
     return resolved, ambiguous, ", ".join(leftover)
