@@ -228,3 +228,33 @@ class OwnNameBeatsAliasTests(TestCase):
     def test_matching_ignores_case_and_extra_spaces(self):
         self.assertEqual(resolve_alias("  בצל   לבן ", ["בצל לבן"]), "בצל לבן")
 
+
+
+class SegmentSplittingTests(TestCase):
+    """Two items in one message are read as two, whichever way the customer joined them."""
+
+    NAMES = ["בצל סגול", "חציל", "עגבנייה"]
+
+    def _items(self, message):
+        from apps.catalog.product_matcher import match_order_items
+        resolved, ambiguous, remaining = match_order_items(message, self.NAMES)
+        self.assertEqual((ambiguous, remaining), ([], ""), message)
+        return [(r["product_name"], str(r["quantity"])) for r in resolved]
+
+    def test_the_joining_words_before_a_number_start_a_new_item(self):
+        expected = [("בצל סגול", "120"), ("חציל", "40")]
+        for message in (
+            "120 קילו בצל סגול, 40 קילו חציל",
+            "120 קילו בצל סגול ו-40 קילו חציל",
+            "120 קילו בצל סגול ו 40 קילו חציל",
+            "120 קילו בצל סגול ו40 קילו חציל",
+            "120 קילו בצל סגול וגם 40 קילו חציל",
+            "120 בצל סגול\n40 חציל",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(self._items(message), expected)
+
+    def test_a_name_that_starts_with_vav_is_not_split(self):
+        # the "ו" must be a word of its own (or glued to a number), never the first letter of a name
+        from apps.catalog.product_matcher import _split_segments
+        self.assertEqual(_split_segments("5 קילו ורד"), ["5 קילו ורד"])

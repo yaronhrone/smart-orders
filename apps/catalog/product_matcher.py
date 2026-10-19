@@ -100,8 +100,8 @@ def _extract_name_and_number(segment: str):
 
 
 def _split_segments(message: str) -> list[str]:
-    # "20 קילו בצל סגול ו-5 יחידות חסה" is two items: a "ו" glued to a number starts a new one.
-    return [s.strip() for s in re.split(r"[,\n]|\s+ו-?(?=\d)", message) if s.strip()]
+    # "20 קילו בצל סגול ו-5 יחידות חסה" is two items: "ו", "ו-" or "וגם" before a number starts a new one.
+    return [s.strip() for s in re.split(r"[,\n]|\s+ו-?\s*(?=\d)|\s+וגם\s+(?=\d)", message) if s.strip()]
 
 
 def _extract_availability_name(segment: str) -> str | None:
