@@ -28,7 +28,7 @@ PARSE_KINDS = ("order_parse", "modification_parse", "price_parse")
 # provider's price list and correct here. A model missing from the table is recorded with cost 0.
 PRICES_PER_MILLION = {
     "gpt-4o-mini": (0.15, 0.60),
-    "claude-sonnet-5-5": (3.00, 15.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
     "deepseek-chat": (0.27, 1.10),
 }
 
