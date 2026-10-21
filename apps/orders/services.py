@@ -65,7 +65,7 @@ def _assign_suppliers(products, user, region, suppliers=None, price_options=None
     return assignments
 
 
-def build_order(user, region, products, scenario="cheapest"):
+def build_order(user, region, products):
     """
     Saves one checkout to DB and returns (OrderBatch, [OrderRequest, ...], whatsapp_links).
 
@@ -73,7 +73,6 @@ def build_order(user, region, products, scenario="cheapest"):
     whole basket first, exactly as before — only then is the result split
     into one OrderRequest per supplier, all under one OrderBatch.
 
-    scenario: only "cheapest" exists (kept as a parameter for the callers that pass it)
     products: list of {"product": Product, "quantity": Decimal}
     """
     assignments = _assign_suppliers(products, user, region)
@@ -534,15 +533,6 @@ def _calculate_supplier_totals(assignments):
         suppliers[sid] = a["supplier"]
 
     return totals, suppliers
-
-
-def _group_by_supplier(assignments):
-    grouped = defaultdict(list)
-
-    for a in assignments:
-        grouped[a["supplier"].id].append(a)
-
-    return grouped
 
 
 def _calculate_total_for_supplier(items, supplier_id):

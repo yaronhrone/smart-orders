@@ -186,7 +186,7 @@ def _format_minimum_warning(issues: list) -> str:
 MERGE_OFFERED = "merge_offered"
 
 
-def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None):
+def _build_and_send_confirmed_order(data: dict, phone: str = None):
     """
     Build the checkout in DB (one order per supplier, one OrderBatch) and
     send each supplier its order right now (not queued: the customer is told "sent"
@@ -221,7 +221,7 @@ def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None
         with checkout_lock(user):
             open_batch = get_open_batch(user)
             if open_batch is None:
-                _batch, orders, _links = build_order(user, region, products, scenario=scenario)
+                _batch, orders, _links = build_order(user, region, products)
         if open_batch is not None:
             _offer_merge(phone, user, open_batch, products, region)
             return MERGE_OFFERED
@@ -1138,10 +1138,9 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     # Only one option is ever offered, so any reply confirms it.
     chosen = cheapest
     label = "ההזמנה"
-    scenario = "cheapest"
 
     minimum_issues = data.get("minimum_issues", {})
-    scenario_issues = minimum_issues.get(scenario, [])
+    scenario_issues = minimum_issues.get("cheapest", [])
     if scenario_issues:
         # Clear the pending order so the customer's next message (a renewed,
         # larger order — as this warning instructs them to send) is parsed as
@@ -1154,7 +1153,7 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     cache.delete(key)
-    result = _build_and_send_confirmed_order(data, scenario, phone)
+    result = _build_and_send_confirmed_order(data, phone)
     if result == MERGE_OFFERED:
         return HttpResponse(status=200)
 

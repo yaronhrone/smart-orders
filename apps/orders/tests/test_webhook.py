@@ -741,7 +741,6 @@ class MinimumScenarioFilteringTests(TestCase):
 
         self.assertIsNone(cache.get("whatsapp_order:+972506666666"))
         mock_build.assert_called_once()
-        self.assertEqual(mock_build.call_args.kwargs["scenario"], "cheapest")
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
