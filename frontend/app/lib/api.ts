@@ -316,14 +316,11 @@ export interface MinimumIssue {
 
 export interface SuggestOrderResponse {
   cheapest: SuggestScenario;
-  fewest_suppliers: SuggestScenario;
   minimum_issues: {
     cheapest: MinimumIssue[];
-    fewest_suppliers: MinimumIssue[];
   };
-  /** The single scenario to offer — cheapest one clearing every supplier's
-   *  minimum. null when none does. */
-  recommended: "cheapest" | "fewest_suppliers" | null;
+  /** "cheapest", or null when it does not clear every supplier's minimum. */
+  recommended: "cheapest" | null;
 }
 
 export async function suggestOrder(
@@ -371,7 +368,7 @@ export interface PlaceOrderResponse {
 /** Pass mergeIntoBatch only after the customer chose to add to their open order (else 409). */
 export async function placeOrder(
   products: OrderProductInput[],
-  scenario: "cheapest" | "fewest_suppliers",
+  scenario: "cheapest",
   mergeIntoBatch?: number
 ): Promise<PlaceOrderResponse> {
   return request<PlaceOrderResponse>("/api/orders/place/", {

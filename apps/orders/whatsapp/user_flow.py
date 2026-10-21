@@ -186,7 +186,7 @@ def _format_minimum_warning(issues: list) -> str:
 MERGE_OFFERED = "merge_offered"
 
 
-def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None):
+def _build_and_send_confirmed_order(data: dict, phone: str = None):
     """
     Build the checkout in DB (one order per supplier, one OrderBatch) and
     send each supplier its order right now (not queued: the customer is told "sent"
@@ -221,7 +221,7 @@ def _build_and_send_confirmed_order(data: dict, scenario: str, phone: str = None
         with checkout_lock(user):
             open_batch = get_open_batch(user)
             if open_batch is None:
-                _batch, orders, _links = build_order(user, region, products, scenario=scenario)
+                _batch, orders, _links = build_order(user, region, products)
         if open_batch is not None:
             _offer_merge(phone, user, open_batch, products, region)
             return MERGE_OFFERED
@@ -567,8 +567,7 @@ def _suggest_and_respond(
 
     `is_grace_retry` marks the one re-entry that isn't a customer message: the
     MINIMUM_GRACE_SECONDS follow-up scheduled after a basket first failed
-    every supplier's minimum (see the cheapest_issues/fewest_issues branch
-    below). It decides what happens if the basket *still* doesn't clear a
+    every supplier's minimum (see the cheapest_issues branch below). It decides what happens if the basket *still* doesn't clear a
     minimum — start a fresh grace window (first time) vs. give up and drop it
     (second time), so a customer who never tops up doesn't get held forever.
     """
@@ -607,20 +606,17 @@ def _suggest_and_respond(
         return HttpResponse(status=200)
 
     cheapest = result["cheapest"]
-    fewest = result["fewest_suppliers"]
     minimum_issues = result.get("minimum_issues", {})
     unavailable_products = result.get("unavailable_products", [])
     cheapest_issues = minimum_issues.get("cheapest", [])
-    # One option only: the cheapest scenario whose suppliers all clear their
-    # minimum (see services.pick_recommended_scenario). Offering both
-    # "cheapest" and "fewest suppliers" and asking א/ב just made the customer
-    # do the comparison the system can do for them.
+    # One option only: the cheapest basket, if its suppliers all clear their
+    # minimum (see services.pick_recommended_scenario).
     from apps.orders.services import pick_recommended_scenario
     recommended = pick_recommended_scenario(result)
 
     # A product with no supplier at all doesn't kill the rest of a perfectly
-    # orderable basket — suggest_order already dropped it from both
-    # scenarios; drop it here too so a later "אישור" doesn't try to build an
+    # orderable basket — suggest_order already dropped it from the
+    # basket; drop it here too so a later "אישור" doesn't try to build an
     # order against a product no supplier can actually fulfill.
     if unavailable_products:
         products = [p for p in products if p["product"].name not in unavailable_products]
@@ -633,9 +629,8 @@ def _suggest_and_respond(
     )
 
     if recommended:
-        chosen = cheapest if recommended == "cheapest" else fewest
-        save_pending_order(phone, cheapest, fewest, single_scenario=recommended, **pending_kwargs)
-        msg = _format_scenario("ההזמנה שלך", chosen)
+        save_pending_order(phone, cheapest, **pending_kwargs)
+        msg = _format_scenario("ההזמנה שלך", cheapest)
         msg += (
             "\n\n" + ORDER_PROMPT +
             f"ההצעה תקפה {_offer_validity_text(SESSION_TTL)}; אחרי זה צריך לשלוח את ההזמנה מחדש."
@@ -1134,36 +1129,18 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
 
     data = json.loads(raw)
     cheapest = data["cheapest"]
-    fewest = data["fewest"]
 
     if _normalized_reply(body) in _DECLINE_WORDS:
         cache.delete(key)
         validators.send_whatsapp_message(phone, "בסדר, ההזמנה בוטלה. אפשר לשלוח הזמנה חדשה בכל זמן.")
         return HttpResponse(status=200)
 
-    same = cheapest["total_price"] == fewest["total_price"]
-    single_scenario = data.get("single_scenario")
-
-    if single_scenario:
-        # Only one scenario was ever offered (the other failed a supplier
-        # minimum) — any reply confirms it, same as the same-price shortcut.
-        chosen = cheapest if single_scenario == "cheapest" else fewest
-        label = "ההזמנה"
-        scenario = single_scenario
-    elif same or body in ("א", "1"):
-        chosen = cheapest
-        label = "אפשרות א׳ — הזול ביותר" if not same else "ההזמנה"
-        scenario = "cheapest"
-    elif body in ("ב", "2"):
-        chosen = fewest
-        label = "אפשרות ב׳ — הכי פחות ספקים"
-        scenario = "fewest_suppliers"
-    else:
-        validators.send_whatsapp_message(phone, "אנא ענה *א* או *ב* כדי לבחור.")
-        return HttpResponse(status=200)
+    # Only one option is ever offered, so any reply confirms it.
+    chosen = cheapest
+    label = "ההזמנה"
 
     minimum_issues = data.get("minimum_issues", {})
-    scenario_issues = minimum_issues.get(scenario, [])
+    scenario_issues = minimum_issues.get("cheapest", [])
     if scenario_issues:
         # Clear the pending order so the customer's next message (a renewed,
         # larger order — as this warning instructs them to send) is parsed as
@@ -1176,7 +1153,7 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
         return HttpResponse(status=200)
 
     cache.delete(key)
-    result = _build_and_send_confirmed_order(data, scenario, phone)
+    result = _build_and_send_confirmed_order(data, phone)
     if result == MERGE_OFFERED:
         return HttpResponse(status=200)
 

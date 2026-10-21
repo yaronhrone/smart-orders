@@ -119,7 +119,7 @@ export default function NewOrderPage() {
 
   // ─── Step 3 ────────────────────────────────────────────────────────────
 
-  async function handlePlace(scenario: "cheapest" | "fewest_suppliers") {
+  async function handlePlace(scenario: "cheapest") {
     setPlacing(true);
     setPlaceError("");
     try {

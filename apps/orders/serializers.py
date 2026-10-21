@@ -38,7 +38,7 @@ class SuggestOrderInputSerializer(serializers.Serializer):
     products = OrderItemInputSerializer(many=True, min_length=1)
 class PlaceOrderInputSerializer(serializers.Serializer):
     scenario = serializers.ChoiceField(
-        choices=["cheapest", "fewest_suppliers"],
+        choices=["cheapest"],
         default="cheapest",
     )
     products = OrderItemInputSerializer(many=True, min_length=1)
@@ -75,15 +75,12 @@ class MinimumIssueSerializer(serializers.Serializer):
 
 class MinimumIssuesByScenarioSerializer(serializers.Serializer):
     cheapest = MinimumIssueSerializer(many=True)
-    fewest_suppliers = MinimumIssueSerializer(many=True)
 
 
 class SuggestOrderResponseSerializer(serializers.Serializer):
     cheapest = ScenarioSerializer()
-    fewest_suppliers = ScenarioSerializer()
     minimum_issues = MinimumIssuesByScenarioSerializer()
-    # The single scenario to offer ("cheapest" | "fewest_suppliers"), or
-    # null when none clears every supplier's minimum.
+    # "cheapest", or null when it does not clear every supplier's minimum.
     recommended = serializers.CharField(allow_null=True)
 
 # ---------------------------------------------------------------------------

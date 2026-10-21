@@ -79,7 +79,7 @@ class PlaceOrderView(APIView):
                     conflict = True
                 else:
                     batch, orders, whatsapp_links = build_order(
-                        user=user, region=region, products=products, scenario=scenario,
+                        user=user, region=region, products=products,
                     )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

@@ -287,8 +287,7 @@ class Command(BaseCommand):
             if not basket:
                 break
 
-            scenario = "cheapest" if weeks_ago % 3 else "fewest_suppliers"
-            batch, orders, _ = build_order(user, profile.region, basket, scenario=scenario)
+            batch, orders, _ = build_order(user, profile.region, basket)
             placed_at = now - timedelta(weeks=weeks_ago, hours=rng.randint(0, 10))
             OrderBatch.objects.filter(pk=batch.pk).update(created_at=placed_at)
             OrderRequest.objects.filter(pk__in=[o.pk for o in orders]).update(
