@@ -403,7 +403,7 @@ class PlaceAndSuggestViewTests(APITestCase):
     def test_suggest_returns_the_single_recommended_scenario(self):
         res = self.client.post(reverse("orders-suggest"), self._basket(), format="json")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertIn(res.data["recommended"], ("cheapest", "fewest_suppliers"))
+        self.assertIn(res.data["recommended"], ("cheapest", None))
 
     def test_place_sends_each_supplier_its_whatsapp_before_answering(self):
         res = self.client.post(

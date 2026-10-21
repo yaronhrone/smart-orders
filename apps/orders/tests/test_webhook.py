@@ -271,7 +271,7 @@ class UserNewOrderFlowTests(TestCase):
         self.assertIsNotNone(cached)
         data = json.loads(cached)
         self.assertIn("cheapest", data)
-        self.assertIn("fewest", data)
+        self.assertNotIn("fewest", data)
         self.assertIn("user_id", data)
         self.assertEqual(data["user_id"], user.id)
 
@@ -382,7 +382,7 @@ class UserConfirmationFlowTests(TestCase):
         SupplierProduct.objects.create(supplier=self.supplier, product=self.tomato, price_per_unit="5.00")
         self.user = make_user_with_profile(phone="+972505555555")
 
-    def _seed_cache(self, phone, same=False):
+    def _seed_cache(self, phone):
         """Put a fake pending order into the cache."""
         cheapest = {
             "scenario": "cheapest",
@@ -401,13 +401,8 @@ class UserConfirmationFlowTests(TestCase):
                 }
             ],
         }
-        if same:
-            fewest = cheapest
-        else:
-            fewest = {**cheapest, "scenario": "fewest_suppliers", "total_price": "60.00"}
-
         save_pending_order(
-            phone, cheapest, fewest,
+            phone, cheapest,
             products=[{"product_id": self.tomato.id, "quantity": "10"}],
             user_id=self.user.id,
             region=Region.CENTER,
@@ -434,33 +429,9 @@ class UserConfirmationFlowTests(TestCase):
 
     @patch("apps.orders.tasks.send_supplier_order_notification_task")
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_reply_bet_builds_fewest_suppliers_order(self, mock_send, mock_supplier_task):
-        """Replying 'ב' selects fewest_suppliers scenario."""
-        self._seed_cache("+972505555555")
-
-        self._post("+972505555555", "ב")
-
-        order = OrderRequest.objects.filter(user=self.user).first()
-        self.assertIsNotNone(order)
-
-    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    def test_invalid_reply_sends_choose_message(self, mock_send):
-        """Invalid reply keeps cache intact and asks user to choose."""
-        self._seed_cache("+972505555555")
-
-        self._post("+972505555555", "גגגג")
-
-        mock_send.assert_called_once()
-        self.assertIn("*א*", mock_send.call_args[0][1])
-
-        # Cache should still exist
-        self.assertIsNotNone(cache.get("whatsapp_order:+972505555555"))
-
-    @patch("apps.orders.tasks.send_supplier_order_notification_task")
-    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     def test_same_scenarios_any_reply_confirms(self, mock_send, mock_supplier_task):
-        """When cheapest == fewest any reply confirms (including 'שלום')."""
-        self._seed_cache("+972505555555", same=True)
+        """Only one option is offered, so any reply confirms it (including 'שלום')."""
+        self._seed_cache("+972505555555")
 
         self._post("+972505555555", "שלום")
 
@@ -592,8 +563,7 @@ class ExpiredOfferTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00"),
-            "fewest_suppliers": _scenario("60.00"),
-            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+            "minimum_issues": {"cheapest": []},
         }
 
         self._post("10 עגבניות")
@@ -612,8 +582,7 @@ class ExpiredOfferTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00"),
-            "fewest_suppliers": _scenario("60.00"),
-            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+            "minimum_issues": {"cheapest": []},
         }
 
         self._post("10 עגבניות")  # no _flush_draft: nothing to wait for
@@ -653,7 +622,7 @@ class ExpiredOfferTests(TestCase):
     def test_confirming_in_time_still_creates_the_order(self, mock_send, mock_send_wa, mock_supplier_task):
         cheapest = _scenario("50.00")
         save_pending_order(
-            self.PHONE, cheapest, cheapest, single_scenario="cheapest",
+            self.PHONE, cheapest,
             products=[{"product_id": self.tomato.id, "quantity": "10"}],
             user_id=self.user.id, region=Region.CENTER,
         )
@@ -699,8 +668,7 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00", supplier_name="ספק זול"),
-            "fewest_suppliers": _scenario("60.00", supplier_name="ספק יקר"),
-            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+            "minimum_issues": {"cheapest": []},
         }
 
         self._post("+972506666666", "10 עגבניות")
@@ -713,63 +681,13 @@ class MinimumScenarioFilteringTests(TestCase):
         self.assertIn("ספק זול", msg)
         self.assertNotIn("ספק יקר", msg)
         data = json.loads(cache.get("whatsapp_order:+972506666666"))
-        self.assertEqual(data["single_scenario"], "cheapest")
-
-    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    @patch("apps.orders.order_parser.parse_customer_order")
-    @patch("apps.orders.services.suggest_order")
-    def test_pricier_scenario_offered_when_the_cheaper_one_fails_minimum(self, mock_suggest, mock_parse, mock_send):
-        """Pricier-but-valid beats cheaper-but-broken."""
-        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
-        mock_suggest.return_value = {
-            "cheapest": _scenario("40.00", supplier_name="ספק קטן"),
-            "fewest_suppliers": _scenario("60.00", supplier_name="ספק גדול"),
-            "minimum_issues": {"cheapest": _issue("ספק קטן"), "fewest_suppliers": []},
-        }
-
-        self._post("+972506666666", "10 עגבניות")
-        _flush_draft("+972506666666")
-
-        msg = mock_send.call_args[0][1]
-        self.assertIn("ספק גדול", msg)
-        self.assertNotIn("ספק קטן", msg)
-        data = json.loads(cache.get("whatsapp_order:+972506666666"))
-        self.assertEqual(data["single_scenario"], "fewest_suppliers")
-
-    @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
-    @patch("apps.orders.order_parser.parse_customer_order")
-    @patch("apps.orders.services.suggest_order")
-    def test_scenario_failing_minimum_is_not_offered_as_a_choice(self, mock_suggest, mock_parse, mock_send):
-        """
-        fewest_suppliers fails its supplier's minimum, cheapest doesn't. The
-        customer must not be offered a choice that leads to a dead end — only
-        the valid scenario should appear, already ready to confirm.
-        """
-        mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
-        mock_suggest.return_value = {
-            "cheapest": _scenario("50.00"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
-            "minimum_issues": {"cheapest": [], "fewest_suppliers": _issue("ספק גדול")},
-        }
-
-        self._post("+972506666666", "10 עגבניות")
-        _flush_draft("+972506666666")
-
-        msg = mock_send.call_args[0][1]
-        self.assertNotIn("*א*", msg)
-        self.assertNotIn("*ב*", msg)
-        self.assertIn("ענה *אישור*", msg)
-        self.assertNotIn("ספק גדול", msg)  # the broken scenario simply isn't offered
-
-        data = json.loads(cache.get("whatsapp_order:+972506666666"))
-        self.assertEqual(data["single_scenario"], "cheapest")
 
     @patch("apps.orders.whatsapp.validators.send_whatsapp_message")
     @patch("apps.orders.order_parser.parse_customer_order")
     @patch("apps.orders.services.suggest_order")
     def test_same_price_scenarios_still_checked_for_minimum(self, mock_suggest, mock_parse, mock_send):
         """
-        Regression: cheapest and fewest_suppliers ending up at the exact same
+        Regression: the offered basket ending up at one supplier, with the exact same
         total price (the common case — one dominant supplier for everything)
         used to take the single-confirm shortcut unconditionally, without
         ever checking whether that shared total actually clears its
@@ -781,10 +699,8 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("20.00", supplier_name="ספק גדול"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
             "minimum_issues": {
                 "cheapest": _issue("ספק גדול"),
-                "fewest_suppliers": _issue("ספק גדול"),
             },
         }
 
@@ -811,8 +727,7 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
-            "minimum_issues": {"cheapest": [], "fewest_suppliers": _issue("ספק גדול")},
+            "minimum_issues": {"cheapest": []},
         }
         order = make_order(self.user, make_supplier("ספק זול"), total_price=Decimal("50.00"))
         # Only stands in for build_order's return value; dated yesterday so it
@@ -835,10 +750,8 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
             "minimum_issues": {
                 "cheapest": _issue("ספק קטן"),
-                "fewest_suppliers": _issue("ספק גדול"),
             },
         }
 
@@ -867,10 +780,8 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
             "minimum_issues": {
                 "cheapest": _issue("ספק קטן"),
-                "fewest_suppliers": _issue("ספק גדול"),
             },
         }
 
@@ -903,10 +814,8 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
             "minimum_issues": {
                 "cheapest": _issue("ספק קטן"),
-                "fewest_suppliers": _issue("ספק גדול"),
             },
         }
         self._post("+972506666666", "10 עגבניות")
@@ -915,8 +824,7 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("40")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("500.00"),
-            "fewest_suppliers": _scenario("550.00"),
-            "minimum_issues": {"cheapest": [], "fewest_suppliers": []},
+            "minimum_issues": {"cheapest": []},
         }
         self._post("+972506666666", "עוד 40 עגבניות")
         _flush_draft("+972506666666")
@@ -941,10 +849,8 @@ class MinimumScenarioFilteringTests(TestCase):
         mock_parse.return_value = [{"product_name": "עגבניה", "quantity": Decimal("10")}]
         mock_suggest.return_value = {
             "cheapest": _scenario("50.00", supplier_name="ספק קטן"),
-            "fewest_suppliers": _scenario("20.00", supplier_name="ספק גדול"),
             "minimum_issues": {
                 "cheapest": _issue("ספק קטן"),
-                "fewest_suppliers": _issue("ספק גדול"),
             },
         }
         self._post("+972506666666", "10 עגבניות")
@@ -1388,7 +1294,7 @@ class CustomerButtonTests(TestCase):
     def _seed_offer(self):
         cheapest = _scenario("50.00")
         save_pending_order(
-            self.PHONE, cheapest, cheapest, single_scenario="cheapest",
+            self.PHONE, cheapest,
             products=[{"product_id": self.tomato.id, "quantity": "10"}],
             user_id=self.user.id, region=Region.CENTER,
         )
@@ -3092,7 +2998,7 @@ class CheckoutConfirmationMessageTests(TestCase):
         SupplierProduct.objects.create(supplier=b, product=carrot, price_per_unit="3.00")
         scenario = _scenario("62.00")
         save_pending_order(
-            "+972504444444", scenario, scenario,
+            "+972504444444", scenario,
             products=[
                 {"product_id": tomato.id, "quantity": "10"},
                 {"product_id": carrot.id, "quantity": "4"},
@@ -3357,7 +3263,7 @@ class OneOpenOrderWebhookTests(TestCase):
         lettuce = {**_scenario("20.00")["products"][0], "product_id": self.lettuce.id, "product_name": "חסה"}
         offer = {**_scenario("20.00"), "products": [lettuce]}
         save_pending_order(
-            self.PHONE, offer, offer, single_scenario="cheapest",
+            self.PHONE, offer,
             products=[{"product_id": self.lettuce.id, "quantity": "5"}],
             user_id=self.user.id, region=Region.CENTER,
         )

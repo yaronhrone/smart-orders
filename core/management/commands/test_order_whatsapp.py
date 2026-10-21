@@ -22,12 +22,6 @@ class Command(BaseCommand):
 
         result = suggest_order(user, "center", products)
         cheapest = result["cheapest"]
-        fewest = result["fewest_suppliers"]
-
-        def scenario_key(s):
-            return (s["total_price"], tuple(sorted((p["supplier_id"], p["product_id"]) for p in s["products"])))
-
-        same = scenario_key(cheapest) == scenario_key(fewest)
 
         def format_scenario(label, s):
             rows = [f"*{label}*"]
@@ -37,20 +31,11 @@ class Command(BaseCommand):
             return rows
 
         lines = ["*הזמנה מומלצת — smart-orders*", ""]
-        if same:
-            lines += format_scenario("אפשרות יחידה: הזול עם הכי פחות ספקים", cheapest)
-        else:
-            lines += format_scenario("אפשרות א׳ — הזול ביותר", cheapest)
-            lines.append("")
-            lines += format_scenario("אפשרות ב׳ — הכי פחות ספקים", fewest)
+        lines += format_scenario("ההזמנה הזולה ביותר", cheapest)
 
-        save_pending_order("+972502106833", cheapest, fewest)
+        save_pending_order("+972502106833", cheapest)
 
-        body = "\n".join(lines)
-        if not same:
-            body += "\n\nענה *א* או *ב* לאישור."
-        else:
-            body += "\n\nענה *א* לאישור."
+        body = "\n".join(lines) + "\n\nענה *כן* לאישור."
         self.stdout.write(body)
         self.stdout.write("")
 

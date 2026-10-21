@@ -318,105 +318,6 @@ class BuildOrderServiceTests(TestCase):
         self.assertEqual(suppliers_used, {alt_b})
 
 
-class FewestSuppliersTests(TestCase):
-    """Tests for the `fewest_suppliers` set-cover scenario."""
-
-    def setUp(self):
-        self.user = make_user()
-        self.tomato = make_product("tomato")
-        self.cucumber = make_product("cucumber")
-        self.carrot = make_product("carrot")
-
-    def test_picks_minimum_supplier_count(self):
-        """One supplier carrying all 3 beats 3 separate cheap suppliers."""
-        one_stop = make_supplier("one_stop", minimum_order=0)
-        cheap_t = make_supplier("cheap_t", minimum_order=0)
-        cheap_c = make_supplier("cheap_c", minimum_order=0)
-        cheap_cr = make_supplier("cheap_cr", minimum_order=0)
-
-        # one_stop is more expensive on each product but covers all
-        set_price(one_stop, self.tomato, "10.00")
-        set_price(one_stop, self.cucumber, "10.00")
-        set_price(one_stop, self.carrot, "10.00")
-
-        set_price(cheap_t, self.tomato, "1.00")
-        set_price(cheap_c, self.cucumber, "1.00")
-        set_price(cheap_cr, self.carrot, "1.00")
-
-        order, _ = build_order(self.user, Region.CENTER, [
-            {"product": self.tomato, "quantity": Decimal("5")},
-            {"product": self.cucumber, "quantity": Decimal("5")},
-            {"product": self.carrot, "quantity": Decimal("5")},
-        ], scenario="fewest_suppliers")
-
-        suppliers_used = {item.supplier for item in order.products.all()}
-        self.assertEqual(suppliers_used, {one_stop})
-
-    def test_breaks_tie_by_cost(self):
-        """
-        When two set-cover solutions need the same number of suppliers,
-        prefer the one with lower total cost.
-        """
-        # Two ways to cover {tomato, cucumber} with 1 supplier:
-        # supplier_expensive covers both at 10 each — total 100
-        # supplier_cheap covers both at 3 each — total 30
-        supplier_expensive = make_supplier("expensive", minimum_order=0)
-        supplier_cheap = make_supplier("cheap", minimum_order=0)
-
-        set_price(supplier_expensive, self.tomato, "10.00")
-        set_price(supplier_expensive, self.cucumber, "10.00")
-        set_price(supplier_cheap, self.tomato, "3.00")
-        set_price(supplier_cheap, self.cucumber, "3.00")
-
-        order, _ = build_order(self.user, Region.CENTER, [
-            {"product": self.tomato, "quantity": Decimal("5")},
-            {"product": self.cucumber, "quantity": Decimal("5")},
-        ], scenario="fewest_suppliers")
-
-        suppliers_used = {item.supplier for item in order.products.all()}
-        self.assertEqual(suppliers_used, {supplier_cheap})
-
-    def test_respects_minimum_order(self):
-        """
-        Greedy set-cover picks one_stop (covers everything, cheapest). Its
-        minimum is violated, so _force_minimum_switch hands the whole group
-        off to one_stop_alt — another all-covering supplier that meets
-        minimum.
-
-        Note: the algorithm doesn't split a group across multiple suppliers;
-        it only swaps the whole group to a single alternative. If no single
-        alternative can absorb the group, the violation is left in place and
-        surfaced via minimum_issues.
-        """
-        one_stop = make_supplier("one_stop", minimum_order=1000)
-        one_stop_alt = make_supplier("one_stop_alt", minimum_order=0)
-
-        set_price(one_stop, self.tomato, "1.00")
-        set_price(one_stop, self.cucumber, "1.00")
-        set_price(one_stop_alt, self.tomato, "3.00")
-        set_price(one_stop_alt, self.cucumber, "3.00")
-
-        order, _ = build_order(self.user, Region.CENTER, [
-            {"product": self.tomato, "quantity": Decimal("5")},
-            {"product": self.cucumber, "quantity": Decimal("5")},
-        ], scenario="fewest_suppliers")
-
-        suppliers_used = {item.supplier for item in order.products.all()}
-        self.assertEqual(suppliers_used, {one_stop_alt})
-
-    def test_raises_when_no_supplier_for_product(self):
-        """fewest_suppliers must also raise when a product has no supplier."""
-        # tomato has a supplier, cucumber has none
-        s = make_supplier("s", minimum_order=0)
-        set_price(s, self.tomato, "1.00")
-
-        with self.assertRaises(ValueError):
-            build_order(self.user, Region.CENTER, [
-                {"product": self.tomato, "quantity": Decimal("5")},
-                {"product": self.cucumber, "quantity": Decimal("5")},
-            ], scenario="fewest_suppliers")
-
-
 class SuggestOrderShapeTests(TestCase):
     """Tests for the suggest_order response structure."""
 
@@ -424,7 +325,7 @@ class SuggestOrderShapeTests(TestCase):
         self.user = make_user()
         self.tomato = make_product("tomato")
 
-    def test_minimum_issues_returned_for_both_scenarios(self):
+    def test_minimum_issues_returned_for_the_cheapest_scenario(self):
         """`minimum_issues` is a dict keyed by scenario name."""
         s = make_supplier("s", minimum_order=0)
         set_price(s, self.tomato, "1.00")
@@ -436,10 +337,10 @@ class SuggestOrderShapeTests(TestCase):
         self.assertIn("minimum_issues", result)
         self.assertIsInstance(result["minimum_issues"], dict)
         self.assertIn("cheapest", result["minimum_issues"])
-        self.assertIn("fewest_suppliers", result["minimum_issues"])
+        self.assertNotIn("fewest_suppliers", result)
         # No minimum violations with this setup
         self.assertEqual(result["minimum_issues"]["cheapest"], [])
-        self.assertEqual(result["minimum_issues"]["fewest_suppliers"], [])
+        self.assertEqual(result["recommended"], "cheapest")
 
     def test_minimum_issues_reports_violations_per_scenario(self):
         """When a scenario can't reach a supplier's minimum, it's reported."""
@@ -454,7 +355,7 @@ class SuggestOrderShapeTests(TestCase):
         self.assertEqual(
             result["minimum_issues"]["cheapest"][0]["supplier_id"], only.id
         )
-        self.assertEqual(len(result["minimum_issues"]["fewest_suppliers"]), 1)
+        self.assertIsNone(result["recommended"])
 
     def test_unavailable_product_reported_but_does_not_block_the_rest(self):
         """
@@ -475,8 +376,6 @@ class SuggestOrderShapeTests(TestCase):
         self.assertEqual(result["unavailable_products"], ["onion, no supplier"])
         cheapest_names = [p["product_name"] for p in result["cheapest"]["products"]]
         self.assertEqual(cheapest_names, ["tomato"])
-        fewest_names = [p["product_name"] for p in result["fewest_suppliers"]["products"]]
-        self.assertEqual(fewest_names, ["tomato"])
 
     def test_all_products_unavailable_still_raises(self):
         """No product at all can be priced -> still a hard error, nothing to offer."""

@@ -21,9 +21,12 @@ def suggest_order(user, region, products):
     basket down with it (_build_initial_assignments raising for the full
     `products` list), losing every other perfectly orderable item along
     with it. suggest_order itself never saw a partial list before; it
-    computes availability once here and only ever hands _assign_suppliers /
-    _assign_fewest_suppliers the products that can actually be priced, so
-    neither of those (or their own tested behavior) needs to change.
+    computes availability once here and only ever hands _assign_suppliers the
+    products that can actually be priced, so it (and its own tested behavior)
+    needs no change.
+
+    One scenario only: the cheapest basket, split across as many suppliers as
+    that takes (each supplier's minimum order is enforced by _force_minimum_switch).
     """
     suppliers = _get_available_suppliers(user, region)
     price_options = _get_price_options(products, suppliers)
@@ -34,14 +37,9 @@ def suggest_order(user, region, products):
         raise ValueError(f"אין ספק שיכול לספק: {', '.join(unavailable)}")
 
     cheapest = _assign_suppliers(available, user, region, suppliers, price_options)
-    fewest = _assign_fewest_suppliers(available, user, region, suppliers, price_options)
     result = {
         "cheapest": _assignments_to_scenario(cheapest, "cheapest"),
-        "fewest_suppliers": _assignments_to_scenario(fewest, "fewest_suppliers"),
-        "minimum_issues": {
-            "cheapest": _check_missing_minimum(cheapest),
-            "fewest_suppliers": _check_missing_minimum(fewest),
-        },
+        "minimum_issues": {"cheapest": _check_missing_minimum(cheapest)},
         "unavailable_products": unavailable,
     }
     result["recommended"] = pick_recommended_scenario(result)
@@ -51,17 +49,9 @@ def suggest_order(user, region, products):
 def pick_recommended_scenario(result):
     """
     The ONE scenario the customer is offered (site and WhatsApp alike): the
-    cheapest one whose every supplier clears its minimum — a pricier-but-
-    valid basket beats a cheaper one a supplier would refuse. Ties go to
-    fewer suppliers. None if no scenario clears the minimums.
+    cheapest basket, if every supplier in it clears its minimum; None if not.
     """
-    valid = [name for name in ("cheapest", "fewest_suppliers") if not result["minimum_issues"][name]]
-    if not valid:
-        return None
-    return min(
-        valid,
-        key=lambda name: (Decimal(str(result[name]["total_price"])), result[name]["supplier_count"]),
-    )
+    return None if result["minimum_issues"]["cheapest"] else "cheapest"
 
 
 def _assign_suppliers(products, user, region, suppliers=None, price_options=None):
@@ -83,13 +73,10 @@ def build_order(user, region, products, scenario="cheapest"):
     whole basket first, exactly as before — only then is the result split
     into one OrderRequest per supplier, all under one OrderBatch.
 
-    scenario: "cheapest" | "fewest_suppliers"
+    scenario: only "cheapest" exists (kept as a parameter for the callers that pass it)
     products: list of {"product": Product, "quantity": Decimal}
     """
-    if scenario == "fewest_suppliers":
-        assignments = _assign_fewest_suppliers(products, user, region)
-    else:
-        assignments = _assign_suppliers(products, user, region)
+    assignments = _assign_suppliers(products, user, region)
 
     by_supplier = defaultdict(list)
     for a in assignments:
@@ -344,78 +331,6 @@ def _get_price_options(products, suppliers):
     for sp in rows:
         options[sp.product_id].append((sp.supplier, sp.price_per_unit))
     return options
-
-
-def _assign_fewest_suppliers(products, user, region, suppliers=None, price_options=None):
-    """
-    Greedy set cover: pick the fewest distinct suppliers that cover all products.
-    Tie-break by lower total cost on the products covered. Then enforce minimum
-    orders by handing off below-minimum supplier groups via _force_minimum_switch.
-    """
-    if suppliers is None:
-        suppliers = _get_available_suppliers(user, region)
-    if price_options is None:
-        price_options = _get_price_options(products, suppliers)
-
-    missing = [p["product"].name for p in products if not price_options.get(p["product"].id)]
-    if missing:
-        raise ValueError(f"אין ספק שיכול לספק: {', '.join(missing)}")
-
-    product_options = {p["product"].id: price_options[p["product"].id] for p in products}
-
-    # Per-product {supplier_id: price} lookup, built once so the greedy loop
-    # below does O(1) price lookups instead of a linear scan per candidate.
-    price_by_product_supplier = {
-        pid: {s.id: p for s, p in prices} for pid, prices in product_options.items()
-    }
-
-    supplier_coverage = defaultdict(set)
-    for pid, prices in product_options.items():
-        for s, _ in prices:
-            supplier_coverage[s.id].add(pid)
-
-    uncovered = {p["product"].id for p in products}
-    quantities = {p["product"].id: p["quantity"] for p in products}
-    chosen_suppliers = set()
-
-    while uncovered:
-        best_sid = None
-        best_score = None
-        for sid, covers in supplier_coverage.items():
-            new_covered = covers & uncovered
-            if not new_covered:
-                continue
-            cost = sum(
-                quantities[pid] * price_by_product_supplier[pid][sid]
-                for pid in new_covered
-            )
-            score = (len(new_covered), -cost)
-            if best_score is None or score > best_score:
-                best_sid = sid
-                best_score = score
-        if best_sid is None:
-            raise ValueError("לא ניתן לכסות את כל המוצרים עם הספקים הזמינים")
-        chosen_suppliers.add(best_sid)
-        uncovered -= supplier_coverage[best_sid]
-
-    assignments = []
-    for p in products:
-        pid = p["product"].id
-        candidates = [
-            (s, price) for s, price in product_options[pid]
-            if s.id in chosen_suppliers
-        ]
-        supplier, price = min(candidates, key=lambda x: x[1])
-        assignments.append({
-            "product": p["product"],
-            "quantity": p["quantity"],
-            "supplier": supplier,
-            "unit_price": price,
-            "all_prices": product_options[pid],
-            "price_by_supplier": price_by_product_supplier[pid],
-        })
-
-    return _force_minimum_switch(assignments)
 
 
 def generate_whatsapp_links(assignments):

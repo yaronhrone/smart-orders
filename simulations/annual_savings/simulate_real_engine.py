@@ -138,7 +138,7 @@ def run():
     weekly_totals = {}  # week -> {"baseline": x, "smart": x}
     minimum_issue_days = 0
     total_days = 0
-    scenario_counts = {"cheapest": 0, "fewest_suppliers": 0}
+    scenario_counts = {"cheapest": 0}
 
     for kitchen in KITCHENS:
         daily_rows = []
@@ -153,28 +153,16 @@ def run():
                     item["quantity"] * supplier_prices[item["product"].name][kitchen["regular_supplier"]]
                     for item in basket
                 )
-
-                # Smart: the real engine computes both scenarios with real
-                # minimum-order-per-supplier enforcement already applied. A
-                # real customer (via the WhatsApp flow) sees both and picks
-                # whichever actually clears every supplier's minimum — so we
-                # do the same: prefer cheapest, fall back to fewest-suppliers
-                # (which consolidates and clears minimums more easily on
-                # small baskets), and only count a day as a genuine
-                # "unresolved" case if NEITHER scenario clears.
+                # Smart: the real engine prices the cheapest basket with real
+                # minimum-order-per-supplier enforcement already applied; a day counts as
+                # "unresolved" when that cheapest basket still misses a supplier minimum.
                 result = suggest_order(user=user, region=REGION, products=basket)
+                # (the engine now offers the cheapest basket only)
                 cheapest_ok = not result["minimum_issues"]["cheapest"]
-                fewest_ok = not result["minimum_issues"]["fewest_suppliers"]
-
-                if cheapest_ok:
-                    scenario_used = "cheapest"
-                elif fewest_ok:
-                    scenario_used = "fewest_suppliers"
-                else:
-                    scenario_used = "cheapest"  # best-effort fallback, still flagged below
+                scenario_used = "cheapest"
 
                 smart_cost = result[scenario_used]["total_price"]
-                unresolved = not (cheapest_ok or fewest_ok)
+                unresolved = not cheapest_ok
 
                 total_days += 1
                 scenario_counts[scenario_used] += 1
@@ -251,9 +239,6 @@ def print_report(results):
     print(f"  (מתוך {c['total_baseline']:,.0f} ₪ הוצאה שנתית ללא המערכת)")
     print(f"מינימום הזמנה: מתוך {m['total_order_days']} ימי הזמנה, המערכת פתרה אוטומטית "
           f"{m['pct_fully_resolved_automatically']}% מהם ללא בעיית מינימום שנשארה פתוחה")
-    print(f"  (על ידי בחירה בין שתי האפשרויות שהיא כבר מציגה ללקוח: הכי זול / הכי פחות ספקים —")
-    sc = m["scenario_used_counts"]
-    print(f"   'הכי זול' נבחר ב-{sc['cheapest']} ימים, 'הכי פחות ספקים' נבחר ב-{sc['fewest_suppliers']} ימים)")
     print("-" * 68)
 
 
