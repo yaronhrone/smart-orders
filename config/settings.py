@@ -30,7 +30,7 @@ if not SECRET_KEY:
 DEBUG = bool(int(os.environ.get("DEBUG", "0" )))
 
 _extra_hosts = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", ".ngrok-free.app", ".ngrok-free.dev"] + _extra_hosts
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "app", "web", ".ngrok-free.app", ".ngrok-free.dev"] + _extra_hosts
 
 _extra_csrf = [o for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
 CSRF_TRUSTED_ORIGINS = ["http://localhost:3000", "https://*.duckdns.org"] + _extra_csrf
@@ -169,6 +169,7 @@ CACHES = {
 }
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.users.authentication.ApiTokenAuthentication",
         "apps.users.authentication.CookieJWTAuthentication",
     ],
     # "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",

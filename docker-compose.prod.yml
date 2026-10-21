@@ -48,6 +48,19 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # MCP server: lets a customer order through Claude. Holds no data; it calls
+  # `web` with the customer's own API token. Drafts live in memory, so keep
+  # it a single instance.
+  mcp:
+    build:
+      context: ./mcp_server
+    environment:
+      SMART_ORDERS_API: http://web:8000
+      MCP_MAX_ORDERS_PER_DAY: ${MCP_MAX_ORDERS_PER_DAY:-5}
+    depends_on:
+      - web
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
