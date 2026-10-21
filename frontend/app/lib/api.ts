@@ -614,6 +614,7 @@ export interface AIUsage {
   by_model: AIUsageRow[];
   by_model_and_kind: AIUsageRow[];
   parsing_today: Record<string, { dictionary: number; ai: number }>;
+  recent: { at: string; kind: string; model: string; ok: boolean; seconds: number; cost_usd: number; message: string; result: string }[];
 }
 
 // Admin only: AI calls, tokens, estimated cost and speed per model, for the last `days` days.

@@ -145,7 +145,7 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
         f"Message: {message}"
     )
     try:
-        data = llm.complete_json(prompt, _get_client, kind="modification_parse")
+        data = llm.complete_json(prompt, _get_client, kind="modification_parse", message=message)
     except Exception as exc:
         logger.error("AI modification parsing failed: %s", exc)
         return {"intent": "none", "items": []}
@@ -214,7 +214,7 @@ def parse_customer_order(message: str, product_names: list) -> list:
         )
 
         try:
-            data = llm.complete_json(prompt, _get_client, kind="order_parse")
+            data = llm.complete_json(prompt, _get_client, kind="order_parse", message=remaining_message)
             if isinstance(data, dict):
                 data = data.get("items", next(iter(data.values()), []))
             items += data if isinstance(data, list) else []

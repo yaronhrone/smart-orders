@@ -39,20 +39,63 @@ def estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> flo
     return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
 
 
-def record_usage(kind: str, started: float, input_tokens: int, output_tokens: int, ok: bool = True) -> None:
+# The parsers also keep the text they sent and what came back, so the admin can see what the AI
+# understood (never for the assistant's chat). Cut short: this is for reading, not an archive.
+MAX_MESSAGE_CHARS = 600
+MAX_RESULT_CHARS = 2000
+
+
+def record_usage(kind: str, started: float, input_tokens: int, output_tokens: int, ok: bool = True, message: str = ""):
     """One row per AI call (kind, model, tokens, estimated cost, seconds) for the admin usage page."""
     try:
         from core.models import AIUsage
 
         model_name = model()
-        AIUsage.objects.create(
+        purge_old_content()
+        return AIUsage.objects.create(
             kind=kind, provider=provider(), model=model_name,
             input_tokens=input_tokens, output_tokens=output_tokens,
             cost_usd=estimate_cost(model_name, input_tokens, output_tokens),
             duration_ms=int((time.monotonic() - started) * 1000), ok=ok,
+            message=(message or "")[:MAX_MESSAGE_CHARS],
         )
     except Exception:  # recording must never break the call it measures
         logger.warning("could not record AI usage", exc_info=True)
+        return None
+
+
+CONTENT_KEPT_HOURS = 24
+
+
+def purge_old_content() -> int:
+    """
+    Blank the message and result of AI calls older than CONTENT_KEPT_HOURS. The row itself (tokens,
+    cost, speed) stays for the statistics; only the customers' text goes. Runs at most once an hour,
+    whenever a call is recorded or the usage page is opened (no scheduler needed).
+    """
+    try:
+        from django.core.cache import cache
+        from django.utils import timezone
+
+        if not cache.add("ai_usage_purge", 1, timeout=3600):
+            return 0
+        from core.models import AIUsage
+
+        cutoff = timezone.now() - datetime.timedelta(hours=CONTENT_KEPT_HOURS)
+        return AIUsage.objects.filter(created_at__lt=cutoff).exclude(message="", result="").update(message="", result="")
+    except Exception:
+        logger.warning("could not purge old AI content", exc_info=True)
+        return 0
+
+
+def _attach_result(row, data) -> None:
+    if row is None:
+        return
+    try:
+        row.result = json.dumps(data, ensure_ascii=False, default=str)[:MAX_RESULT_CHARS]
+        row.save(update_fields=["result"])
+    except Exception:
+        logger.warning("could not record AI result", exc_info=True)
 
 OPENAI, ANTHROPIC, DEEPSEEK = "openai", "anthropic", "deepseek"
 
@@ -169,7 +212,7 @@ def _parse_json(text: str):
     return json.loads(match.group(0) if match else text)
 
 
-def complete_json(prompt: str, openai_client_factory=None, kind: str = "other") -> dict:
+def complete_json(prompt: str, openai_client_factory=None, kind: str = "other", message: str = "") -> dict:
     """
     Send one prompt that asks for a JSON object and return it parsed. Errors
     (network, a reply that isn't JSON) are raised for the caller to handle.
@@ -189,9 +232,11 @@ def complete_json(prompt: str, openai_client_factory=None, kind: str = "other") 
                 messages=[{"role": "user", "content": prompt}],
             )
             last_usage.update(input=response.usage.input_tokens or 0, output=response.usage.output_tokens or 0)
-            record_usage(kind, started, last_usage["input"], last_usage["output"])
+            row = record_usage(kind, started, last_usage["input"], last_usage["output"], message=message)
             recorded = True
-            return _parse_json(_anthropic_text(response))
+            data = _parse_json(_anthropic_text(response))
+            _attach_result(row, data)
+            return data
 
         client = (openai_client_factory or openai_client)()
         response = client.chat.completions.create(
@@ -204,12 +249,14 @@ def complete_json(prompt: str, openai_client_factory=None, kind: str = "other") 
         last_usage.update(
             input=int(getattr(usage, "prompt_tokens", 0) or 0), output=int(getattr(usage, "completion_tokens", 0) or 0),
         )
-        record_usage(kind, started, last_usage["input"], last_usage["output"])
+        row = record_usage(kind, started, last_usage["input"], last_usage["output"], message=message)
         recorded = True
-        return json.loads(response.choices[0].message.content)
+        data = json.loads(response.choices[0].message.content)
+        _attach_result(row, data)
+        return data
     except Exception:
         if not recorded:
-            record_usage(kind, started, 0, 0, ok=False)
+            record_usage(kind, started, 0, 0, ok=False, message=message)
         raise
 
 
