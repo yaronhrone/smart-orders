@@ -621,3 +621,30 @@ export interface AIUsage {
 export async function fetchAIUsage(days: number): Promise<AIUsage> {
   return request<AIUsage>(`/api/core/ai-usage/?days=${days}`);
 }
+
+// ─────────────── Claude connection (personal API tokens) ───────────────
+
+export interface ConnectionToken {
+  id: number;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+}
+
+export async function fetchConnections(): Promise<ConnectionToken[]> {
+  const data = await request<{ results: ConnectionToken[] }>("/api/users/api-tokens/");
+  return data.results;
+}
+
+// The secret is in this answer only; the server keeps just a hash.
+export async function createConnection(name: string): Promise<ConnectionToken & { token: string }> {
+  return request<ConnectionToken & { token: string }>("/api/users/api-tokens/", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function revokeConnection(id: number): Promise<void> {
+  return request<void>(`/api/users/api-tokens/${id}/`, { method: "DELETE" });
+}

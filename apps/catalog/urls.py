@@ -4,7 +4,7 @@ from .views import (
     ProductAliasListCreateView, ProductAliasDestroyView,
     SupplierListCreateView, SupplierUpdateDestroyView,
     SupplierPriceUpdateView, SupplierPricesListView,
-    ProductCatalogView,
+    ProductCatalogView, MyPricesView,
 )
 
 urlpatterns = [
@@ -17,5 +17,6 @@ urlpatterns = [
     path("suppliers/<int:pk>/", SupplierUpdateDestroyView.as_view(), name="catalog-supplier-detail"),
     path("suppliers/prices/", SupplierPriceUpdateView.as_view(), name="supplier-prices"),
     path("suppliers/prices/all/", SupplierPricesListView.as_view()),
+    path("my-prices/", MyPricesView.as_view(), name="my-prices"),
     path("product-prices/", ProductCatalogView.as_view(), name="product-prices"),
 ]

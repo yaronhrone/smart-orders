@@ -306,3 +306,22 @@ class ProductCatalogView(APIView):
         payload = {"results": result, "has_more": has_more}
         cache.set(cache_key, payload, timeout=CATALOG_CACHE_TTL)
         return Response(payload)
+
+class MyPricesView(APIView):
+    """
+    GET /api/catalog/my-prices/?product=עגבנייה&product=מלפפון
+    Supplier prices as the caller is allowed to see them: a customer only gets
+    available (not blocked) suppliers in their own region, an admin gets all.
+    Same scoping as the data assistant, which it reuses.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from apps.assistant.tools import ToolError, build_context, get_current_prices
+        names = [n.strip() for n in request.query_params.getlist("product") if n.strip()][:10]
+        if not names:
+            return Response({"detail": "product is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            return Response(get_current_prices(build_context(request.user), products=names))
+        except ToolError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

@@ -10,6 +10,7 @@ const NAV = [
   { href: "/dashboard", label: "לוח בקרה", exact: true },
   { href: "/dashboard/new-order", label: "הזמנה חדשה" },
   { href: "/dashboard/catalog", label: "קטלוג מחירים" },
+  { href: "/dashboard/connect", label: "חיבור ל-Claude" },
 ];
 
 const ADMIN_NAV = [

@@ -77,9 +77,16 @@ class ApiToken(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     revoked = models.BooleanField(default=False)
+    # Null = never expires (tokens issued from Django admin); the website issues 90 day tokens.
+    expires_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.user} {self.name}".strip()
+
+    @property
+    def is_usable(self) -> bool:
+        from django.utils import timezone
+        return not self.revoked and (self.expires_at is None or self.expires_at > timezone.now())
 
     @staticmethod
     def hash_token(raw: str) -> str:
@@ -87,8 +94,8 @@ class ApiToken(models.Model):
         return hashlib.sha256(raw.encode()).hexdigest()
 
     @classmethod
-    def issue(cls, user, name=""):
+    def issue(cls, user, name="", expires_at=None):
         """Create a token and return (instance, raw_token)."""
         import secrets
         raw = cls.PREFIX + secrets.token_urlsafe(32)
-        return cls.objects.create(user=user, name=name, token_hash=cls.hash_token(raw)), raw
+        return cls.objects.create(user=user, name=name, expires_at=expires_at, token_hash=cls.hash_token(raw)), raw

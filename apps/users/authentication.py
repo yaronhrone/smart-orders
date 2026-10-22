@@ -46,7 +46,7 @@ class ApiTokenAuthentication(BaseAuthentication):
             return None
 
         token = ApiToken.objects.select_related("user").filter(token_hash=ApiToken.hash_token(raw)).first()
-        if token is None or token.revoked or not token.user.is_active:
+        if token is None or not token.is_usable or not token.user.is_active:
             raise AuthenticationFailed("טוקן לא תקין")
         ApiToken.objects.filter(pk=token.pk).update(last_used_at=timezone.now())
         return token.user, token

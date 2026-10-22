@@ -84,13 +84,13 @@ def search_products(query: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def get_prices(query: str, ctx: Context) -> dict:
-    """Supplier prices for products matching the text, cheapest first."""
+def get_prices(product_names: list[str], ctx: Context) -> dict:
+    """Prices from the suppliers available to this customer, cheapest first. product_names: exact names
+    (from search_products), up to 10."""
     try:
-        data = api.call(_token(ctx), "GET", "/api/catalog/product-prices/", params={"search": query, "limit": 10})
+        return api.call(_token(ctx), "GET", "/api/catalog/my-prices/", params={"product": product_names[:10]})
     except api.ApiError as exc:
         return {"error": _detail(exc)}
-    return data if isinstance(data, dict) else {"results": data}
 
 
 @mcp.tool()
