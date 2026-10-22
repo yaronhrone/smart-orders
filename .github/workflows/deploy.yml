@@ -38,6 +38,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements.dev.txt
  
+      - name: Run MCP server tests
+        working-directory: mcp_server
+        run: |
+          pip install -r requirements.txt
+          python -m unittest discover -s tests -v
+
       - name: Run Django tests
         env:
           DB_HOST: localhost
@@ -83,6 +89,14 @@ jobs:
             healthy=""
             if git pull origin main && docker-compose -f docker-compose.prod.yml up -d --build --remove-orphans; then
               docker image prune -f
+
+              # nginx.conf is a bind-mounted file: `up -d` does not notice it changed.
+              # Reload only if the new config is valid, so a typo cannot take the site down.
+              if docker-compose -f docker-compose.prod.yml exec -T nginx nginx -t; then
+                docker-compose -f docker-compose.prod.yml exec -T nginx nginx -s reload
+              else
+                echo "nginx config invalid - keeping the running config"
+              fi
 
               echo "Waiting for /health/ to report healthy..."
               for i in $(seq 1 30); do
