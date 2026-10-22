@@ -946,11 +946,14 @@ def _apply_items(phone, batch, region, items, default_intent, order_changes, cha
                 now = timezone.localtime().time()
                 cutoff_time = dtime(*map(int, cutoff.split(":")))
                 if now > cutoff_time:
-                    validators.send_whatsapp_message(
-                        phone,
+                    message = (
                         f"⛔ לא ניתן לשנות את {product.name} — "
-                        f"{existing_orp.supplier.name} קבע שעת הגבלה עד {cutoff}.",
+                        f"{existing_orp.supplier.name} קבע שעת הגבלה עד {cutoff}."
                     )
+                    if phone:
+                        validators.send_whatsapp_message(phone, message)
+                    else:
+                        blocked.append(message)
                     continue
 
         result = _apply_single_modification(
@@ -1021,15 +1024,14 @@ def _handle_cancel_offer_reply(phone: str, body: str):
     return _cancel_open_order(phone, offer["batch_id"])
 
 
-def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
-    """Cancel every order of the checkout that has not shipped, tell the suppliers who had it, forget its questions."""
-    from apps.orders.models import OrderBatch
+def cancel_batch_orders(batch, phone=None) -> tuple:
+    """
+    Cancel every order of the checkout that has not shipped and tell the suppliers who had it.
+    `phone` (the customer's WhatsApp number) is only used to forget their open questions.
+    Returns (cancelled, told).
+    """
     from .cache import clear_customer_questions_for_order, clear_supplier_pending_for_order
 
-    batch = OrderBatch.objects.select_related("user__profile").filter(id=batch_id).first()
-    if batch is None:
-        validators.send_whatsapp_message(phone, "לא מצאתי את ההזמנה. אולי היא כבר בוטלה.")
-        return HttpResponse(status=200)
     profile = getattr(batch.user, "profile", None)
     company = profile.company_name if profile else ""
     cancelled, told = [], []
@@ -1039,7 +1041,8 @@ def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
         was_sent = order.status in ("sent", "approved")
         order.transition_to("cancelled")
         cancelled.append(order)
-        clear_customer_questions_for_order(phone, order.id)
+        if phone:
+            clear_customer_questions_for_order(phone, order.id)
         clear_supplier_pending_for_order(order.supplier.whatsapp_number, order.id)
         if was_sent:
             try:
@@ -1050,8 +1053,21 @@ def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
                 told.append(order)
             except Exception as exc:
                 logger.error("Could not tell %s that order %s was cancelled: %s", order.supplier.name, order.id, exc)
-    for key in (f"whatsapp_order:{phone}", f"whatsapp_modification_offer:{phone}", f"whatsapp_merge_offer:{phone}"):
-        cache.delete(key)
+    if phone:
+        for key in (f"whatsapp_order:{phone}", f"whatsapp_modification_offer:{phone}", f"whatsapp_merge_offer:{phone}"):
+            cache.delete(key)
+    return cancelled, told
+
+
+def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
+    """Cancel the checkout for the customer who answered כן, and tell them."""
+    from apps.orders.models import OrderBatch
+
+    batch = OrderBatch.objects.select_related("user__profile").filter(id=batch_id).first()
+    if batch is None:
+        validators.send_whatsapp_message(phone, "לא מצאתי את ההזמנה. אולי היא כבר בוטלה.")
+        return HttpResponse(status=200)
+    cancelled, told = cancel_batch_orders(batch, phone)
     ids = ", ".join(f"#{o.id}" for o in cancelled)
     msg = f"✅ ההזמנה בוטלה ({ids})."
     if told:

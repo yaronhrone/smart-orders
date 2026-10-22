@@ -29,6 +29,7 @@ from .serializers import (
 )
 from decimal import Decimal
 from collections import defaultdict
+from .serializers import OrderCancelInputSerializer, OrderChangeInputSerializer
 from .services import (
     IL_TZ, add_items_to_batch, build_order, checkout_lock, current_month, get_open_batch, month_bounds,
     parse_month, suggest_order,
@@ -183,6 +184,56 @@ class OpenBatchView(APIView):
     def get(self, request):
         batch = get_open_batch(request.user)
         return Response({"open_batch": OpenBatchSerializer(batch).data if batch else None})
+class OpenOrderChangeView(APIView):
+    """
+    POST /api/orders/open/change/ — add to, reduce or set the quantity of products in the customer's
+    open order. `dry_run: true` shows what would happen and changes nothing. A real change tells the
+    suppliers by WhatsApp (and is undone if one cannot be told).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from .changes import NoOpenOrder, change_open_order
+        serializer = OrderChangeInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not hasattr(request.user, "profile"):
+            return Response({"detail": "המשתמש אינו מקושר לפרופיל חברה"}, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            result = change_open_order(request.user, data["changes"], dry_run=data["dry_run"])
+        except NoOpenOrder:
+            return Response(
+                {"detail": "אין הזמנה פתוחה לשינוי. אפשר ליצור הזמנה חדשה."}, status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as exc:
+            logger.error("Change to the open order of user %s failed: %s", request.user.id, exc)
+            return Response(
+                {"detail": "לא הצלחנו להודיע לספק על השינוי, ולכן הוא לא בוצע. ההזמנה נשארה כמו שהייתה. נסה שוב בעוד רגע."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(result)
+
+
+class OpenOrderCancelView(APIView):
+    """POST /api/orders/open/cancel/ — cancel today's open order (what has not shipped). `dry_run: true` only lists it."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from .changes import NoOpenOrder, cancel_open_order
+        serializer = OrderCancelInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            result = cancel_open_order(request.user, dry_run=serializer.validated_data["dry_run"])
+        except NoOpenOrder:
+            return Response({"detail": "אין לך הזמנה פתוחה לביטול."}, status=status.HTTP_404_NOT_FOUND)
+        if not result["orders"]:
+            return Response(
+                {"detail": "ההזמנה כבר יצאה למשלוח או נמסרה, ולכן אי אפשר לבטל אותה כאן. פנה אלינו.", **result},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(result)
+
+
 def _batches_queryset():
     """Batches with their orders (supplier + product_count) prefetched — the
     shape OrderBatchSerializer expects."""

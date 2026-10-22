@@ -119,6 +119,91 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class ChangeAndCancelTests(unittest.TestCase):
+
+    def setUp(self):
+        drafts._drafts.clear()
+        drafts._sent.clear()
+
+    CHANGES = [{"product_name": "עגבנייה", "quantity": 3, "intent": "reduce"}]
+    PREVIEW = {"changes": ["הופחת: עגבנייה"], "blocked": [], "not_found": [], "needs_supplier_answer": False,
+               "applied": False}
+
+    def _draft_change(self, token="so_alice"):
+        with mock.patch.object(api, "call", return_value=self.PREVIEW) as call:
+            out = server.draft_change(self.CHANGES, ctx(token))
+        return out, call
+
+    def test_draft_change_is_a_dry_run(self):
+        out, call = self._draft_change()
+        self.assertEqual(call.call_args.kwargs["json"]["dry_run"], True)
+        self.assertEqual(call.call_args.args[2], "/api/orders/open/change/")
+        self.assertIn("draft_id", out)
+
+    def test_nothing_to_do_gives_no_draft(self):
+        with mock.patch.object(api, "call", return_value={"changes": [], "blocked": ["x"], "not_found": []}):
+            out = server.draft_change(self.CHANGES, ctx())
+        self.assertNotIn("draft_id", out)
+
+    def test_confirm_change_applies_once(self):
+        draft_id = self._draft_change()[0]["draft_id"]
+        applied = dict(self.PREVIEW, applied=True)
+        with mock.patch.object(api, "call", return_value=applied) as call:
+            first = server.confirm_change(draft_id, ctx())
+            second = server.confirm_change(draft_id, ctx())
+        self.assertTrue(first["applied"])
+        self.assertIn("error", second)
+        self.assertEqual(call.call_count, 1)
+        self.assertNotIn("dry_run", call.call_args.kwargs["json"])
+
+    def test_cancel_flow(self):
+        with mock.patch.object(api, "call", return_value={"orders": [{"order_id": 1}], "already_shipped": []}):
+            draft = server.draft_cancel(ctx())
+        self.assertEqual(draft["would_cancel"], [{"order_id": 1}])
+        done = {"cancelled": True, "orders": [{"order_id": 1}], "suppliers_notified": ["ספק"]}
+        with mock.patch.object(api, "call", return_value=done) as call:
+            out = server.confirm_change(draft["draft_id"], ctx())
+        self.assertTrue(out["cancelled"])
+        self.assertEqual(call.call_args.args[2], "/api/orders/open/cancel/")
+
+    def test_kinds_cannot_be_swapped(self):
+        change_id = self._draft_change()[0]["draft_id"]
+        with mock.patch.object(api, "call", return_value={"sent": True}) as call:
+            self.assertIn("error", server.confirm_order(change_id, ctx()))
+        call.assert_not_called()
+        order_id = drafts.create(server._owner("so_alice"), ITEMS, "order")
+        with mock.patch.object(api, "call") as call:
+            self.assertIn("error", server.confirm_change(order_id, ctx()))
+        call.assert_not_called()
+
+    def test_other_users_change_draft_is_rejected(self):
+        draft_id = self._draft_change("so_alice")[0]["draft_id"]
+        with mock.patch.object(api, "call") as call:
+            self.assertIn("error", server.confirm_change(draft_id, ctx("so_bob")))
+        call.assert_not_called()
+
+    def test_rolled_back_change_keeps_the_draft(self):
+        draft_id = self._draft_change()[0]["draft_id"]
+        with mock.patch.object(api, "call", side_effect=api.ApiError(502, {"detail": "לא בוצע"})):
+            out = server.confirm_change(draft_id, ctx())
+        self.assertTrue(out["draft_still_valid"])
+
+    def test_change_quota_is_separate_from_orders(self):
+        with mock.patch.object(server, "MAX_CHANGES_PER_DAY", 1):
+            for expected in (True, False):
+                draft_id = self._draft_change()[0]["draft_id"]
+                with mock.patch.object(api, "call", return_value=dict(self.PREVIEW, applied=True)):
+                    out = server.confirm_change(draft_id, ctx())
+                self.assertEqual(out.get("applied", False), expected)
+
+    def test_bad_change_input_is_rejected_before_any_call(self):
+        with mock.patch.object(api, "call") as call:
+            for bad in ([], [{"product_name": "x", "quantity": 1, "intent": "delete"}],
+                        [{"product_name": "x", "quantity": 0}]):
+                self.assertIn("error", server.draft_change(bad, ctx()))
+        call.assert_not_called()
+
+
 class GateTests(unittest.TestCase):
 
     def setUp(self):

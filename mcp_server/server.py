@@ -12,6 +12,7 @@ import drafts
 import gate
 
 MAX_ORDERS_PER_DAY = int(os.environ.get("MCP_MAX_ORDERS_PER_DAY", "5"))
+MAX_CHANGES_PER_DAY = int(os.environ.get("MCP_MAX_CHANGES_PER_DAY", "20"))
 
 mcp = FastMCP(
     "smart-orders",
@@ -151,7 +152,7 @@ def draft_order(items: list[dict], ctx: Context) -> dict:
     except api.ApiError as exc:
         return {"error": _detail(exc)}
     return {
-        "draft_id": drafts.create(_owner(token), items),
+        "draft_id": drafts.create(_owner(token), items, "order"),
         "expires_in_minutes": drafts.DRAFT_TTL_SECONDS // 60,
         "recommended": result.get("recommended"),
         "basket": _summary(result.get("cheapest", {})),
@@ -169,9 +170,10 @@ def confirm_order(draft_id: str, ctx: Context, add_to_open_order: bool = False) 
     owner = _owner(token)
     if drafts.sent_today(owner) >= MAX_ORDERS_PER_DAY:
         return {"error": f"הגעת למכסה של {MAX_ORDERS_PER_DAY} הזמנות ליום דרך Claude"}
-    items = drafts.take(owner, draft_id)
-    if items is None:
+    taken = drafts.take(owner, draft_id, ("order",))
+    if taken is None:
         return {"error": "הטיוטה לא נמצאה, פגה או כבר אושרה. הכן טיוטה חדשה."}
+    items = taken[1]
 
     body = {"scenario": "cheapest", "products": items}
     try:
@@ -185,9 +187,9 @@ def confirm_order(draft_id: str, ctx: Context, add_to_open_order: bool = False) 
         # have gone out in part, so the draft stays consumed and the user checks list_orders.
         retryable = exc.status in (400, 401, 409)
         if retryable:
-            drafts.restore(owner, draft_id, items)
+            drafts.restore(owner, draft_id, "order", items)
         return {"error": _detail(exc), "draft_still_valid": retryable}
-    drafts.record_sent(owner)
+    drafts.record_sent(owner, "order")
     return {
         "sent": True,
         "batch_id": placed.get("batch_id"),
@@ -200,6 +202,103 @@ def confirm_order(draft_id: str, ctx: Context, add_to_open_order: bool = False) 
             for o in placed.get("orders", [])
         ],
     }
+
+
+def _change_items(changes: list) -> list:
+    if not changes:
+        raise ValueError("הרשימה ריקה")
+    out = []
+    for change in changes:
+        name = str(change.get("product_name", "")).strip()
+        intent = str(change.get("intent", "add")).strip() or "add"
+        try:
+            quantity = float(change.get("quantity"))
+        except (TypeError, ValueError):
+            raise ValueError(f"כמות לא תקינה עבור {name or '?'}")
+        if not name or quantity <= 0 or intent not in ("add", "reduce", "update"):
+            raise ValueError("כל שינוי צריך product_name מדויק, כמות חיובית ו-intent: add, reduce או update")
+        out.append({"product_name": name, "quantity": quantity, "intent": intent})
+    return out
+
+
+@mcp.tool()
+def draft_change(changes: list[dict], ctx: Context) -> dict:
+    """Preview a change to today's OPEN order WITHOUT changing anything. changes: [{"product_name": exact catalog
+    name, "quantity": number, "intent": "add" (this much more) | "reduce" (this much less) | "update" (make the
+    total exactly this)}]. Returns what would happen and a draft_id. Show it to the user and get explicit approval
+    before calling confirm_change. Suppliers are told by WhatsApp when it is confirmed."""
+    token = _token(ctx)
+    try:
+        changes = _change_items(changes)
+        result = api.call(token, "POST", "/api/orders/open/change/", json={"changes": changes, "dry_run": True})
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except api.ApiError as exc:
+        return {"error": _detail(exc)}
+    out = {
+        "would_change": result.get("changes", []),
+        "blocked": result.get("blocked", []),
+        "not_found": result.get("not_found", []),
+        "supplier_must_answer": result.get("needs_supplier_answer", False),
+    }
+    if result.get("changes"):
+        out["draft_id"] = drafts.create(_owner(token), changes, "change")
+        out["expires_in_minutes"] = drafts.DRAFT_TTL_SECONDS // 60
+        out["note"] = "לא בוצע שינוי. הספקים יקבלו הודעה רק אחרי confirm_change."
+    else:
+        out["note"] = "אין מה לבצע, ולכן אין טיוטה."
+    return out
+
+
+@mcp.tool()
+def draft_cancel(ctx: Context) -> dict:
+    """Preview cancelling today's open order WITHOUT cancelling. Lists the supplier orders that would be cancelled
+    (orders already shipped stay) and gives a draft_id. Get explicit approval before calling confirm_change."""
+    token = _token(ctx)
+    try:
+        result = api.call(token, "POST", "/api/orders/open/cancel/", json={"dry_run": True})
+    except api.ApiError as exc:
+        return {"error": _detail(exc)}
+    return {
+        "draft_id": drafts.create(_owner(token), {}, "cancel"),
+        "expires_in_minutes": drafts.DRAFT_TTL_SECONDS // 60,
+        "would_cancel": result.get("orders", []),
+        "already_shipped_stay": result.get("already_shipped", []),
+        "note": "לא בוטל כלום. הספקים יקבלו הודעת ביטול רק אחרי confirm_change.",
+    }
+
+
+@mcp.tool()
+def confirm_change(draft_id: str, ctx: Context) -> dict:
+    """APPLIES a draft from draft_change or draft_cancel and tells the suppliers by WhatsApp. Cancelling cannot be
+    undone. Call only after the user explicitly approved this exact draft."""
+    token = _token(ctx)
+    owner = _owner(token)
+    if drafts.sent_today(owner, "change") >= MAX_CHANGES_PER_DAY:
+        return {"error": f"הגעת למכסה של {MAX_CHANGES_PER_DAY} שינויים ליום דרך Claude"}
+    taken = drafts.take(owner, draft_id, ("change", "cancel"))
+    if taken is None:
+        return {"error": "הטיוטה לא נמצאה, פגה או כבר אושרה. הכן טיוטה חדשה."}
+    kind, payload = taken
+    try:
+        if kind == "cancel":
+            result = api.call(token, "POST", "/api/orders/open/cancel/", json={})
+        else:
+            result = api.call(token, "POST", "/api/orders/open/change/", json={"changes": payload})
+    except api.ApiError as exc:
+        # 400/401/404/409 and 502 (the API undoes the change when a supplier cannot be told) mean nothing
+        # changed: keep the draft usable. Status 0 (no answer) may have gone through, so it stays consumed.
+        retryable = exc.status in (400, 401, 404, 409, 502)
+        if retryable:
+            drafts.restore(owner, draft_id, kind, payload)
+        return {"error": _detail(exc), "draft_still_valid": retryable}
+    drafts.record_sent(owner, "change")
+    if kind == "cancel":
+        return {"cancelled": bool(result.get("cancelled")), "orders": result.get("orders", []),
+                "suppliers_notified": result.get("suppliers_notified", [])}
+    return {"applied": bool(result.get("applied")), "changes": result.get("changes", []),
+            "blocked": result.get("blocked", []), "not_found": result.get("not_found", []),
+            "supplier_must_answer": result.get("needs_supplier_answer", False)}
 
 
 if __name__ == "__main__":

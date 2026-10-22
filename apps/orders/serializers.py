@@ -36,6 +36,22 @@ class OrderItemInputSerializer(serializers.Serializer):
 class SuggestOrderInputSerializer(serializers.Serializer):
 
     products = OrderItemInputSerializer(many=True, min_length=1)
+class OrderChangeItemSerializer(serializers.Serializer):
+    product_name = serializers.CharField(max_length=255)
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal("0.01"))
+    intent = serializers.ChoiceField(choices=["add", "reduce", "update"], default="add")
+
+
+class OrderChangeInputSerializer(serializers.Serializer):
+    """add = this much more, reduce = this much less, update = make the total exactly this much."""
+    changes = OrderChangeItemSerializer(many=True, min_length=1, max_length=20)
+    dry_run = serializers.BooleanField(default=False)
+
+
+class OrderCancelInputSerializer(serializers.Serializer):
+    dry_run = serializers.BooleanField(default=False)
+
+
 class PlaceOrderInputSerializer(serializers.Serializer):
     scenario = serializers.ChoiceField(
         choices=["cheapest"],
