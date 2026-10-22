@@ -112,6 +112,30 @@ def list_orders(ctx: Context) -> dict:
 
 
 @mcp.tool()
+def get_order(order_id: int, ctx: Context) -> dict:
+    """One order by id. Only the customer's own orders are visible."""
+    try:
+        return api.call(_token(ctx), "GET", f"/api/orders/{int(order_id)}/")
+    except api.ApiError as exc:
+        return {"error": _detail(exc)}
+
+
+@mcp.tool()
+def admin_list_orders(ctx: Context, status: str = "") -> dict:
+    """Admins only: orders of ALL customers (default: those with an order still open).
+    status filters by order status, e.g. sent, approved, shipped, delivered, cancelled."""
+    params = {"limit": 20}
+    if status:
+        params["status"] = status
+    try:
+        return api.call(_token(ctx), "GET", "/api/orders/admin/batches/", params=params)
+    except api.ApiError as exc:
+        if exc.status == 403:
+            return {"error": "הכלי הזה זמין למנהלי מערכת בלבד"}
+        return {"error": _detail(exc)}
+
+
+@mcp.tool()
 def draft_order(items: list[dict], ctx: Context) -> dict:
     """Price an order WITHOUT sending anything. items: [{"product_name": exact catalog name, "quantity": number}].
     Returns the cheapest basket split by supplier, plus a draft_id. Show it to the user and get explicit
