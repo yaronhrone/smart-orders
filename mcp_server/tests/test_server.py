@@ -117,3 +117,54 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GateTests(unittest.TestCase):
+
+    def setUp(self):
+        import gate
+        self.gate = gate
+        gate._cache.clear()
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(scope["path"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        self.calls = calls
+        from starlette.testclient import TestClient
+        self.client = TestClient(gate.AuthGate(inner))
+
+    def test_no_token_gets_oauth_challenge(self):
+        res = self.client.post("/mcp")
+        self.assertEqual(res.status_code, 401)
+        self.assertIn("resource_metadata=", res.headers["www-authenticate"])
+        self.assertEqual(self.calls, [])
+
+    def test_resource_metadata_is_public(self):
+        res = self.client.get("/.well-known/oauth-protected-resource")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["resource"], f"{self.gate.PUBLIC_BASE}/mcp")
+        self.assertEqual(self.client.get("/.well-known/oauth-protected-resource/mcp").status_code, 200)
+
+    def test_bad_token_gets_invalid_token(self):
+        async def nobody(token):
+            return None
+        with mock.patch.object(self.gate, "validate", nobody):
+            res = self.client.post("/mcp", headers={"Authorization": "Bearer so_bad"})
+        self.assertEqual(res.status_code, 401)
+        self.assertIn('error="invalid_token"', res.headers["www-authenticate"])
+        self.assertEqual(self.calls, [])
+
+    def test_good_token_reaches_the_app(self):
+        async def somebody(token):
+            return "a@x.com"
+        with mock.patch.object(self.gate, "validate", somebody):
+            res = self.client.post("/mcp", headers={"Authorization": "Bearer so_ok"})
+        self.assertEqual((res.status_code, self.calls), (200, ["/mcp"]))
+
+    def test_owner_is_the_customer_not_the_token(self):
+        for token in ("so_one", "so_two"):
+            self.gate._cache[self.gate.token_key(token)] = ("a@x.com", 9e12)
+        self.assertEqual(server._owner("so_one"), server._owner("so_two"))

@@ -57,6 +57,9 @@ services:
     environment:
       SMART_ORDERS_API: http://web:8000
       MCP_MAX_ORDERS_PER_DAY: ${MCP_MAX_ORDERS_PER_DAY:-5}
+      # Public address Claude reaches, and the sign-in server it is pointed to.
+      MCP_PUBLIC_BASE: ${MCP_PUBLIC_BASE:-https://smartorders.casacam.net}
+      OAUTH_ISSUER: ${OAUTH_ISSUER:-https://smartorders.casacam.net}
     depends_on:
       - web
     restart: unless-stopped

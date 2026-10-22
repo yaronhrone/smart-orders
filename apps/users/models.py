@@ -79,6 +79,8 @@ class ApiToken(models.Model):
     revoked = models.BooleanField(default=False)
     # Null = never expires (tokens issued from Django admin); the website issues 90 day tokens.
     expires_at = models.DateTimeField(null=True, blank=True)
+    # Issued through the Claude connector sign-in (apps.mcp_oauth) rather than the website button.
+    via_oauth = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.user} {self.name}".strip()

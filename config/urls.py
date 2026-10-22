@@ -20,6 +20,7 @@ from django.contrib import admin
 from django.urls import include, path
 from core.views import health_check
 from apps.orders.whatsapp import whatsapp_webhook
+from apps.mcp_oauth.views import MetadataView
 
 urlpatterns = [
     path("django-admin/", admin.site.urls),
@@ -29,6 +30,8 @@ urlpatterns = [
     path("api/orders/", include("apps.orders.urls")),
     path("api/assistant/", include("apps.assistant.urls")),
     path("api/core/", include("core.urls")),
+    path(".well-known/oauth-authorization-server", MetadataView.as_view(), name="oauth-metadata"),
+    path("api/oauth/", include("apps.mcp_oauth.urls")),
     path("whatsapp/webhook/", whatsapp_webhook, name="whatsapp_webhook"),
 ]
 

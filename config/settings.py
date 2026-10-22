@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "apps.catalog",
     "apps.orders",
     "apps.assistant",
+    "apps.mcp_oauth",
     "drf_spectacular",
 ]
 
@@ -185,7 +186,7 @@ REST_FRAMEWORK = {
     #     "anon": "20/day",
     # },
     # Only views that opt in with throttle_scope are limited (see apps/assistant/views.py).
-    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour"},
+    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour", "oauth_register": "60/hour"},
 }
 
 from datetime import timedelta
@@ -297,3 +298,8 @@ LOGGING = {
         "apps": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+# Claude connector sign-in (apps.mcp_oauth). OAUTH_ISSUER is this API's public base URL;
+# OAUTH_AUTHORIZE_URL is the website page where the customer approves the connection.
+OAUTH_ISSUER = os.environ.get("OAUTH_ISSUER", "http://localhost:8000")
+OAUTH_AUTHORIZE_URL = os.environ.get("OAUTH_AUTHORIZE_URL", "http://localhost:3000/oauth/authorize")

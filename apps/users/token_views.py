@@ -19,6 +19,7 @@ def _row(token: ApiToken) -> dict:
         "created_at": token.created_at,
         "last_used_at": token.last_used_at,
         "expires_at": token.expires_at,
+        "via_oauth": token.via_oauth,
     }
 
 
@@ -42,13 +43,16 @@ class ApiTokenListCreateView(APIView):
         now = timezone.now()
         return ApiToken.objects.filter(user=user, revoked=False).exclude(expires_at__lte=now).order_by("-created_at")
 
+    def _manual_count(self, user):
+        return self._active(user).filter(via_oauth=False).count()
+
     def get(self, request):
         return Response({"results": [_row(t) for t in self._active(request.user)]})
 
     def post(self, request):
         serializer = _CreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if self._active(request.user).count() >= MAX_ACTIVE_TOKENS:
+        if self._manual_count(request.user) >= MAX_ACTIVE_TOKENS:
             return Response(
                 {"detail": f"אפשר להחזיק עד {MAX_ACTIVE_TOKENS} חיבורים פעילים. בטל חיבור קיים כדי ליצור חדש."},
                 status=status.HTTP_409_CONFLICT,

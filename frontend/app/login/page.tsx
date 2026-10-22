@@ -20,7 +20,9 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      router.push("/dashboard");
+      // A page that sent the customer here (the Claude connection approval) asks to come back.
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       try {

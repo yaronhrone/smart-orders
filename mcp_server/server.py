@@ -9,6 +9,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 import api
 import drafts
+import gate
 
 MAX_ORDERS_PER_DAY = int(os.environ.get("MCP_MAX_ORDERS_PER_DAY", "5"))
 
@@ -33,7 +34,8 @@ def _token(ctx: Context) -> str:
 
 
 def _owner(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+    """Whose drafts and daily quota these are: the customer (so a refreshed token keeps them)."""
+    return gate.customer_of(token) or hashlib.sha256(token.encode()).hexdigest()
 
 
 def _detail(exc: api.ApiError) -> str:
@@ -201,4 +203,6 @@ def confirm_order(draft_id: str, ctx: Context, add_to_open_order: bool = False) 
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    import uvicorn
+
+    uvicorn.run(gate.AuthGate(mcp.streamable_http_app()), host=mcp.settings.host, port=mcp.settings.port)
