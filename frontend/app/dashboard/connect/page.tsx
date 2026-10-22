@@ -49,6 +49,7 @@ export default function ConnectPage() {
   const [fresh, setFresh] = useState<string | null>(null);
   const [tab, setTab] = useState<"desktop" | "code">("desktop");
   const [copied, setCopied] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
   const url = mcpUrl();
 
   async function load() {
@@ -113,7 +114,42 @@ export default function ConnectPage() {
       {error && <p className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2">{error}</p>}
 
       <section className="bg-white rounded-2xl shadow-sm p-6 mb-6">
-        <h2 className="font-semibold text-gray-800 mb-3">1. צור חיבור</h2>
+        <h2 className="font-semibold text-gray-800 mb-1">הדרך הפשוטה: כתובת אחת, בלי טוקן</h2>
+        <p className="text-sm text-gray-600 mb-3">
+          ב-Claude: Settings ← Connectors ← Add custom connector (או בטרמינל:{" "}
+          <span dir="ltr" className="font-mono text-xs">claude mcp add --transport http smart-orders {url}</span>
+          ). הדבק את הכתובת הזו. Claude יפתח דף שלנו, תאשר שם, וזהו.
+        </p>
+        <div className="flex gap-2">
+          <input
+            readOnly
+            dir="ltr"
+            value={url}
+            onFocus={(e) => e.currentTarget.select()}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50"
+          />
+          <button
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(url);
+                setUrlCopied(true);
+                setTimeout(() => setUrlCopied(false), 2000);
+              } catch {
+                setError("ההעתקה נכשלה, סמן והעתק ידנית");
+              }
+            }}
+            className="bg-green-700 text-white text-sm px-4 py-2 rounded-lg"
+          >
+            {urlCopied ? "הועתק" : "העתק"}
+          </button>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-2xl shadow-sm p-6 mb-6">
+        <h2 className="font-semibold text-gray-800 mb-1">חלופה: חיבור עם טוקן</h2>
+        <p className="text-sm text-gray-600 mb-3">
+          למי שה-Claude שלו לא תומך בהתחברות מהדפדפן (למשל Claude Desktop מקומי עם Node.js).
+        </p>
         <div className="flex gap-2">
           <input
             value={name}
@@ -135,7 +171,7 @@ export default function ConnectPage() {
 
       {fresh && (
         <section className="bg-amber-50 border border-amber-200 rounded-2xl p-6 mb-6">
-          <h2 className="font-semibold text-gray-800 mb-1">2. חבר ל-Claude</h2>
+          <h2 className="font-semibold text-gray-800 mb-1">הגדרה לחיבור שנוצר</h2>
           <p className="text-sm text-amber-800 mb-3">
             החיבור מוצג פעם אחת בלבד. אם תסגור את הדף, יהיה צריך ליצור חיבור חדש.
           </p>
