@@ -82,7 +82,7 @@ export default function ConnectPage() {
   }
 
   async function revoke(id: number) {
-    if (!confirm("לבטל את החיבור? Claude שמשתמש בו יפסיק לעבוד.")) return;
+    if (!confirm("לבטל את החיבור? העוזר שמשתמש בו יפסיק לעבוד.")) return;
     try {
       await revokeConnection(id);
       await load();
@@ -105,10 +105,10 @@ export default function ConnectPage() {
 
   return (
     <div className="px-6 py-6 max-w-2xl" dir="rtl">
-      <h1 className="text-xl font-bold text-gray-800 mb-2">חיבור ל-Claude</h1>
+      <h1 className="text-xl font-bold text-gray-800 mb-2">חיבור ל-MCP</h1>
       <p className="text-sm text-gray-600 mb-6">
-        אחרי החיבור אפשר לכתוב ל-Claude, למשל &quot;אני רוצה 30 ק&quot;ג עגבנייה&quot;. הוא יציג הצעה עם הספק והמחיר,
-        וההזמנה תישלח רק אחרי שתאשר. Claude רואה ויוצר הזמנות רק של החברה שלך.
+        אחרי החיבור אפשר לכתוב לעוזר ה-AI שלך (כלי שתומך ב-MCP, למשל Claude), למשל &quot;אני רוצה 30 ק&quot;ג עגבנייה&quot;. הוא יציג הצעה עם הספק והמחיר,
+        וההזמנה תישלח רק אחרי שתאשר. העוזר רואה ויוצר הזמנות רק של החברה שלך.
       </p>
 
       {error && <p className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2">{error}</p>}
@@ -116,9 +116,9 @@ export default function ConnectPage() {
       <section className="bg-white rounded-2xl shadow-sm p-6 mb-6">
         <h2 className="font-semibold text-gray-800 mb-1">הדרך הפשוטה: כתובת אחת, בלי טוקן</h2>
         <p className="text-sm text-gray-600 mb-3">
-          ב-Claude: Settings ← Connectors ← Add custom connector (או בטרמינל:{" "}
+          בכלי ה-AI שלך (ב-Claude: Settings ← Connectors ← Add custom connector, או בטרמינל:{" "}
           <span dir="ltr" className="font-mono text-xs">claude mcp add --transport http smart-orders {url}</span>
-          ). הדבק את הכתובת הזו. Claude יפתח דף שלנו, תאשר שם, וזהו.
+          ). הדבק את הכתובת הזו. ייפתח דף שלנו, תאשר שם, וזהו.
         </p>
         <div className="flex gap-2">
           <input
@@ -148,7 +148,7 @@ export default function ConnectPage() {
       <section className="bg-white rounded-2xl shadow-sm p-6 mb-6">
         <h2 className="font-semibold text-gray-800 mb-1">חלופה: חיבור עם טוקן</h2>
         <p className="text-sm text-gray-600 mb-3">
-          למי שה-Claude שלו לא תומך בהתחברות מהדפדפן (למשל Claude Desktop מקומי עם Node.js).
+          למי שהכלי שלו לא תומך בהתחברות מהדפדפן (למשל Claude Desktop מקומי עם Node.js).
         </p>
         <div className="flex gap-2">
           <input

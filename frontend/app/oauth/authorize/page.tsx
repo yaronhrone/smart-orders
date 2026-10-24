@@ -52,7 +52,7 @@ export default function AuthorizePage() {
     (async () => {
       const p = readParams();
       if (!p.client_id || !p.redirect_uri || !p.code_challenge || p.code_challenge_method !== "S256") {
-        setError("הבקשה לחיבור אינה תקינה. התחל שוב מתוך Claude.");
+        setError("הבקשה לחיבור אינה תקינה. התחל שוב מתוך כלי ה-AI שלך.");
         return;
       }
       if (!(await signedIn())) {
@@ -123,7 +123,7 @@ export default function AuthorizePage() {
               <li>להכין הצעת הזמנה. הזמנה נשלחת לספקים רק אחרי שאתה מאשר אותה בשיחה.</li>
               <li>אין גישה ללקוחות אחרים.</li>
             </ul>
-            <p className="text-xs text-gray-400 mb-5">אפשר לבטל את החיבור בכל רגע בעמוד &quot;חיבור ל-Claude&quot;.</p>
+            <p className="text-xs text-gray-400 mb-5">אפשר לבטל את החיבור בכל רגע בעמוד &quot;חיבור ל-MCP&quot;.</p>
             <div className="flex gap-2">
               <button
                 onClick={approve}
