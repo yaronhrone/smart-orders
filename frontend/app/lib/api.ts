@@ -110,6 +110,33 @@ export async function login(email: string, password: string): Promise<void> {
   }
 }
 
+export type SignupPayload = {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  company_name: string;
+  company_address: string;
+  region: string;
+  suppliers: { name: string; phone: string }[];
+  website: string; // honeypot, always empty for a real person
+};
+
+export async function submitSignup(payload: SignupPayload): Promise<void> {
+  // Public page, so like login() it bypasses request(): a 401/redirect-to-login
+  // handling makes no sense for someone who has no account yet.
+  const res = await fetch("/api/users/signup/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 429) throw new Error("יותר מדי ניסיונות, נסו שוב מאוחר יותר");
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(_parseErrorBody(body) || res.statusText);
+  }
+}
+
 export async function logout(): Promise<void> {
   await request<{ detail: string }>("/api/users/logout/", { method: "POST" });
 }

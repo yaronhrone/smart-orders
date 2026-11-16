@@ -10,6 +10,7 @@ from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from core.pagination import LoadMorePagination10
+from .signup import send_customer_confirmation
 
 User = get_user_model()
 
@@ -113,6 +114,7 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.save()
+        send_customer_confirmation(user, user.profile.phone)
 
         return Response(UserWithProfileSerializer(user).data)
 

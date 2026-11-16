@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, FormEvent, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { login } from "../lib/api";
 import { useAutoError } from "../lib/useAutoError";
@@ -97,6 +98,9 @@ export default function LoginPage() {
             {loading ? "מתחבר..." : "כניסה"}
           </button>
         </form>
+        <p className="text-center text-sm text-gray-500 mt-4">
+          עדיין לא רשומים? <Link href="/signup" className="text-green-700 font-semibold">הרשמה</Link>
+        </p>
       </div>
     </main>
   );

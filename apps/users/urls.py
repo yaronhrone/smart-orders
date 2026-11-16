@@ -2,7 +2,10 @@ from django.urls import path
 from .views import RegisterView, MeView, AdminUserListView, AdminUserDetailView, ProfileUpdateView, AdminUserProfileUpdateView, HebrewLoginView, TokenRefreshCookieView, LogoutView
 from .token_views import ApiTokenListCreateView, ApiTokenRevokeView
 
+from .signup import SignupRequestView
+
 urlpatterns = [
+    path("signup/", SignupRequestView.as_view(), name="signup"),
     path("register/", RegisterView.as_view(), name="register"),
     path("login/", HebrewLoginView.as_view(), name="login"),
     path("logout/", LogoutView.as_view(), name="logout"),

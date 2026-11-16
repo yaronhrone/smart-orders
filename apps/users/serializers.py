@@ -4,6 +4,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from apps.users.models import Profile
 from apps.catalog.models import Region
+from core.phone import normalize_il_phone
 
 User = get_user_model()
 
@@ -61,7 +62,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         # WhatsApp order lookup matches Profile.phone by exact string (digits only,
         # local "0XXXXXXXXX" format) — dashes/spaces here would make a customer's
         # WhatsApp messages silently unrecognized.
-        return "".join(filter(str.isdigit, value)) if value else value
+        return normalize_il_phone(value) if value else value
 
     def create(self, validated_data):
         validated_data.pop("password2")

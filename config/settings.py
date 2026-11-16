@@ -186,7 +186,7 @@ REST_FRAMEWORK = {
     #     "anon": "20/day",
     # },
     # Only views that opt in with throttle_scope are limited (see apps/assistant/views.py).
-    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour", "oauth_register": "60/hour"},
+    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour", "oauth_register": "60/hour", "signup": "5/hour"},
 }
 
 from datetime import timedelta
@@ -303,3 +303,23 @@ LOGGING = {
 # OAUTH_AUTHORIZE_URL is the website page where the customer approves the connection.
 OAUTH_ISSUER = os.environ.get("OAUTH_ISSUER", "http://localhost:8000")
 OAUTH_AUTHORIZE_URL = os.environ.get("OAUTH_AUTHORIZE_URL", "http://localhost:3000/oauth/authorize")
+
+# Customer sign-up (apps.users.signup): requests are emailed to ADMIN_EMAIL, and a new
+# customer gets a confirmation email from DEFAULT_FROM_EMAIL. Gmail SMTP with an app
+# password (EMAIL_HOST_PASSWORD, only in .env.prod). With no EMAIL_HOST_USER the emails
+# are printed to the log instead of sent, so local runs need no setup.
+SITE_URL = os.environ.get("SITE_URL", "http://localhost:3000")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+# The confirmation WhatsApp goes to the customer's own number, not the admin's, so tests must
+# not send it by default (existing register tests would hit Twilio); the signup tests turn it on with a mock.
+SIGNUP_CUSTOMER_WHATSAPP = not TESTING
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@localhost")
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST_USER
+    else "django.core.mail.backends.console.EmailBackend"
+)
