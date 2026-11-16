@@ -1,19 +1,27 @@
 """
-Public customer sign-up request. Nothing is stored: the request is sent to the admin
-(email + WhatsApp) with the customer's details and the suppliers they work with. The
-admin calls the suppliers, then creates the customer in the admin screen (RegisterView),
-which sends the customer a confirmation (email + WhatsApp).
+Public customer sign-up. The request is saved as pending and sent to the admin (email +
+WhatsApp) with the customer's details and the suppliers they work with. The admin calls the
+suppliers, then approves it in the customers screen: that creates the customer with a
+temporary password and sends them a confirmation (email + WhatsApp) with it.
 """
 import logging
+import secrets
+import string
 
 from django.conf import settings
 from django.core.mail import send_mail
-from rest_framework import permissions, serializers
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import generics, permissions, serializers
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.catalog.models import Region
+from apps.users.models import Profile, SignupRequest, User
+from core.pagination import LoadMorePagination10
 from core.phone import normalize_il_phone
 
 logger = logging.getLogger(__name__)
@@ -107,11 +115,22 @@ class SignupRequestView(APIView):
         if data.get("website"):
             # A bot: answer like a success so it learns nothing, send nothing.
             return Response({"detail": "ok"}, status=201)
+        email = data["email"].strip().lower()
+        if User.objects.filter(email__iexact=email).exists():
+            raise ValidationError({"email": "כתובת האימייל כבר רשומה במערכת."})
+        # The same person pressing send twice (or retrying) is one request, not two.
+        if SignupRequest.objects.filter(email__iexact=email, status=SignupRequest.Status.PENDING).exists():
+            return Response({"detail": "ok"}, status=201)
+        SignupRequest.objects.create(
+            email=email, first_name=data["first_name"], last_name=data["last_name"], phone=data["phone"],
+            company_name=data["company_name"], company_address=data.get("company_address", ""),
+            region=data["region"], suppliers=[dict(x) for x in data.get("suppliers", [])],
+        )
         notify_admin(build_admin_message(data))
         return Response({"detail": "ok"}, status=201)
 
 
-def send_customer_confirmation(user, phone: str) -> None:
+def send_customer_confirmation(user, phone: str, password: str = "") -> None:
     """Told the customer their account is open. Best effort, never fails the creation."""
     login_url = getattr(settings, "SITE_URL", "").rstrip("/") + "/login"
     text = (
@@ -120,6 +139,8 @@ def send_customer_confirmation(user, phone: str) -> None:
         f"כניסה: {login_url}\n"
         f"אימייל להתחברות: {user.email}"
     )
+    if password:
+        text += f"\nסיסמה זמנית: {password}\nמומלץ להחליף אותה מיד באזור הפרופיל באתר."
     try:
         send_mail("ההרשמה שלך ל-Smart Orders אושרה", text, None, [user.email])
     except Exception:
@@ -131,3 +152,75 @@ def send_customer_confirmation(user, phone: str) -> None:
             send_whatsapp_message(_local_to_e164(phone), text)
         except Exception:
             logger.exception("Signup: confirmation WhatsApp to %s failed", phone)
+
+
+TEMP_PASSWORD_LENGTH = 12
+
+
+def make_temp_password() -> str:
+    """Random, and always passes validate_password_hebrew (8+ chars, an upper case letter, a symbol)."""
+    alphabet = string.ascii_letters + string.digits
+    body = "".join(secrets.choice(alphabet) for _ in range(TEMP_PASSWORD_LENGTH - 2))
+    return body + secrets.choice(string.ascii_uppercase) + secrets.choice("!@#$%")
+
+
+class SignupRequestAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SignupRequest
+        fields = ("id", "email", "first_name", "last_name", "phone", "company_name", "company_address",
+                  "region", "suppliers", "status", "created_at")
+
+
+class AdminSignupListView(generics.ListAPIView):
+    """GET /api/users/admin/signups/?status=pending (default pending)."""
+
+    serializer_class = SignupRequestAdminSerializer
+    permission_classes = [permissions.IsAdminUser]
+    pagination_class = LoadMorePagination10
+
+    def get_queryset(self):
+        status = self.request.query_params.get("status", SignupRequest.Status.PENDING)
+        return SignupRequest.objects.filter(status=status)
+
+
+class AdminSignupApproveView(APIView):
+    """POST /api/users/admin/signups/<id>/approve/ — creates the customer and sends the confirmation."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, pk):
+        with transaction.atomic():
+            signup = get_object_or_404(SignupRequest.objects.select_for_update(), pk=pk)
+            if signup.status != SignupRequest.Status.PENDING:
+                raise ValidationError({"detail": "הבקשה כבר טופלה"})
+            if User.objects.filter(email__iexact=signup.email).exists():
+                raise ValidationError({"detail": "כבר קיים משתמש עם האימייל הזה"})
+            password = make_temp_password()
+            user = User.objects.create_user(
+                email=signup.email, password=password,
+                first_name=signup.first_name, last_name=signup.last_name,
+            )
+            Profile.objects.create(
+                user=user, company_name=signup.company_name, company_address=signup.company_address,
+                phone=signup.phone, region=signup.region,
+            )
+            signup.status = SignupRequest.Status.APPROVED
+            signup.reviewed_at = timezone.now()
+            signup.save(update_fields=["status", "reviewed_at"])
+        send_customer_confirmation(user, signup.phone, password)
+        return Response({"detail": "אושר", "user_id": user.id})
+
+
+class AdminSignupRejectView(APIView):
+    """POST /api/users/admin/signups/<id>/reject/ — nothing is sent to the customer."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, pk):
+        signup = get_object_or_404(SignupRequest, pk=pk)
+        if signup.status != SignupRequest.Status.PENDING:
+            raise ValidationError({"detail": "הבקשה כבר טופלה"})
+        signup.status = SignupRequest.Status.REJECTED
+        signup.reviewed_at = timezone.now()
+        signup.save(update_fields=["status", "reviewed_at"])
+        return Response({"detail": "נדחה"})

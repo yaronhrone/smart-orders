@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useAutoError } from "../lib/useAutoError";
 import {
   fetchAdminUsers,
-  fetchAIUsage,
-  AIUsage,
+  fetchAdminSignups,
+  approveSignup,
+  rejectSignup,
+  SignupRequestRow,
   createUser,
   deleteUser,
   updateAdminUserProfile,
@@ -190,7 +191,7 @@ export default function AdminPage() {
         </button>
       </div>
 
-      <AIUsageCard />
+      <PendingSignups onApproved={load} />
 
       <p className="text-sm text-gray-500 mb-4">מוצגים {users.length} לקוחות</p>
 
@@ -394,35 +395,6 @@ export default function AdminPage() {
   );
 }
 
-// A glance at the AI bill on the admin home; the full breakdown and the model comparison are one click away.
-function AIUsageCard() {
-  const [today, setToday] = useState<AIUsage | null>(null);
-  const [month, setMonth] = useState<AIUsage | null>(null);
-
-  useEffect(() => {
-    fetchAIUsage(1).then(setToday).catch(() => {});
-    fetchAIUsage(30).then(setMonth).catch(() => {});
-  }, []);
-
-  const usd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  return (
-    <Link
-      href="/admin/ai-usage"
-      className="flex flex-wrap items-center justify-between gap-3 bg-white rounded-xl shadow-sm px-4 py-3 mb-6 hover:shadow transition"
-    >
-      <div>
-        <div className="text-sm font-semibold text-gray-800">שימוש ב-AI</div>
-        <div className="text-xs text-gray-500">מודל פעיל: {month?.current_model ?? "…"}</div>
-      </div>
-      <div className="flex gap-6 text-sm text-gray-700">
-        <span>היום: {today ? `${today.totals.calls} קריאות · ${usd(today.totals.cost_usd)}` : "…"}</span>
-        <span>30 יום: {month ? `${month.totals.calls} קריאות · ${usd(month.totals.cost_usd)}` : "…"}</span>
-      </div>
-      <span className="text-sm text-blue-600">פירוט והשוואת מודלים ←</span>
-    </Link>
-  );
-}
-
 function Detail({ label, value }: { label: string; value?: string | null }) {
   return (
     <div>
@@ -477,6 +449,83 @@ function PasswordField({
         >
           {show ? "🙈" : "👁"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// Requests from the public /signup page. Approving creates the customer and sends them
+// the confirmation with a temporary password.
+function PendingSignups({ onApproved }: { onApproved: () => void }) {
+  const [rows, setRows] = useState<SignupRequestRow[]>([]);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function refresh() {
+    try {
+      setRows((await fetchAdminSignups()).results);
+    } catch {
+      setRows([]);
+    }
+  }
+
+  useEffect(() => { refresh(); }, []);
+
+  async function act(row: SignupRequestRow, kind: "approve" | "reject") {
+    const name = row.company_name || `${row.first_name} ${row.last_name}`;
+    const question = kind === "approve"
+      ? `לאשר את ${name}? הלקוח ייווצר ויקבל מייל ו-WhatsApp עם סיסמה זמנית.`
+      : `לדחות את הבקשה של ${name}?`;
+    if (!confirm(question)) return;
+    setBusy(row.id);
+    setMessage("");
+    try {
+      if (kind === "approve") {
+        await approveSignup(row.id);
+        setMessage(`${name} אושר ונשלחה לו הודעה.`);
+        onApproved();
+      } else {
+        await rejectSignup(row.id);
+      }
+      await refresh();
+    } catch (err: unknown) {
+      setMessage(err instanceof Error && err.message ? err.message : "הפעולה נכשלה");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (rows.length === 0 && !message) return null;
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-6">
+      <h2 className="text-sm font-bold text-amber-900 mb-2">בקשות הרשמה ממתינות ({rows.length})</h2>
+      {message && <p className="text-sm text-green-700 mb-2">{message}</p>}
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <div key={r.id} className="bg-white rounded-lg px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span className="font-medium text-gray-800">{r.first_name} {r.last_name}</span>
+                <span className="text-gray-500"> · {r.company_name} · {REGION_LABEL[r.region] ?? r.region}</span>
+                <div className="text-xs text-gray-500">{r.email} · {r.phone}{r.company_address ? ` · ${r.company_address}` : ""}</div>
+                <div className="text-xs text-gray-600 mt-1">
+                  ספקים: {r.suppliers.length ? r.suppliers.map((s) => `${s.name} (${s.phone})`).join(", ") : "לא צוינו"}
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={() => act(r, "approve")} disabled={busy === r.id}
+                  className="bg-green-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-green-700 disabled:opacity-50">
+                  אשר
+                </button>
+                <button onClick={() => act(r, "reject")} disabled={busy === r.id}
+                  className="border border-gray-300 text-gray-600 text-sm px-3 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                  דחה
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

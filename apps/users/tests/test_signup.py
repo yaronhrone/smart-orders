@@ -6,7 +6,7 @@ from django.test import override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
-from apps.users.models import User
+from apps.users.models import Profile, SignupRequest, User
 from core.phone import normalize_il_phone
 
 PAYLOAD = {
@@ -38,7 +38,7 @@ class SignupRequestTests(APITestCase):
         self.url = reverse("signup")
 
     @patch("apps.orders.whatsapp.send_whatsapp_message")
-    def test_sends_admin_email_and_whatsapp_and_stores_nothing(self, wa):
+    def test_saves_pending_request_and_notifies_admin(self, wa):
         res = self.client.post(self.url, PAYLOAD, format="json")
         self.assertEqual(res.status_code, 201)
         self.assertEqual(len(mail.outbox), 1)
@@ -49,6 +49,22 @@ class SignupRequestTests(APITestCase):
         wa.assert_called_once()
         self.assertEqual(wa.call_args[0][0], "+972500000001")
         self.assertFalse(User.objects.filter(email="dana@example.com").exists())
+        req = SignupRequest.objects.get()
+        self.assertEqual(req.status, "pending")
+        self.assertEqual(req.phone, "0501234567")
+        self.assertEqual(req.suppliers[0], {"name": "ירקות הגליל", "phone": "0521112222"})
+
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    def test_same_email_twice_is_one_pending_request(self, wa):
+        self.client.post(self.url, PAYLOAD, format="json")
+        self.client.post(self.url, PAYLOAD, format="json")
+        self.assertEqual(SignupRequest.objects.count(), 1)
+
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    def test_existing_user_email_rejected(self, wa):
+        User.objects.create_user(email="dana@example.com", password="Passw0rd!x")
+        self.assertEqual(self.client.post(self.url, PAYLOAD, format="json").status_code, 400)
+        self.assertEqual(SignupRequest.objects.count(), 0)
 
     @patch("apps.orders.whatsapp.send_whatsapp_message")
     def test_works_without_suppliers(self, wa):
@@ -66,6 +82,7 @@ class SignupRequestTests(APITestCase):
         res = self.client.post(self.url, {**PAYLOAD, "website": "http://spam"}, format="json")
         self.assertEqual(res.status_code, 201)
         self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(SignupRequest.objects.count(), 0)
         wa.assert_not_called()
 
     def test_validation(self):
@@ -102,7 +119,7 @@ class CustomerConfirmationTests(APITestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["new@example.com"])
         self.assertIn("https://site.test/login", mail.outbox[0].body)
-        self.assertNotIn("Abcdef1!x", mail.outbox[0].body)
+        self.assertIn("סיסמה זמנית: Abcdef1!x", mail.outbox[0].body)
         wa.assert_called_once()
         self.assertEqual(wa.call_args[0][0], "+972501234567")
 
@@ -111,3 +128,97 @@ class CustomerConfirmationTests(APITestCase):
             res = self.client.post(reverse("register"), self.data, format="json")
         self.assertEqual(res.status_code, 200)
         self.assertTrue(User.objects.filter(email="new@example.com").exists())
+
+
+@override_settings(SIGNUP_CUSTOMER_WHATSAPP=True, SITE_URL="https://site.test")
+class ApproveSignupTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(email="boss@example.com", password="Passw0rd!x", is_staff=True)
+        self.signup = SignupRequest.objects.create(
+            email="dana@example.com", first_name="דנה", last_name="כהן", phone="0501234567",
+            company_name="מסעדת הים", company_address="הנמל 1", region="haifa",
+            suppliers=[{"name": "ירקות הגליל", "phone": "0521112222"}],
+        )
+
+    def approve(self, pk=None):
+        return self.client.post(reverse("admin-signup-approve", args=[pk or self.signup.pk]))
+
+    def test_admin_only(self):
+        self.assertEqual(self.client.get(reverse("admin-signup-list")).status_code in (401, 403), True)
+        regular = User.objects.create_user(email="u@example.com", password="Passw0rd!x")
+        self.client.force_authenticate(regular)
+        self.assertEqual(self.approve().status_code, 403)
+        self.assertFalse(User.objects.filter(email="dana@example.com").exists())
+
+    def test_list_shows_only_pending(self):
+        SignupRequest.objects.create(email="old@example.com", first_name="a", last_name="b", phone="0501111111",
+                                     company_name="x", region="haifa", status="rejected")
+        self.client.force_authenticate(self.admin)
+        res = self.client.get(reverse("admin-signup-list"))
+        self.assertEqual([r["email"] for r in res.data["results"]], ["dana@example.com"])
+
+    @patch("apps.orders.whatsapp.send_whatsapp_message")
+    def test_approve_creates_customer_and_sends_password(self, wa):
+        self.client.force_authenticate(self.admin)
+        self.assertEqual(self.approve().status_code, 200)
+        user = User.objects.get(email="dana@example.com")
+        self.assertEqual(user.profile.company_name, "מסעדת הים")
+        self.assertEqual(user.profile.phone, "0501234567")
+        self.signup.refresh_from_db()
+        self.assertEqual(self.signup.status, "approved")
+        body = mail.outbox[0].body
+        self.assertEqual(mail.outbox[0].to, ["dana@example.com"])
+        self.assertIn("https://site.test/login", body)
+        password = body.split("סיסמה זמנית: ")[1].splitlines()[0]
+        self.assertTrue(user.check_password(password))
+        self.assertEqual(wa.call_args[0][0], "+972501234567")
+
+    def test_approve_twice_fails(self):
+        self.client.force_authenticate(self.admin)
+        self.approve()
+        self.assertEqual(self.approve().status_code, 400)
+        self.assertEqual(User.objects.filter(email="dana@example.com").count(), 1)
+
+    def test_reject_sends_nothing_and_creates_no_user(self):
+        self.client.force_authenticate(self.admin)
+        res = self.client.post(reverse("admin-signup-reject", args=[self.signup.pk]))
+        self.assertEqual(res.status_code, 200)
+        self.signup.refresh_from_db()
+        self.assertEqual(self.signup.status, "rejected")
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(User.objects.filter(email="dana@example.com").exists())
+
+    def test_temp_password_always_valid(self):
+        from apps.users.serializers import validate_password_hebrew
+        from apps.users.signup import make_temp_password
+        for _ in range(200):
+            validate_password_hebrew(make_temp_password())
+
+
+class ChangePasswordTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="c@example.com", password="Oldpass!1")
+        self.client.force_authenticate(self.user)
+        self.url = reverse("change-password")
+
+    def test_changes_password(self):
+        res = self.client.post(self.url, {"old_password": "Oldpass!1", "new_password": "Newpass!2", "new_password2": "Newpass!2"})
+        self.assertEqual(res.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("Newpass!2"))
+
+    def test_wrong_old_password(self):
+        res = self.client.post(self.url, {"old_password": "nope", "new_password": "Newpass!2", "new_password2": "Newpass!2"})
+        self.assertEqual(res.status_code, 400)
+
+    def test_mismatch_and_weak(self):
+        res = self.client.post(self.url, {"old_password": "Oldpass!1", "new_password": "Newpass!2", "new_password2": "Other!22"})
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post(self.url, {"old_password": "Oldpass!1", "new_password": "weak", "new_password2": "weak"})
+        self.assertEqual(res.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("Oldpass!1"))
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.post(self.url, {}).status_code, 401)

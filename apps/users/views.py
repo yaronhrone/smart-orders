@@ -1,12 +1,12 @@
 from django.conf import settings
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, serializers
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from django.shortcuts import get_object_or_404
-from .serializers import RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer, HebrewTokenObtainPairSerializer
+from .serializers import validate_password_hebrew, RegisterSerializer, UserSerializer, AdminUserSerializer, UserWithProfileSerializer, ProfileSerializer, HebrewTokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from core.pagination import LoadMorePagination10
@@ -114,9 +114,29 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.save()
-        send_customer_confirmation(user, user.profile.phone)
+        send_customer_confirmation(user, user.profile.phone, request.data.get("password", ""))
 
         return Response(UserWithProfileSerializer(user).data)
+
+
+class ChangePasswordView(APIView):
+    """POST /api/users/me/change-password/ — the signed-in user replaces their own password."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        old = request.data.get("old_password", "")
+        new = request.data.get("new_password", "")
+        if not request.user.check_password(old):
+            return Response({"old_password": "הסיסמה הנוכחית שגויה"}, status=400)
+        if new != request.data.get("new_password2", ""):
+            return Response({"new_password": "הסיסמאות אינן תואמות"}, status=400)
+        try:
+            validate_password_hebrew(new)
+        except serializers.ValidationError as exc:
+            return Response({"new_password": exc.detail[0]}, status=400)
+        request.user.set_password(new)
+        request.user.save(update_fields=["password"])
+        return Response({"detail": "הסיסמה הוחלפה"})
 
 
 class MeView(generics.RetrieveAPIView):

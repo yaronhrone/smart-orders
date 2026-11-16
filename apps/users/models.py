@@ -101,3 +101,28 @@ class ApiToken(models.Model):
         import secrets
         raw = cls.PREFIX + secrets.token_urlsafe(32)
         return cls.objects.create(user=user, name=name, expires_at=expires_at, token_hash=cls.hash_token(raw)), raw
+
+
+class SignupRequest(models.Model):
+    """A customer's sign-up from the public /signup page, waiting for the admin to approve it."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "ממתין"
+        APPROVED = "approved", "אושר"
+        REJECTED = "rejected", "נדחה"
+
+    email = models.EmailField()
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    phone = models.CharField(max_length=20)
+    company_name = models.CharField(max_length=150)
+    company_address = models.CharField(max_length=250, blank=True)
+    region = models.CharField(max_length=50, choices=Region.choices)
+    # [{"name": ..., "phone": ...}] — information for the admin to call, not catalog records.
+    suppliers = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]

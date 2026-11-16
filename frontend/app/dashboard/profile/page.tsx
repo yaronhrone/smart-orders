@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { fetchMe } from "../../lib/api";
+import { ChangePasswordCard } from "../../components/ChangePasswordCard";
 
 const REGION_LABEL: Record<string, string> = {
   tel_aviv: "תל אביב",
@@ -65,6 +66,8 @@ export default function ProfilePage() {
           לשינוי פרטים — פנה/י למנהל המערכת.
         </p>
       </div>
+
+      <ChangePasswordCard />
     </div>
   );
 }

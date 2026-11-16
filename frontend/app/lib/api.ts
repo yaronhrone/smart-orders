@@ -568,6 +568,41 @@ export async function updateProfile(data: ProfilePayload): Promise<ProfilePayloa
   });
 }
 
+export async function changePassword(old_password: string, new_password: string, new_password2: string): Promise<void> {
+  await request<{ detail: string }>("/api/users/me/change-password/", {
+    method: "POST",
+    body: JSON.stringify({ old_password, new_password, new_password2 }),
+  });
+}
+
+// ─────────────── Sign-up requests (admin) ───────────────
+
+export interface SignupRequestRow {
+  id: number;
+  email: string;
+  first_name: string;
+  last_name: string;
+  phone: string;
+  company_name: string;
+  company_address: string;
+  region: string;
+  suppliers: { name: string; phone: string }[];
+  status: string;
+  created_at: string;
+}
+
+export async function fetchAdminSignups(): Promise<Paginated<SignupRequestRow>> {
+  return request<Paginated<SignupRequestRow>>("/api/users/admin/signups/?status=pending");
+}
+
+export async function approveSignup(id: number): Promise<void> {
+  await request<unknown>(`/api/users/admin/signups/${id}/approve/`, { method: "POST" });
+}
+
+export async function rejectSignup(id: number): Promise<void> {
+  await request<unknown>(`/api/users/admin/signups/${id}/reject/`, { method: "POST" });
+}
+
 export async function deleteProduct(id: number): Promise<void> {
   return request<void>(`/api/catalog/products/${id}/`, { method: "DELETE" });
 }

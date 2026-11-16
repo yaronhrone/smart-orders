@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { fetchMe, updateProfile, ProfilePayload } from "../../lib/api";
+import { ChangePasswordCard } from "../../components/ChangePasswordCard";
 
 const REGIONS = [
   { value: "tel_aviv", label: "תל אביב" },
@@ -110,6 +111,8 @@ export default function ProfilePage() {
           {saving ? "שומר..." : "שמור שינויים"}
         </button>
       </form>
+
+      <ChangePasswordCard />
     </div>
   );
 }
