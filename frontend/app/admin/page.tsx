@@ -208,10 +208,10 @@ export default function AdminPage() {
                   className="flex-1 flex items-center gap-4 text-right hover:opacity-80 transition"
                 >
                   <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm min-w-0">
-                    <span className="font-medium text-gray-800 truncate">{u.first_name} {u.last_name}</span>
-                    <span className="text-gray-500 truncate">{u.email}</span>
-                    <span className="text-gray-600 truncate">{u.profile?.company_name ?? "—"}</span>
-                    <span className="text-gray-500 truncate">
+                    <span className="font-medium text-gray-800 break-words">{u.first_name} {u.last_name}</span>
+                    <span className="text-gray-500 break-all">{u.email}</span>
+                    <span className="text-gray-600 break-words">{u.profile?.company_name ?? "—"}</span>
+                    <span className="text-gray-500 break-words">
                       {u.profile?.region ? (REGION_LABEL[u.profile.region] ?? u.profile.region) : "—"}
                     </span>
                   </div>
