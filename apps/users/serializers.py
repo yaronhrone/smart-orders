@@ -101,7 +101,8 @@ class UserWithProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "email", "first_name", "last_name", "is_staff", "profile")
+        fields = ("id", "email", "first_name", "last_name", "is_staff", "must_change_password", "profile")
+        read_only_fields = ("must_change_password",)
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User

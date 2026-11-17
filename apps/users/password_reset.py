@@ -78,5 +78,6 @@ class PasswordResetConfirmView(APIView):
         except serializers.ValidationError as exc:
             return Response({"new_password": exc.detail[0]}, status=400)
         user.set_password(new)
-        user.save(update_fields=["password"])
+        user.must_change_password = False
+        user.save(update_fields=["password", "must_change_password"])
         return Response({"detail": "הסיסמה הוחלפה, אפשר להתחבר."})

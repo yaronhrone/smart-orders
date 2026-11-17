@@ -222,3 +222,32 @@ class ChangePasswordTests(APITestCase):
     def test_requires_login(self):
         self.client.force_authenticate(None)
         self.assertEqual(self.client.post(self.url, {}).status_code, 401)
+
+
+class FirstLoginPasswordTests(APITestCase):
+    def test_approved_and_hand_made_customers_must_change_password(self):
+        admin = User.objects.create_user(email="boss2@example.com", password="Passw0rd!x", is_staff=True)
+        self.client.force_authenticate(admin)
+        signup = SignupRequest.objects.create(email="s@example.com", first_name="a", last_name="b", phone="0501111111",
+                                              company_name="x", region="haifa")
+        self.client.post(reverse("admin-signup-approve", args=[signup.pk]))
+        self.assertTrue(User.objects.get(email="s@example.com").must_change_password)
+        data = {"email": "m@example.com", "password": "Abcdef1!x", "password2": "Abcdef1!x", "first_name": "a",
+                "last_name": "b", "company_name": "x", "company_phone": "", "company_address": "",
+                "phone": "0502222222", "region": "haifa"}
+        self.client.post(reverse("register"), data, format="json")
+        self.assertTrue(User.objects.get(email="m@example.com").must_change_password)
+        self.assertFalse(admin.must_change_password)
+
+    def test_flag_is_in_me_and_clears_without_old_password(self):
+        user = User.objects.create_user(email="f@example.com", password="Temp!pass1", must_change_password=True)
+        self.client.force_authenticate(user)
+        self.assertTrue(self.client.get(reverse("me")).data["must_change_password"])
+        res = self.client.post(reverse("change-password"), {"new_password": "Mine!pass2", "new_password2": "Mine!pass2"})
+        self.assertEqual(res.status_code, 200)
+        user.refresh_from_db()
+        self.assertFalse(user.must_change_password)
+        self.assertTrue(user.check_password("Mine!pass2"))
+        # Once the flag is off the old password is required again.
+        res = self.client.post(reverse("change-password"), {"new_password": "Other!pass3", "new_password2": "Other!pass3"})
+        self.assertEqual(res.status_code, 400)

@@ -13,6 +13,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     fetchMe()
       .then((data) => {
+        if (data.must_change_password) {
+          router.replace("/change-password");
+          return;
+        }
         if (!data.is_staff) {
           router.push("/dashboard");
           return;

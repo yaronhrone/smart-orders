@@ -114,6 +114,8 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.save()
+        user.must_change_password = True
+        user.save(update_fields=["must_change_password"])
         send_customer_confirmation(user, user.profile.phone, request.data.get("password", ""))
 
         return Response(UserWithProfileSerializer(user).data)
@@ -126,7 +128,8 @@ class ChangePasswordView(APIView):
     def post(self, request):
         old = request.data.get("old_password", "")
         new = request.data.get("new_password", "")
-        if not request.user.check_password(old):
+        # Right after logging in with a password somebody else chose there is nothing to re-type.
+        if not request.user.must_change_password and not request.user.check_password(old):
             return Response({"old_password": "הסיסמה הנוכחית שגויה"}, status=400)
         if new != request.data.get("new_password2", ""):
             return Response({"new_password": "הסיסמאות אינן תואמות"}, status=400)
@@ -135,7 +138,8 @@ class ChangePasswordView(APIView):
         except serializers.ValidationError as exc:
             return Response({"new_password": exc.detail[0]}, status=400)
         request.user.set_password(new)
-        request.user.save(update_fields=["password"])
+        request.user.must_change_password = False
+        request.user.save(update_fields=["password", "must_change_password"])
         return Response({"detail": "הסיסמה הוחלפה"})
 
 

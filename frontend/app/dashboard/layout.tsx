@@ -13,7 +13,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     fetchMe()
-      .then((data) => { setMe(data); setReady(true); })
+      .then((data) => {
+        if (data.must_change_password) { router.replace("/change-password"); return; }
+        setMe(data);
+        setReady(true);
+      })
       .catch(() => router.push("/login"));
   }, [router]);
 

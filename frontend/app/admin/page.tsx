@@ -209,7 +209,7 @@ export default function AdminPage() {
                 >
                   <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm min-w-0">
                     <span className="font-medium text-gray-800 break-words">{u.first_name} {u.last_name}</span>
-                    <span className="text-gray-500 break-all">{u.email}</span>
+                    <span className="text-gray-500 truncate col-span-2 sm:col-span-1" title={u.email}>{u.email}</span>
                     <span className="text-gray-600 break-words">{u.profile?.company_name ?? "—"}</span>
                     <span className="text-gray-500 break-words">
                       {u.profile?.region ? (REGION_LABEL[u.profile.region] ?? u.profile.region) : "—"}
@@ -237,6 +237,7 @@ export default function AdminPage() {
               {/* Expanded profile details */}
               {expanded === u.id && (
                 <div className="border-t border-gray-100 px-4 py-4 bg-gray-50 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                  <div className="sm:col-span-2 break-all"><Detail label="אימייל" value={u.email} /></div>
                   <Detail label="טלפון חברה" value={u.profile?.company_phone} />
                   <Detail label="כתובת" value={u.profile?.company_address} />
                   <Detail label="טלפון אישי" value={u.profile?.phone} />
@@ -308,7 +309,7 @@ export default function AdminPage() {
             <div className="flex justify-between items-center mb-5">
               <div>
                 <h2 className="text-lg font-bold text-gray-800">עריכת פרופיל</h2>
-                <p className="text-xs text-gray-500">{editUser.first_name} {editUser.last_name} · {editUser.email}</p>
+                <p className="text-xs text-gray-500 break-all">{editUser.first_name} {editUser.last_name} · {editUser.email}</p>
               </div>
               <button onClick={() => setEditUser(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
             </div>
@@ -508,7 +509,7 @@ function PendingSignups({ onApproved }: { onApproved: () => void }) {
               <div className="min-w-0">
                 <span className="font-medium text-gray-800">{r.first_name} {r.last_name}</span>
                 <span className="text-gray-500"> · {r.company_name} · {REGION_LABEL[r.region] ?? r.region}</span>
-                <div className="text-xs text-gray-500">{r.email} · {r.phone}{r.company_address ? ` · ${r.company_address}` : ""}</div>
+                <div className="text-xs text-gray-500 break-all">{r.email} · {r.phone}{r.company_address ? ` · ${r.company_address}` : ""}</div>
                 <div className="text-xs text-gray-600 mt-1">
                   ספקים: {r.suppliers.length ? r.suppliers.map((s) => `${s.name} (${s.phone})`).join(", ") : "לא צוינו"}
                 </div>

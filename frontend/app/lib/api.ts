@@ -180,6 +180,7 @@ export interface Me {
   first_name: string;
   last_name: string;
   is_staff: boolean;
+  must_change_password?: boolean;
   profile: UserProfile | null;
 }
 

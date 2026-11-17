@@ -198,7 +198,7 @@ class AdminSignupApproveView(APIView):
             password = make_temp_password()
             user = User.objects.create_user(
                 email=signup.email, password=password,
-                first_name=signup.first_name, last_name=signup.last_name,
+                first_name=signup.first_name, last_name=signup.last_name, must_change_password=True,
             )
             Profile.objects.create(
                 user=user, company_name=signup.company_name, company_address=signup.company_address,
