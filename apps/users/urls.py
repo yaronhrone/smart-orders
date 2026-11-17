@@ -2,10 +2,13 @@ from django.urls import path
 from .views import RegisterView, MeView, AdminUserListView, AdminUserDetailView, ProfileUpdateView, AdminUserProfileUpdateView, HebrewLoginView, TokenRefreshCookieView, LogoutView, ChangePasswordView
 from .token_views import ApiTokenListCreateView, ApiTokenRevokeView
 
+from .password_reset import PasswordResetRequestView, PasswordResetConfirmView
 from .signup import SignupRequestView, AdminSignupListView, AdminSignupApproveView, AdminSignupRejectView
 
 urlpatterns = [
     path("signup/", SignupRequestView.as_view(), name="signup"),
+    path("password-reset/", PasswordResetRequestView.as_view(), name="password-reset"),
+    path("password-reset/confirm/", PasswordResetConfirmView.as_view(), name="password-reset-confirm"),
     path("register/", RegisterView.as_view(), name="register"),
     path("login/", HebrewLoginView.as_view(), name="login"),
     path("logout/", LogoutView.as_view(), name="logout"),

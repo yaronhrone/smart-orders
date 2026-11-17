@@ -137,6 +137,28 @@ export async function submitSignup(payload: SignupPayload): Promise<void> {
   }
 }
 
+// Forgot password. Public, so raw fetch like login()/submitSignup(), not request().
+async function _publicPost(path: string, body: object): Promise<void> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 429) throw new Error("יותר מדי ניסיונות, נסו שוב מאוחר יותר");
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(_parseErrorBody(text) || res.statusText);
+  }
+}
+
+export function requestPasswordReset(email: string): Promise<void> {
+  return _publicPost("/api/users/password-reset/", { email });
+}
+
+export function confirmPasswordReset(uid: string, token: string, new_password: string, new_password2: string): Promise<void> {
+  return _publicPost("/api/users/password-reset/confirm/", { uid, token, new_password, new_password2 });
+}
+
 export async function logout(): Promise<void> {
   await request<{ detail: string }>("/api/users/logout/", { method: "POST" });
 }

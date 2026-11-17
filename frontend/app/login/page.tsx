@@ -98,7 +98,10 @@ export default function LoginPage() {
             {loading ? "מתחבר..." : "כניסה"}
           </button>
         </form>
-        <p className="text-center text-sm text-gray-500 mt-4">
+        <p className="text-center text-sm mt-4">
+          <Link href="/forgot-password" className="text-green-700 font-semibold">שכחתי סיסמה</Link>
+        </p>
+        <p className="text-center text-sm text-gray-500 mt-2">
           עדיין לא רשומים? <Link href="/signup" className="text-green-700 font-semibold">הרשמה</Link>
         </p>
       </div>

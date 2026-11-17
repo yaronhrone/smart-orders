@@ -186,7 +186,7 @@ REST_FRAMEWORK = {
     #     "anon": "20/day",
     # },
     # Only views that opt in with throttle_scope are limited (see apps/assistant/views.py).
-    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour", "oauth_register": "60/hour", "signup": "5/hour"},
+    "DEFAULT_THROTTLE_RATES": {"assistant": "10/hour", "oauth_register": "60/hour", "signup": "5/hour", "password_reset": "5/hour", "password_reset_confirm": "20/hour"},
 }
 
 from datetime import timedelta
@@ -309,6 +309,7 @@ OAUTH_AUTHORIZE_URL = os.environ.get("OAUTH_AUTHORIZE_URL", "http://localhost:30
 # password (EMAIL_HOST_PASSWORD, only in .env.prod). With no EMAIL_HOST_USER the emails
 # are printed to the log instead of sent, so local runs need no setup.
 SITE_URL = os.environ.get("SITE_URL", "http://localhost:3000")
+PASSWORD_RESET_TIMEOUT = 3600  # seconds a "forgot password" link works
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
 # The confirmation WhatsApp goes to the customer's own number, not the admin's, so tests must
 # not send it by default (existing register tests would hit Twilio); the signup tests turn it on with a mock.
