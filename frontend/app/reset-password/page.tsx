@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, FormEvent } from "react";
+import { PasswordInput } from "../components/PasswordInput";
 import Link from "next/link";
 import { confirmPasswordReset } from "../lib/api";
 import { useAutoError } from "../lib/useAutoError";
@@ -57,13 +58,13 @@ export default function ResetPasswordPage() {
           <form onSubmit={handleSubmit} className="space-y-4 mt-4">
             <div>
               <label className="block text-sm font-semibold text-green-800 mb-1">סיסמה חדשה</label>
-              <input type="password" className={INPUT} value={password} required autoComplete="new-password"
+              <PasswordInput className={INPUT} value={password} autoComplete="new-password"
                 onChange={(e) => { setPassword(e.target.value); setError(""); }} />
               <p className="text-xs text-gray-400 mt-1">לפחות 8 תווים, אות גדולה אחת וסימן מיוחד (!@#$).</p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-green-800 mb-1">אימות סיסמה</label>
-              <input type="password" className={INPUT} value={password2} required autoComplete="new-password"
+              <PasswordInput className={INPUT} value={password2} autoComplete="new-password"
                 onChange={(e) => { setPassword2(e.target.value); setError(""); }} />
             </div>
             {error && <p className="text-red-600 text-sm">{error}</p>}

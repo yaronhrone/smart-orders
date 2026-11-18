@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, FormEvent } from "react";
+import { PasswordInput } from "./PasswordInput";
 import { changePassword } from "../lib/api";
 
 const INPUT =
@@ -41,18 +42,18 @@ export function ChangePasswordCard() {
       <h2 className="text-base font-bold text-gray-800">החלפת סיסמה</h2>
       <div>
         <label className="block text-xs font-medium text-gray-700 mb-1">סיסמה נוכחית</label>
-        <input type="password" className={INPUT} value={oldPassword} required autoComplete="current-password"
+        <PasswordInput className={INPUT} value={oldPassword} autoComplete="current-password"
           onChange={(e) => { setOldPassword(e.target.value); setSuccess(false); }} />
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-700 mb-1">סיסמה חדשה</label>
-        <input type="password" className={INPUT} value={newPassword} required autoComplete="new-password"
+        <PasswordInput className={INPUT} value={newPassword} autoComplete="new-password"
           onChange={(e) => { setNewPassword(e.target.value); setSuccess(false); }} />
         <p className="text-xs text-gray-400 mt-1">לפחות 8 תווים, אות גדולה אחת וסימן מיוחד (!@#$).</p>
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-700 mb-1">אימות סיסמה חדשה</label>
-        <input type="password" className={INPUT} value={newPassword2} required autoComplete="new-password"
+        <PasswordInput className={INPUT} value={newPassword2} autoComplete="new-password"
           onChange={(e) => { setNewPassword2(e.target.value); setSuccess(false); }} />
       </div>
       {error && <p className="text-red-600 text-sm">{error}</p>}
