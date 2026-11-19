@@ -185,3 +185,39 @@ class StatsViewTests(APITestCase):
 
         self.assertEqual((empty["total_calls"], empty["success_rate"], empty["p95_duration_ms"]), (0, None, None))
         self.assertEqual(self.client.get(self.url, {"days": "abc"}).status_code, 400)
+
+
+class SpendingViewTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("assistant-spending")
+        self.alice = make_user("alice@test.com")
+        self.bob = make_user("bob@test.com")
+        self.admin = make_user("admin@test.com", staff=True)
+        self.tomato = Product.objects.create(name="עגבנייה", unit=Unit.KG)
+        self.sup = make_supplier("ספק א")
+        add_order(self.alice, self.sup, self.tomato, "10", "5.00", il(2026, 9, 10))
+        add_order(self.bob, self.sup, self.tomato, "100", "5.00", il(2026, 9, 10))
+
+    def test_requires_login(self):
+        self.assertEqual(self.client.get(self.url).status_code, 401)
+
+    def test_customer_sees_only_their_own_spend(self):
+        self.client.force_authenticate(user=self.alice)
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["total_spend"], "50.00")
+
+    def test_admin_sees_everyone(self):
+        self.client.force_authenticate(user=self.admin)
+        self.assertEqual(self.client.get(self.url).data["total_spend"], "550.00")
+
+    def test_filters_and_grouping_are_passed_through(self):
+        self.client.force_authenticate(user=self.alice)
+        res = self.client.get(self.url, {"products": ["עגבנייה"], "group_by": "month", "date_from": "2026-09-01", "date_to": "2026-09-30"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["groups"][0]["total_spend"], "50.00")
+
+    def test_customer_cannot_group_by_customer_and_bad_input_is_400(self):
+        self.client.force_authenticate(user=self.alice)
+        self.assertEqual(self.client.get(self.url, {"group_by": "customer"}).status_code, 400)
+        self.assertEqual(self.client.get(self.url, {"date_from": "not-a-date"}).status_code, 400)

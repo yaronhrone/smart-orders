@@ -43,6 +43,19 @@ class ServerTests(unittest.TestCase):
         with mock.patch.object(api, "call", return_value=SUGGEST):
             return server.draft_order(ITEMS, ctx(token))
 
+    def test_get_spending_passes_filters_and_the_callers_token(self):
+        with mock.patch.object(api, "call", return_value={"total_spend": "50.00"}) as call:
+            out = server.get_spending(ctx("so_alice"), date_from="2026-09-01", products=["עגבנייה"], group_by="month")
+        self.assertEqual(out["total_spend"], "50.00")
+        self.assertEqual(call.call_args.args[0], "so_alice")
+        self.assertEqual(call.call_args.args[2], "/api/assistant/spending/")
+        self.assertEqual(call.call_args.kwargs["params"],
+                         {"group_by": "month", "date_from": "2026-09-01", "products": ["עגבנייה"]})
+
+    def test_get_spending_returns_the_api_error(self):
+        with mock.patch.object(api, "call", side_effect=api.ApiError(400, {"detail": "bad"})):
+            self.assertIn("error", server.get_spending(ctx()))
+
     def test_draft_sends_nothing_and_groups_by_supplier(self):
         with mock.patch.object(api, "call", return_value=SUGGEST) as call:
             out = server.draft_order(ITEMS, ctx())

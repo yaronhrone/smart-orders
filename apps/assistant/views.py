@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 from .models import AssistantCall
 from .serializers import AskSerializer, FeedbackSerializer
 from .service import ask
-from .tools import IL_TZ, build_context
+from .tools import IL_TZ, ToolError, build_context, query_spending
 
 # gpt-4o-mini list prices, USD per million tokens. An estimate, not a bill.
 PRICE_PER_M_INPUT = 0.15
@@ -48,6 +48,34 @@ class AskView(APIView):
             prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
         )
         return Response({"answer": result.answer, "call_id": call.id})
+
+
+class SpendingView(APIView):
+    """
+    GET /api/assistant/spending/ — the assistant's `query_spending` as a plain endpoint, so an
+    outside agent (the MCP server) gets the same exact numbers without a second AI in between.
+    Query: date_from, date_to (YYYY-MM-DD), products and suppliers (repeat the parameter),
+    group_by (none, product, supplier, day, week, month, order, customer), customer (admin only).
+    A customer sees only their own orders; an admin sees every customer's.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        params = request.query_params
+        try:
+            result = query_spending(
+                build_context(request.user),
+                date_from=params.get("date_from") or None,
+                date_to=params.get("date_to") or None,
+                products=params.getlist("products") or None,
+                suppliers=params.getlist("suppliers") or None,
+                group_by=params.get("group_by") or "none",
+                customer=params.get("customer") or None,
+            )
+        except ToolError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
 
 
 class FeedbackView(APIView):
