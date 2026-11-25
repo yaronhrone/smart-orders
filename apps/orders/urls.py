@@ -10,8 +10,10 @@ from .views import (
     OpenBatchView,
     OpenOrderChangeView,
     OpenOrderCancelView,
+    OrderingHoursView,
 )
 urlpatterns = [
+    path("hours/", OrderingHoursView.as_view(), name="orders-hours"),
     path("suggest/", SuggestOrderView.as_view(), name="orders-suggest"),
     path("place/", PlaceOrderView.as_view(), name="orders-place"),
     path("open/change/", OpenOrderChangeView.as_view(), name="orders-open-change"),

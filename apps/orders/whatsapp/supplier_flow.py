@@ -599,6 +599,13 @@ def _parse_supplier_reply(body: str, products: list) -> tuple[dict, list]:
 def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpResponse:
     """Supplier sent a price list (no pending order). Parse and update DB."""
     from apps.catalog.price_parser import update_prices_from_message
+    from apps.orders import hours
+
+    if not hours.suppliers_open():
+        # Nothing is parsed or saved: prices change only inside the suppliers' hours.
+        validators.send_whatsapp_message(phone, "⏰ " + hours.supplier_closed_text())
+        return HttpResponse(status=200)
+
 
     try:
         result = update_prices_from_message(supplier, body)

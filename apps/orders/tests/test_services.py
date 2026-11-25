@@ -780,10 +780,12 @@ class OpenOrderServiceTests(TestCase):
         today = timezone.now().astimezone(self.il).date()
         return datetime.combine(today, time(hour, minute), tzinfo=self.il)
 
-    def test_todays_order_is_open_until_23_israel_time(self):
+    def test_todays_order_is_open_until_22_israel_time(self):
+        # 22:00 is when customers stop ordering (apps/orders/hours.py): the open order closes with it.
         from apps.orders.services import get_open_batch, todays_batch
 
-        self.assertEqual(get_open_batch(self.user, now=self._il_today_at(22, 30)), self.order.batch)
+        self.assertEqual(get_open_batch(self.user, now=self._il_today_at(21, 59)), self.order.batch)
+        self.assertIsNone(get_open_batch(self.user, now=self._il_today_at(22, 0)))
         self.assertIsNone(get_open_batch(self.user, now=self._il_today_at(23, 30)))
         self.assertEqual(todays_batch(self.user, now=self._il_today_at(23, 30)), self.order.batch)
 

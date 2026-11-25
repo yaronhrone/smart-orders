@@ -449,7 +449,19 @@ export interface OpenBatch {
   orders: OpenBatchOrder[];
 }
 
-/** The customer's open order today (until 23:00), which a new checkout is added to. */
+export interface OrderingHours {
+  open: boolean;
+  opens_at: string;
+  closes_at: string;
+  message: string;
+}
+
+/** Whether customers may order right now (Israel time); the server enforces it, this only switches the button. */
+export async function fetchOrderingHours(): Promise<OrderingHours> {
+  return request<OrderingHours>("/api/orders/hours/");
+}
+
+/** The customer's open order today (until the closing time, 22:00), which a new checkout is added to. */
 export async function fetchOpenBatch(): Promise<OpenBatch | null> {
   const res = await request<{ open_batch: OpenBatch | null }>("/api/orders/open/");
   return res.open_batch;

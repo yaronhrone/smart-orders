@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from apps.catalog.models import SupplierProduct, Supplier
+from apps.orders import hours
 from apps.orders.models import OrderBatch, OrderRequest, OrderRequestProduct, SupplierConfirmation
 
 
@@ -829,7 +830,8 @@ def find_fallback_for_product(product, excluded_supplier_id: int, order_request_
 
 IL_TZ = ZoneInfo("Asia/Jerusalem")
 # Project TIME_ZONE is UTC, so this is compared against Israel time explicitly.
-ORDER_UPDATE_CUTOFF = time(23, 0)
+# The day's open order is changeable for exactly as long as customers may order (see hours.py).
+ORDER_UPDATE_CUTOFF = hours.customer_window()[1]
 NOT_ADDED_REASONS = {"unavailable": "אין ספק זמין באזור", "below_minimum": "מתחת למינימום של הספק"}
 OPEN_ORDER_STATUSES = (
     OrderRequest.Status.PENDING,
@@ -879,7 +881,8 @@ def todays_batch(user, now=None):
 def get_open_batch(user, now=None):
     """
     The single definition of "the customer's open order": today's checkout,
-    until 23:00 Israel time. New items go into it instead of a second order.
+    until the customers' closing time (22:00 Israel time, see hours.py). New items go into it
+    instead of a second order.
     """
     if not before_update_cutoff(now):
         return None

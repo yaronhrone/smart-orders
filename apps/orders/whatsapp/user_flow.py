@@ -25,6 +25,7 @@ from .cache import (
 )
 from .delivery_flow import _handle_delivery_flow
 from .fallback_flow import _handle_fallback_approval, _handle_reroute_grace_topup
+from apps.orders import hours
 from apps.orders.services import NOT_ADDED_REASONS
 from . import validators
 
@@ -88,7 +89,7 @@ def _offer_merge(phone: str, user, batch, products: list, region: str, note: str
         lines.append(f"  • {p['product'].name} x{p['quantity']} {p['product'].get_unit_display()}")
     if note:
         lines.append(f"\n{note}")
-    lines.append("\n" + MERGE_PROMPT + "אפשר להוסיף עד 23:00.")
+    lines.append("\n" + MERGE_PROMPT + f"אפשר להוסיף עד {hours.label(hours.customer_window()[1])}.")
     validators.send_with_buttons(phone, "\n".join(lines), "yesno", strip=(MERGE_PROMPT,))
 
 
@@ -131,7 +132,8 @@ def _handle_merge_offer_reply(phone: str, body: str):
     if batch is None:
         validators.send_whatsapp_message(
             phone,
-            "⏰ ההזמנה הפתוחה כבר נסגרה להוספות (אפשר להוסיף עד 23:00). שלח את המוצרים מחדש כהזמנה חדשה.",
+            f"⏰ ההזמנה הפתוחה כבר נסגרה להוספות (אפשר להוסיף עד {hours.label(hours.customer_window()[1])}). "
+            "שלח את המוצרים מחדש כהזמנה חדשה.",
         )
         return HttpResponse(status=200)
 
@@ -574,6 +576,14 @@ def _suggest_and_respond(
     from apps.catalog.models import Product
     from apps.orders.services import get_open_batch, suggest_order
 
+    if not hours.customers_open() and not user.is_staff:
+        # A basket held for a top-up (or a message still in its window) that comes due after
+        # closing is not priced or offered: an offer made now could be confirmed after hours.
+        validators.send_whatsapp_message(
+            phone, "⏰ " + hours.customer_closed_text() + "\nההזמנה שלא הושלמה לא נשמרה.",
+        )
+        return HttpResponse(status=200)
+
     all_products_map = {p.name: p for p in Product.objects.all()}
     products = []
     unrecognized = []
@@ -661,10 +671,10 @@ def _suggest_and_respond(
                 ttl=MINIMUM_GRACE_TTL,
             )
             _schedule_draft_dispatch(phone, generation, MINIMUM_GRACE_SECONDS, is_grace_retry=True)
-            hours = MINIMUM_GRACE_SECONDS // 3600
+            grace_hours = MINIMUM_GRACE_SECONDS // 3600
             msg = (
                 shortfalls
-                + f"\n\nההזמנה נשמרת — יש לך {hours} שעות להוסיף עוד מוצרים או כמות כדי "
+                + f"\n\nההזמנה נשמרת — יש לך {grace_hours} שעות להוסיף עוד מוצרים או כמות כדי "
                 "לעמוד במינימום (שלח הודעה נוספת, היא תתווסף להזמנה זו). "
                 "אם לא תעדכן, ההזמנה תבוטל אוטומטית."
             )
@@ -1076,6 +1086,30 @@ def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
     return HttpResponse(status=200)
 
 
+def _handle_closed_hours(phone: str):
+    """
+    Outside the customers' hours nothing that orders, changes or confirms an order goes through:
+    the customer is told when ordering is open, and whatever was waiting for their answer is
+    dropped, so it cannot be confirmed later. Returns None when ordering is open, for staff, and
+    for a number that is not a customer (the normal flow says it is not registered).
+    Cancelling and the delivery questions are answered before this is reached.
+    """
+    if hours.customers_open():
+        return None
+    profile = _resolve_profile(phone)
+    if profile is None or profile.user.is_staff:
+        return None
+    from .cache import clear_draft_order
+
+    clear_modification_offer(phone)
+    clear_merge_offer(phone)
+    clear_pending_clarification(phone)
+    clear_draft_order(phone)
+    cache.delete(f"whatsapp_order:{phone}")
+    validators.send_whatsapp_message(phone, "⏰ " + hours.customer_closed_text())
+    return HttpResponse(status=200)
+
+
 def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     delivery_response = _handle_delivery_flow(phone, body)
     if delivery_response is not None:
@@ -1095,6 +1129,10 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
     reroute_grace_response = _handle_reroute_grace_topup(phone, body)
     if reroute_grace_response is not None:
         return reroute_grace_response
+
+    closed_response = _handle_closed_hours(phone)
+    if closed_response is not None:
+        return closed_response
 
     # Before the pending-offer check, so its "כן" isn't taken as confirming an offer.
     modification_response = _handle_modification_offer_reply(phone, body)
@@ -1138,7 +1176,8 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
                     .exclude(status=OrderRequest.Status.CANCELLED).order_by("id").values_list("id", flat=True)
                 )
                 validators.send_whatsapp_message(
-                    phone, f"⏰ חלון העדכון להזמנה של היום ({ids}) נסגר ב-23:00. פותח הזמנה חדשה.",
+                    phone,
+                    f"⏰ חלון העדכון להזמנה של היום ({ids}) נסגר ב-{hours.label(hours.customer_window()[1])}. פותח הזמנה חדשה.",
                 )
 
         return _handle_new_order(phone, body)

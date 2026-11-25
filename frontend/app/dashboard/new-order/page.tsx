@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   ApiError,
   fetchOpenBatch,
+  fetchOrderingHours,
   fetchProducts,
   suggestOrder,
   placeOrder,
   OpenBatch,
+  OrderingHours,
   Product,
   SuggestOrderResponse,
   PlaceOrderResponse,
@@ -59,7 +61,12 @@ export default function NewOrderPage() {
   const [placing, setPlacing] = useState(false);
   const [placeError, setPlaceError] = useState("");
 
+  // Ordering hours: outside them the server refuses an order, so say so up front.
+  const [hours, setHours] = useState<OrderingHours | null>(null);
+  const orderingClosed = hours !== null && !hours.open;
+
   useEffect(() => {
+    fetchOrderingHours().then(setHours).catch(() => {});
     fetchProducts({ all: true }).then((res) => setCatalog(res.results)).catch(() => {});
     try {
       const saved = localStorage.getItem("new-order-items");
@@ -185,6 +192,13 @@ export default function NewOrderPage() {
           {step === 1 ? "בחר מוצרים" : step === 2 ? "בחר הצעה" : "הזמנה בוצעה"}
         </span>
       </div>
+
+      {orderingClosed && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 mb-4 flex items-start gap-2">
+          <span className="text-amber-600 text-lg leading-tight">⏰</span>
+          <p className="text-amber-800 text-sm font-semibold">{hours?.message}</p>
+        </div>
+      )}
 
       {/* ─── Step 1: Products ─────────────────────────────────────────── */}
       {step === 1 && (
@@ -319,7 +333,7 @@ export default function NewOrderPage() {
               </div>
               <button
                 onClick={() => handlePlace(suggestion.recommended ?? "cheapest")}
-                disabled={placing}
+                disabled={placing || orderingClosed}
                 className="w-full py-2 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 transition"
               >
                 {placing ? "מוסיף..." : "הוסף את המוצרים להזמנה הקיימת"}
@@ -373,10 +387,10 @@ export default function NewOrderPage() {
 
                 <button
                   onClick={() => handlePlace(key)}
-                  disabled={placing || issues.length > 0}
+                  disabled={placing || issues.length > 0 || orderingClosed}
                   className="w-full py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                 >
-                  {placing ? "מבצע הזמנה..." : issues.length > 0 ? "⛔ מינימום לא עומד" : "אשר והזמן"}
+                  {placing ? "מבצע הזמנה..." : orderingClosed ? "ההזמנות סגורות כרגע" : issues.length > 0 ? "⛔ מינימום לא עומד" : "אשר והזמן"}
                 </button>
               </div>
             );

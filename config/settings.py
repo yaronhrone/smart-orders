@@ -278,6 +278,11 @@ if TESTING:
     # The tests exercise the 3-minute order window (production default is no waiting).
     os.environ["ORDER_DEBOUNCE_SECONDS"] = "180"
     os.environ.pop("LLM_MODEL", None)
+    # Operating hours (apps/orders/hours.py) are off in the suite so it passes at any time of day;
+    # test_hours.py turns them on, with a fixed clock, where it tests them.
+    os.environ["HOURS_LIMIT_ENABLED"] = "0"
+    for _name in ("SUPPLIER_OPEN", "SUPPLIER_CLOSE", "CUSTOMER_OPEN", "CUSTOMER_CLOSE"):
+        os.environ.pop(_name, None)
     # An in-process cache: Redis would carry cached stats from the previous run into this one.
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 

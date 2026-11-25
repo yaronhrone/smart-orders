@@ -11,6 +11,7 @@ from drf_spectacular.utils import extend_schema
 
 from core.cache_utils import get_cache_version
 from core.pagination import LoadMorePagination, paginate, paginated_response_serializer
+from . import hours
 from .models import OrderBatch, OrderRequest
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,29 @@ from .services import (
     parse_month, suggest_order,
 )
 from .spend import SPEND_STATUSES
+
+def _closed_for_customer(user):
+    """403 with when ordering opens, outside the customers' hours (staff are never limited); else None."""
+    if user.is_staff or hours.customers_open():
+        return None
+    return Response({"detail": hours.customer_closed_text()}, status=status.HTTP_403_FORBIDDEN)
+
+
+class OrderingHoursView(APIView):
+    """GET /api/orders/hours/ — is ordering open now, and when; the site uses it to switch the order button."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        start, end = hours.customer_window()
+        is_open = request.user.is_staff or hours.customers_open()
+        return Response({
+            "open": is_open,
+            "opens_at": hours.label(start),
+            "closes_at": hours.label(end),
+            "message": "" if is_open else hours.customer_closed_text(),
+        })
+
+
 class SuggestOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     @extend_schema(request=SuggestOrderInputSerializer, responses=SuggestOrderResponseSerializer)
@@ -56,6 +80,9 @@ class PlaceOrderView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     @extend_schema(request=PlaceOrderInputSerializer, responses={201: PlaceOrderResponseSerializer})
     def post(self, request):
+        closed = _closed_for_customer(request.user)
+        if closed:
+            return closed
         serializer = PlaceOrderInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = request.user
@@ -196,6 +223,10 @@ class OpenOrderChangeView(APIView):
         from .changes import NoOpenOrder, change_open_order
         serializer = OrderChangeInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data["dry_run"]:  # a preview changes nothing, so it is always allowed
+            closed = _closed_for_customer(request.user)
+            if closed:
+                return closed
         if not hasattr(request.user, "profile"):
             return Response({"detail": "המשתמש אינו מקושר לפרופיל חברה"}, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
