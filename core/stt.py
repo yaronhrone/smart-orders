@@ -29,9 +29,11 @@ DEFAULT_MAX_SECONDS = 180
 # Size guard for audio whose length cannot be read (anything but ogg/opus): ~3 minutes of a
 # typical compressed voice note is well under this, and the API refuses files over 25 MB anyway.
 MAX_BYTES = 8 * 1024 * 1024
-# How much of the product list goes in as a hint (characters): enough names to steer the
-# transcription towards the catalog, short enough not to crowd out the audio.
-HINT_MAX_CHARS = 900
+# How much of the product list goes in as a hint (characters). The whole catalog should fit: names
+# the hint leaves out (קולורבי, שמיר, פלפל כתום) were the ones heard wrongly. The API took prompts
+# of 8000 characters without complaint; if the catalog outgrows this, the products customers order
+# most come first (see voice.hint_names) and the rarest are the ones left out.
+HINT_MAX_CHARS = 3000
 
 
 class TranscriptionError(Exception):

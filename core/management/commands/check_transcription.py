@@ -120,8 +120,8 @@ class Command(BaseCommand):
         if options["no_hint"] and not options["order"]:
             return []
         try:
-            from apps.catalog.models import Product
-            return list(Product.objects.values_list("name", flat=True))
+            from apps.orders.whatsapp.voice import hint_names
+            return hint_names()  # the same list, in the same order, the live hint is built from
         except Exception as exc:  # no database reachable: still useful without the catalog
             self.stderr.write(f"could not read the catalog ({type(exc).__name__}): continuing without product names")
             return []

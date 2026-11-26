@@ -80,6 +80,48 @@ class AudioLengthTests(SimpleTestCase):
             self.assertEqual(stt.max_seconds(), 180)
 
 
+@override_settings(CACHES=LOCMEM_CACHE)
+class HintNamesTests(TestCase):
+    """The transcriber's hint: the whole catalog, the most-ordered products first."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_most_ordered_products_come_first_then_alphabetical(self):
+        from apps.orders.models import OrderRequestProduct
+        from apps.orders.tests.factories import make_order
+        supplier = make_supplier("ספק")
+        user = make_user_with_profile(phone="+972509990001")
+        rare, common, other = make_product("אבוקדו"), make_product("עגבניה"), make_product("גזר")
+        order = make_order(user, supplier)
+        for product, times in ((common, 3), (rare, 1)):
+            for _ in range(times):
+                OrderRequestProduct.objects.create(
+                    order_request=order, product=product, supplier=supplier, quantity=1, unit_price=1,
+                )
+        self.assertEqual(voice.hint_names(), ["עגבניה", "אבוקדו", "גזר"])
+
+    def test_the_list_is_kept_for_a_few_minutes(self):
+        make_product("עגבניה")
+        self.assertEqual(voice.hint_names(), ["עגבניה"])
+        make_product("גזר")
+        self.assertEqual(voice.hint_names(), ["עגבניה"])  # still the kept one
+        cache.clear()
+        self.assertEqual(voice.hint_names(), ["גזר", "עגבניה"])
+
+    def test_a_whole_catalog_fits_in_the_hint(self):
+        names = [f"מוצר {chr(1488 + i % 26)}{i}" for i in range(150)]
+        hint = stt.build_hint(names)
+        self.assertTrue(all(name in hint for name in names))
+        self.assertLessEqual(len(hint), stt.HINT_MAX_CHARS + 120)
+
+    def test_a_catalog_too_big_for_the_hint_drops_the_last_names(self):
+        names = [f"מוצר מספר {i}" for i in range(1000)]
+        hint = stt.build_hint(names)
+        self.assertIn(names[0], hint)
+        self.assertNotIn(names[-1], hint)
+
+
 class DownloadGuardTests(SimpleTestCase):
 
     def test_only_twilio_https_addresses_are_fetched(self):

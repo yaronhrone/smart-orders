@@ -203,14 +203,36 @@ def download_media(url: str) -> bytes:
     return b"".join(chunks)
 
 
+HINT_NAMES_KEY = "voice_hint_names"
+HINT_NAMES_TTL = 600
+
+
+def hint_names() -> list:
+    """
+    The catalog's product names for the transcriber's hint: the most-ordered first, so that if the
+    hint ever has to be cut it is the rarest products that fall off. Kept for a few minutes, since
+    it counts the order lines and every voice message needs it.
+    """
+    from django.db.models import Count
+
+    from apps.catalog.models import Product
+
+    names = cache.get(HINT_NAMES_KEY)
+    if names is None:
+        names = list(
+            Product.objects.annotate(ordered=Count("orderrequestproduct"))
+            .order_by("-ordered", "name").values_list("name", flat=True)
+        )
+        cache.set(HINT_NAMES_KEY, names, timeout=HINT_NAMES_TTL)
+    return names
+
+
 def _filename(content_type: str) -> str:
     return "voice." + _EXTENSIONS.get(content_type.split(";")[0].strip(), "ogg")
 
 
 def process_voice_message(phone: str, supplier_id, media_url: str, content_type: str) -> None:
     """Download, transcribe and hand the text to the same handler a typed message would reach."""
-    from apps.catalog.models import Product
-
     try:
         audio = download_media(media_url)
     except ValueError as exc:
@@ -230,7 +252,7 @@ def process_voice_message(phone: str, supplier_id, media_url: str, content_type:
     try:
         text = stt.transcribe(
             audio, filename=_filename(content_type), content_type=content_type.split(";")[0].strip(),
-            hint=stt.build_hint(Product.objects.values_list("name", flat=True)),
+            hint=stt.build_hint(hint_names()),
         )
     except stt.TranscriptionError as exc:
         logger.error("Transcription failed for %s: %s", phone, exc)
