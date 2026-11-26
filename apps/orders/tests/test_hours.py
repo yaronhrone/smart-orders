@@ -268,6 +268,16 @@ class CustomerWhatsAppHoursTests(LimitOnMixin, TestCase):
         self.assertIn("לא נשמרה", text)
         self.assertIsNone(cache.get(f"whatsapp_order:{PHONE}"))
 
+    @patch(SEND)
+    def test_voice_from_a_customer_is_turned_away_before_transcription(self, mock_send):
+        with at(23, 0), patch("apps.orders.tasks.process_voice_message_task.delay") as delay:
+            self.client.post("/whatsapp/webhook/", {
+                "From": f"whatsapp:{PHONE}", "Body": "", "MessageSid": "SMh1", "NumMedia": "1",
+                "MediaContentType0": "audio/ogg", "MediaUrl0": "https://api.twilio.com/m/1",
+            })
+        delay.assert_not_called()
+        self.assertIn("10:00", mock_send.call_args[0][1])
+
 
 # ─────────────────────── WhatsApp: suppliers ───────────────────────
 
@@ -306,6 +316,25 @@ class SupplierWhatsAppHoursTests(LimitOnMixin, TestCase):
             self.assertIn("03:00", text, f"{h:02d}:{m:02d}")
             self.assertIn("10:00", text)
             self.assertIn("לא עודכנו", text)
+
+    @patch(SEND)
+    def test_a_voice_price_update_outside_the_hours_is_turned_away_before_transcription(self, mock_send):
+        with at(14, 0), patch("apps.orders.tasks.process_voice_message_task.delay") as delay:
+            self.client.post("/whatsapp/webhook/", {
+                "From": f"whatsapp:{self.supplier.whatsapp_number}", "Body": "", "MessageSid": "SMh2",
+                "NumMedia": "1", "MediaContentType0": "audio/ogg", "MediaUrl0": "https://api.twilio.com/m/2",
+            })
+        delay.assert_not_called()
+        self.assertIn("03:00", mock_send.call_args[0][1])
+
+    @patch(SEND)
+    def test_a_voice_price_update_inside_the_hours_goes_to_a_worker(self, mock_send):
+        with at(5, 0), patch("apps.orders.tasks.process_voice_message_task.delay") as delay:
+            self.client.post("/whatsapp/webhook/", {
+                "From": f"whatsapp:{self.supplier.whatsapp_number}", "Body": "", "MessageSid": "SMh3",
+                "NumMedia": "1", "MediaContentType0": "audio/ogg", "MediaUrl0": "https://api.twilio.com/m/3",
+            })
+        delay.assert_called_once()
 
     @patch(SEND)
     def test_a_suppliers_answers_are_never_limited(self, mock_send):

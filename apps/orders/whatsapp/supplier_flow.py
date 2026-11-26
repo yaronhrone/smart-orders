@@ -606,7 +606,6 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
         validators.send_whatsapp_message(phone, "⏰ " + hours.supplier_closed_text())
         return HttpResponse(status=200)
 
-
     try:
         result = update_prices_from_message(supplier, body)
     except ValueError as exc:
@@ -618,7 +617,10 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
     skipped = result["skipped"]
 
     if not updated and not removed and not skipped:
-        validators.send_whatsapp_message(phone, "לא זיהיתי מחירים בהודעה. נסה לשלוח כגון:\nעגבניות 3.50, מלפפון 2.00")
+        from .voice import heard_suffix
+        validators.send_whatsapp_message(
+            phone, "לא זיהיתי מחירים בהודעה. נסה לשלוח כגון:\nעגבניות 3.50, מלפפון 2.00" + heard_suffix(phone),
+        )
         return HttpResponse(status=200)
 
     existing = [u for u in updated if not u.get("is_new")]
@@ -659,7 +661,9 @@ def _handle_supplier_price_update(phone: str, supplier, body: str) -> HttpRespon
         parts.append(f"{len(skipped)} לא זוהו")
     lines.append(f"\nסה\"כ: {', '.join(parts)} ({total} מוצרים)")
 
-    validators.send_whatsapp_message(phone, "\n".join(lines))
+    from .voice import heard_suffix
+    # What was heard goes only on a reply that says something was not recognized.
+    validators.send_whatsapp_message(phone, "\n".join(lines) + (heard_suffix(phone) if skipped else ""))
     return HttpResponse(status=200)
 
 

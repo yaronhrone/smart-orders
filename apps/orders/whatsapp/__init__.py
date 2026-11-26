@@ -54,6 +54,7 @@ from .user_flow import (
     notify_customer_of_checkout,
 )
 from .validators import _normalize_phone, _validate_twilio_signature, send_whatsapp_message
+from .voice import accept_voice_message, forget_transcript, voice_media
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,12 @@ def whatsapp_webhook(request):
     try:
         from apps.catalog.models import Supplier
         supplier = Supplier.objects.filter(whatsapp_number=phone).first()
+
+        # A voice message: only for orders and price updates, transcribed by a worker (see voice.py).
+        voice = voice_media(request.POST)
+        if voice:
+            return accept_voice_message(phone, supplier, *voice)
+
         if supplier:
             payload = request.POST.get("ButtonPayload", "")
             button_text = request.POST.get("ButtonText", "")
@@ -98,6 +105,7 @@ def whatsapp_webhook(request):
 
         # A customer's tap on a button: the same as typing its word.
         body = CUSTOMER_BUTTON_WORDS.get(request.POST.get("ButtonPayload", ""), body)
+        forget_transcript(phone)  # a typed message: an earlier "what I heard" no longer applies
         return _handle_user_flow(phone, body)
     except Exception:
         # An unhandled exception here (most often the outbound Twilio send

@@ -27,6 +27,16 @@ def send_supplier_order_notification_task(self, phone: str, message: str):
         raise self.retry(exc=exc)
 
 
+@shared_task(soft_time_limit=240, time_limit=270)
+def process_voice_message_task(phone: str, supplier_id, media_url: str, content_type: str):
+    """
+    Download a WhatsApp voice message, transcribe it and handle the text like a typed message
+    (see whatsapp/voice.py). Not retried: a retry could answer the customer twice.
+    """
+    from apps.orders.whatsapp.voice import process_voice_message
+    process_voice_message(phone, supplier_id, media_url, content_type)
+
+
 @shared_task
 def dispatch_draft_order_task(phone: str, generation: int, is_grace_retry: bool = False):
     """

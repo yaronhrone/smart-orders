@@ -8,7 +8,7 @@ class AIUsage(models.Model):
     Feeds the admin "AI usage" page, which also compares models side by side.
     """
 
-    kind = models.CharField(max_length=30)  # order_parse, modification_parse, price_parse, assistant
+    kind = models.CharField(max_length=30)  # order_parse, modification_parse, price_parse, assistant, voice_transcribe
     provider = models.CharField(max_length=20)
     model = models.CharField(max_length=60)
     input_tokens = models.PositiveIntegerField(default=0)

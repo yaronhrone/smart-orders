@@ -278,6 +278,11 @@ if TESTING:
     # The tests exercise the 3-minute order window (production default is no waiting).
     os.environ["ORDER_DEBOUNCE_SECONDS"] = "180"
     os.environ.pop("LLM_MODEL", None)
+    # Speech-to-text likewise: the OpenAI path, a dummy key (the tests mock the call itself).
+    os.environ.pop("STT_PROVIDER", None)
+    os.environ.pop("STT_MODEL", None)
+    os.environ.pop("STT_API_KEY", None)
+    os.environ.pop("STT_MAX_SECONDS", None)
     # Operating hours (apps/orders/hours.py) are off in the suite so it passes at any time of day;
     # test_hours.py turns them on, with a fixed clock, where it tests them.
     os.environ["HOURS_LIMIT_ENABLED"] = "0"

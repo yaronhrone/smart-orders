@@ -28,6 +28,7 @@ from .fallback_flow import _handle_fallback_approval, _handle_reroute_grace_topu
 from apps.orders import hours
 from apps.orders.services import NOT_ADDED_REASONS
 from . import validators
+from .voice import heard_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +299,7 @@ def _handle_ambiguous_products(
         lines.append(f"  • {item['query']} — {options}")
     lines.append("\nענה עם הסוג (למשל: אדום).")
     save_pending_clarification(phone, resolved, ambiguous, extra=extra)
-    validators.send_whatsapp_message(phone, "\n".join(lines))
+    validators.send_whatsapp_message(phone, "\n".join(lines) + heard_suffix(phone))
     return HttpResponse(status=200)
 
 
@@ -597,7 +598,7 @@ def _suggest_and_respond(
     if not products:
         validators.send_whatsapp_message(
             phone,
-            f"לא זיהיתי מוצרים ידועים בהזמנה.\nלא זוהה: {', '.join(unrecognized)}",
+            f"לא זיהיתי מוצרים ידועים בהזמנה.\nלא זוהה: {', '.join(unrecognized)}" + heard_suffix(phone),
         )
         return HttpResponse(status=200)
 
@@ -680,7 +681,7 @@ def _suggest_and_respond(
             )
 
     if unrecognized:
-        msg += f"\n\n⚠️ לא זוהה: {', '.join(unrecognized)}"
+        msg += f"\n\n⚠️ לא זוהה: {', '.join(unrecognized)}" + heard_suffix(phone)
     if unavailable_products:
         msg += f"\n\n⚠️ אין ספק שיכול לספק: {', '.join(unavailable_products)} (לא נכלל בהזמנה)"
 
@@ -730,7 +731,7 @@ def _handle_new_order(phone: str, body: str) -> HttpResponse:
     except ValueError:
         validators.send_whatsapp_message(
             phone,
-            "לא הצלחתי להבין את ההזמנה.\nנסה לשלוח כגון: 5 קילו עגבניות, 10 קילו גזר",
+            "לא הצלחתי להבין את ההזמנה.\nנסה לשלוח כגון: 5 קילו עגבניות, 10 קילו גזר" + heard_suffix(phone),
         )
         return HttpResponse(status=200)
 
@@ -801,7 +802,7 @@ def _handle_order_modification(phone: str, body: str, user, batch) -> HttpRespon
             errors.append(item["product_name"])
 
     if errors:
-        validators.send_whatsapp_message(phone, f"⚠️ לא נמצאו: {', '.join(errors)}")
+        validators.send_whatsapp_message(phone, f"⚠️ לא נמצאו: {', '.join(errors)}" + heard_suffix(phone))
     if ambiguous:
         # The clear items ride along; everything is shown for confirmation once the variant is known.
         return _handle_ambiguous_products(
@@ -1086,6 +1087,35 @@ def _cancel_open_order(phone: str, batch_id: int) -> HttpResponse:
     return HttpResponse(status=200)
 
 
+def _handle_order_text(phone: str, body: str) -> HttpResponse:
+    """
+    A message that is neither an answer to a question nor a command: a new order, or a change
+    to today's open one. Shared by typed messages and transcribed voice messages (voice.py), so
+    both take exactly the same road from here on.
+    """
+    # Today's order is open for changes until the customers' closing time (hours.py); after that
+    # (or with no order today) a message starts a new order.
+    from apps.orders.services import before_update_cutoff, todays_batch
+
+    profile = _resolve_profile(phone)
+    if profile:
+        batch = todays_batch(profile.user)
+        if batch:
+            if before_update_cutoff():
+                return _handle_order_modification(phone, body, profile.user, batch)
+            from apps.orders.models import OrderRequest
+            ids = ", ".join(
+                f"#{order_id}" for order_id in batch.orders
+                .exclude(status=OrderRequest.Status.CANCELLED).order_by("id").values_list("id", flat=True)
+            )
+            validators.send_whatsapp_message(
+                phone,
+                f"⏰ חלון העדכון להזמנה של היום ({ids}) נסגר ב-{hours.label(hours.customer_window()[1])}. פותח הזמנה חדשה.",
+            )
+
+    return _handle_new_order(phone, body)
+
+
 def _handle_closed_hours(phone: str):
     """
     Outside the customers' hours nothing that orders, changes or confirms an order goes through:
@@ -1160,27 +1190,7 @@ def _handle_user_flow(phone: str, body: str) -> HttpResponse:
             )
             return HttpResponse(status=200)
 
-        # Today's order is open for changes until 23:00 Israel time; after that
-        # (or with no order today) a message starts a new order.
-        from apps.orders.services import before_update_cutoff, todays_batch
-
-        profile = _resolve_profile(phone)
-        if profile:
-            batch = todays_batch(profile.user)
-            if batch:
-                if before_update_cutoff():
-                    return _handle_order_modification(phone, body, profile.user, batch)
-                from apps.orders.models import OrderRequest
-                ids = ", ".join(
-                    f"#{order_id}" for order_id in batch.orders
-                    .exclude(status=OrderRequest.Status.CANCELLED).order_by("id").values_list("id", flat=True)
-                )
-                validators.send_whatsapp_message(
-                    phone,
-                    f"⏰ חלון העדכון להזמנה של היום ({ids}) נסגר ב-{hours.label(hours.customer_window()[1])}. פותח הזמנה חדשה.",
-                )
-
-        return _handle_new_order(phone, body)
+        return _handle_order_text(phone, body)
 
     data = json.loads(raw)
     cheapest = data["cheapest"]
