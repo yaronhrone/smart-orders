@@ -320,3 +320,99 @@ class DictionaryFirstModificationTests(TestCase):
         _result, ai_call = self._parse("תוסיף 3 קילו ברוקולי")
 
         ai_call.assert_called_once()
+
+
+class AskInsteadOfGuessTests(TestCase):
+    """
+    "חסה" or "תפוחי אדמה" said without a type: the order must ask which one, whatever the AI did
+    with it. Spoken orders hit this often: numbers in words ("עשר יחידות") and plurals both get past
+    the dictionary, so the AI reads them, and the AI used to hand back a bare root (ending in
+    "not recognized") or quietly pick a variant.
+    """
+
+    NAMES = ["חסה אייסברג", "חסה קיסר", "תפוח אדמה אדום", "תפוח אדמה לבן", "תפוח עץ ירוק", "מלפפון"]
+
+    def _parse(self, mock_get_client, message, ai_items):
+        client = MagicMock()
+        mock_get_client.return_value = client
+        client.chat.completions.create.return_value = _openai_response(ai_items)
+        from apps.orders.order_parser import AmbiguousProductError, parse_customer_order
+        try:
+            return parse_customer_order(message, self.NAMES), client
+        except AmbiguousProductError as exc:
+            return exc, client
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_a_bare_root_from_the_ai_becomes_a_question(self, mock_get_client):
+        exc, _ = self._parse(
+            mock_get_client, "עשר יחידות חסה ועשרים קילו מלפפון",
+            [{"product_name": "חסה", "quantity": "10"}, {"product_name": "מלפפון", "quantity": "20"}],
+        )
+        self.assertEqual([(a["query"], a["quantity"]) for a in exc.ambiguous], [("חסה", Decimal("10"))])
+        self.assertEqual(sorted(exc.ambiguous[0]["candidates"]), ["חסה אייסברג", "חסה קיסר"])
+        self.assertEqual([(r["product_name"], r["quantity"]) for r in exc.resolved], [("מלפפון", Decimal("20"))])
+
+    @patch("apps.orders.order_parser.aliases_of", return_value=[])  # no alias says "תפוחי אדמה" means one of them
+    @patch("apps.orders.order_parser._get_client")
+    def test_a_variant_the_customer_never_named_is_asked_about_not_picked(self, mock_get_client, _aliases):
+        exc, _ = self._parse(
+            mock_get_client, "שלושים קילו תפוחי אדמה ועשרים קילו תפוח עץ ירוק",
+            [{"product_name": "תפוח אדמה לבן", "quantity": "30"}, {"product_name": "תפוח עץ ירוק", "quantity": "20"}],
+        )
+        self.assertEqual([(a["query"], a["quantity"]) for a in exc.ambiguous], [("תפוח אדמה", Decimal("30"))])
+        self.assertEqual(exc.ambiguous[0]["candidates"], ["תפוח אדמה אדום", "תפוח אדמה לבן"])
+        self.assertEqual([r["product_name"] for r in exc.resolved], ["תפוח עץ ירוק"])
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_a_variant_the_customer_did_name_is_kept(self, mock_get_client):
+        items, _ = self._parse(
+            mock_get_client, "שלושים קילו תפוחי אדמה לבן ועשר יחידות קיסר",
+            [{"product_name": "תפוח אדמה לבן", "quantity": "30"}, {"product_name": "חסה קיסר", "quantity": "10"}],
+        )
+        self.assertEqual(
+            [(i["product_name"], i["quantity"]) for i in items],
+            [("תפוח אדמה לבן", Decimal("30")), ("חסה קיסר", Decimal("10"))],
+        )
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_an_alias_chosen_for_the_variant_counts_as_naming_it(self, mock_get_client):
+        """The alias list says "תפוחי אדמה" is white potato: spoken the same way, it is not asked about."""
+        from apps.catalog.models import Product, ProductAlias, Unit
+        white = Product.objects.create(name="תפוח אדמה לבן", unit=Unit.KG)
+        Product.objects.create(name="תפוח אדמה אדום", unit=Unit.KG)
+        ProductAlias.objects.create(product=white, alias="תפוחי אדמה")
+        items, _ = self._parse(
+            mock_get_client, "שלושים קילו תפוחי אדמה", [{"product_name": "תפוח אדמה לבן", "quantity": "30"}],
+        )
+        self.assertEqual([(i["product_name"], i["quantity"]) for i in items], [("תפוח אדמה לבן", Decimal("30"))])
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_the_prompt_tells_the_ai_to_return_the_root_and_not_guess(self, mock_get_client):
+        _, client = self._parse(mock_get_client, "שלושים קילו תפוחי אדמה", [{"product_name": "תפוח אדמה", "quantity": "30"}])
+        prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("do NOT guess", prompt.replace("Do NOT guess", "do NOT guess"))
+        self.assertIn("תפוח אדמה אדום", prompt)
+        self.assertIn("חסה קיסר", prompt)
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_a_plain_product_is_unaffected(self, mock_get_client):
+        items, _ = self._parse(
+            mock_get_client, "ארבעים קילו מלפפון", [{"product_name": "מלפפון", "quantity": "40"}],
+        )
+        self.assertEqual([(i["product_name"], i["quantity"]) for i in items], [("מלפפון", Decimal("40"))])
+
+    @patch("apps.orders.order_parser._get_client")
+    def test_the_question_reaches_the_customer_with_the_options(self, mock_get_client):
+        """End to end through the WhatsApp handler: the clarification text lists the types."""
+        from apps.orders.whatsapp import user_flow
+        exc, _ = self._parse(
+            mock_get_client, "עשר יחידות חסה", [{"product_name": "חסה", "quantity": "10"}],
+        )
+        with patch("apps.orders.whatsapp.validators.send_whatsapp_message") as send,                 patch("apps.orders.whatsapp.user_flow.save_pending_clarification") as save:
+            user_flow._handle_ambiguous_products("+972501234567", exc.ambiguous, exc.resolved)
+        text = send.call_args[0][1]
+        self.assertIn("חסה", text)
+        self.assertIn("קיסר", text)
+        self.assertIn("אייסברג", text)
+        save.assert_called_once()
+

@@ -2,7 +2,9 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from apps.catalog.product_matcher import list_ambiguous_families, match_order_items
+from apps.catalog.product_matcher import (
+    _normalize, aliases_of, find_ambiguous_group, list_ambiguous_families, match_order_items,
+)
 from core import llm
 
 logger = logging.getLogger(__name__)
@@ -176,6 +178,50 @@ def parse_modification_intent(message: str, product_names: list) -> dict:
     return {"intent": intent, "items": items}
 
 
+def _was_named(variant: str, root: str, haystack: str) -> bool:
+    """The customer's own words point at this variant: its distinguishing part, or an alias for it."""
+    return _normalize(variant[len(root):]) in haystack or any(alias in haystack for alias in aliases_of(variant))
+
+
+def _ask_instead_of_guess(ai_items: list, product_names: list, message: str):
+    """
+    The AI does not always leave a family question alone. A customer who says "חסה" or
+    "תפוחי אדמה" named a family, not a product, and the AI either hands back the bare root (not a
+    catalog product, so the order would end with "not recognized") or picks a variant nobody
+    named ("תפוחי אדמה" -> "תפוח אדמה לבן", silently ordering the wrong potato). Both become the
+    same question a family root gets from the dictionary: which one?
+    A variant counts as named when its distinguishing part ("לבן") appears in the message, or when the
+    customer used an alias chosen for exactly that product ("תפוחי אדמה" is white potato in the
+    alias list: the same answer the dictionary gives to a written order).
+    Returns (items to keep, ambiguous entries); entries with a bad quantity are dropped, as before.
+    """
+    families = list_ambiguous_families(product_names)
+    root_of = {variant: root for root, variants in families.items() for variant in variants}
+    haystack = _normalize(message)
+    known = set(product_names)
+    kept, ambiguous = [], []
+    for entry in ai_items:
+        name = str(entry.get("product_name", "")).strip()
+        try:
+            quantity = Decimal(str(entry.get("quantity", "")).strip())
+        except InvalidOperation:
+            continue
+        if not name or quantity <= 0:
+            continue
+        query, candidates = name, None
+        if name in known:
+            root = root_of.get(name)
+            if root and not _was_named(name, root, haystack):
+                query, candidates = root, families[root]  # a variant nobody named: the AI guessed
+        else:
+            candidates = find_ambiguous_group(name, product_names)  # the bare root, asked about as written
+        if candidates:
+            ambiguous.append({"query": query, "quantity": quantity, "candidates": candidates})
+        else:
+            kept.append({"product_name": name, "quantity": quantity})
+    return kept, ambiguous
+
+
 def parse_customer_order(message: str, product_names: list) -> list:
     """
     Extracts products and quantities from a free-text customer order message.
@@ -200,6 +246,19 @@ def parse_customer_order(message: str, product_names: list) -> list:
     items = list(dict_resolved)
     if remaining_message:
         known = ", ".join(product_names) if product_names else "—"
+        families = list_ambiguous_families(product_names)
+        families_note = ""
+        if families:
+            family_lines = "\n".join(
+                f'  - "{root}" could mean: {", ".join(variants)}' for root, variants in families.items()
+            )
+            families_note = (
+                "Some names are family roots covering several specific variants:\n"
+                f"{family_lines}\n"
+                "If the customer used a root term (in any form: singular, plural, with a quantity word) "
+                "WITHOUT naming a specific variant, return the singular root itself as product_name, "
+                "exactly as written above. Do NOT guess or default to one of the variants.\n"
+            )
         prompt = (
             "You are an order parser for a vegetable/fruit ordering system in Israel.\n"
             "Extract ALL products and quantities from the customer's order message.\n"
@@ -208,6 +267,7 @@ def parse_customer_order(message: str, product_names: list) -> list:
             "1. Match product names to known products using fuzzy/phonetic Hebrew matching. "
             "Use the exact known name when there is a match.\n"
             "2. Default quantity is 1 if not specified.\n"
+            f"{families_note}"
             "Return ONLY a JSON object with key 'items'. "
             'Each element: {"product_name": "...", "quantity": "5.0"}\n'
             f"Message: {remaining_message}"
@@ -217,7 +277,11 @@ def parse_customer_order(message: str, product_names: list) -> list:
             data = llm.complete_json(prompt, _get_client, kind="order_parse", message=remaining_message)
             if isinstance(data, dict):
                 data = data.get("items", next(iter(data.values()), []))
-            items += data if isinstance(data, list) else []
+            ai_items, ai_ambiguous = _ask_instead_of_guess(
+                data if isinstance(data, list) else [], product_names, remaining_message,
+            )
+            items += ai_items
+            ambiguous = list(ambiguous) + ai_ambiguous
         except Exception as exc:
             logger.error("AI order parsing failed: %s", exc)
             raise ValueError(f"AI parsing failed: {exc}")

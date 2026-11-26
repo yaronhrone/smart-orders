@@ -88,6 +88,21 @@ def resolve_alias(text: str, known_product_names) -> str | None:
     return None
 
 
+def aliases_of(canonical: str) -> list:
+    """
+    Every normalized alias that points at this product, from the static file and the admin
+    table. Lets a caller tell "the customer said it their way" (an alias an admin or the file chose
+    for exactly this product) from "the AI picked it".
+    """
+    found = {alias for alias, name in _load_json_alias_index().items() if name == canonical}
+    try:
+        found |= {alias for alias, name in _load_db_alias_index().items() if name == canonical}
+    except Exception:  # no database (a command run without one): the file's aliases are enough
+        pass
+    found.discard(_normalize(canonical))
+    return sorted(found)
+
+
 def _extract_name_and_number(segment: str):
     """Try 'qty [unit] name' then 'name qty' patterns. Returns (name, number) or None."""
     m = _ORDER_SEGMENT_RE.match(segment)
